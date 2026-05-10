@@ -10,10 +10,10 @@ Coverage-sub-product behavior that structures native-derived coverage informatio
 
 | ID | Description | Source Use Case | Source Responsibility | Related Entities | Priority | Status |
 |----|------------|----------------|-----------------------|------------------|----------|--------|
-| REQ-COV-001 | The system shall derive stored coverage facts for a run from available native-derived coverage inputs and preserve their association to the originating run record. | Execute Test Workflow, Show Coverage Facts | SR-011 | Memory Entry, Run Record, Coverage Fact | High | Draft |
-| REQ-COV-002 | The system shall represent available test-to-code mappings, line coverage, branch coverage, and uncovered code evidence as structured coverage facts for inspection. | Execute Test Workflow, Show Coverage Facts | SR-011 | Test Result, Coverage Fact, Code Location | High | Draft |
-| REQ-COV-003 | The system shall compare stored coverage facts between two run references and identify structured coverage deltas for matching code locations where comparison is possible. | Compare Coverage Facts, Compare Run Behavior | SR-012 | Coverage Fact, Run Record, Code Location | High | Draft |
-| REQ-COV-004 | The system shall return an explicit unavailable-or-incomplete state when requested coverage facts or coverage comparisons cannot be derived from the stored evidence for a run or run pair. | Show Coverage Facts, Compare Coverage Facts | SR-011, SR-012 | Memory Entry, Coverage Fact, Run Record | Medium | Draft |
+| REQ-COV-001 | The system shall derive stored coverage facts for a run from available native-derived coverage inputs and preserve their association to the originating run record. | Execute Test Workflow, Show Coverage Facts | SR-011 | Memory Entry, Run Record, Coverage Fact | High | Approved |
+| REQ-COV-002 | The system shall represent available test-to-code mappings, line coverage, branch coverage, and uncovered code evidence as structured coverage facts for inspection. | Execute Test Workflow, Show Coverage Facts | SR-011 | Test Result, Coverage Fact, Code Location | High | Approved |
+| REQ-COV-003 | The system shall compare stored coverage facts between two run references and identify structured coverage deltas for matching code locations where comparison is possible. | Compare Coverage Facts, Compare Run Behavior | SR-012 | Coverage Fact, Run Record, Code Location | High | Approved |
+| REQ-COV-004 | The system shall return an explicit unavailable-or-incomplete state when requested coverage facts or coverage comparisons cannot be derived from the stored evidence for a run or run pair. | Show Coverage Facts, Compare Coverage Facts | SR-011, SR-012 | Memory Entry, Coverage Fact, Run Record | Medium | Approved |
 
 ---
 
@@ -21,8 +21,8 @@ Coverage-sub-product behavior that structures native-derived coverage informatio
 
 | ID | Description | Category | Priority | Status |
 |----|------------|----------|----------|--------|
-| NFR-COV-001 | The system shall preserve coverage-fact traceability to the originating run reference and code location for every reported coverage fact or delta. | Reliability | High | Draft |
-| NFR-COV-002 | The system shall generate coverage comparison results for two stored runs with up to 50,000 covered locations within 5 seconds when the needed evidence is already stored locally. | Performance | Medium | Draft |
+| NFR-COV-001 | The system shall preserve coverage-fact traceability to the originating run reference and code location for every reported coverage fact or delta. | Reliability | High | Approved |
+| NFR-COV-002 | The system shall generate coverage comparison results for two stored runs with up to 50,000 covered locations within 5 seconds when the needed evidence is already stored locally. | Performance | Medium | Approved |
 
 ---
 
