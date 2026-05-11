@@ -1,0 +1,121 @@
+# serializer version: 1
+# name: test_help_envelope_snapshot
+  dict({
+    'command': 'help',
+    'data': dict({
+      'onboarding': list([
+        dict({
+          'availableInPhase': 0,
+          'group': 'onboarding',
+          'name': 'novetest --version',
+          'summary': 'Print CLI identity envelope.',
+        }),
+        dict({
+          'availableInPhase': 0,
+          'group': 'onboarding',
+          'name': 'novetest --help',
+          'summary': 'Print command surface envelope.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'onboarding',
+          'name': 'novetest init',
+          'summary': 'Initialize a Project Store under .novetest/ in the current workspace.',
+        }),
+      ]),
+      'operating': list([
+        dict({
+          'availableInPhase': 6,
+          'group': 'orchestration',
+          'name': 'novetest test',
+          'summary': 'Run tests with integrated orchestration and synthesize a recommendation.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'run',
+          'name': 'novetest run',
+          'summary': 'Execute a Test Target via the native engine and persist a Run Record.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'memory',
+          'name': 'novetest memory list',
+          'summary': 'List Memory Entries in Run History.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'memory',
+          'name': 'novetest memory show',
+          'summary': 'Show a Memory Entry by Run Reference.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'memory',
+          'name': 'novetest memory delete',
+          'summary': 'Tombstone a Memory Entry; Run Reference remains resolvable.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'orchestration',
+          'name': 'novetest inspect',
+          'summary': 'Aggregate run view across Memory and derived facts.',
+        }),
+        dict({
+          'availableInPhase': 1,
+          'group': 'orchestration',
+          'name': 'novetest status',
+          'summary': 'Latest run plus per-sub-report availability summary.',
+        }),
+        dict({
+          'availableInPhase': 2,
+          'group': 'coverage',
+          'name': 'novetest coverage show',
+          'summary': 'Show Coverage Facts for a run.',
+        }),
+        dict({
+          'availableInPhase': 2,
+          'group': 'coverage',
+          'name': 'novetest coverage diff',
+          'summary': 'Diff Coverage Facts between two runs.',
+        }),
+        dict({
+          'availableInPhase': 3,
+          'group': 'regression',
+          'name': 'novetest regression compare',
+          'summary': 'Compare two runs into a Regression Fact set.',
+        }),
+        dict({
+          'availableInPhase': 3,
+          'group': 'regression',
+          'name': 'novetest regression latest',
+          'summary': 'Compute Regression Facts versus the latest baseline.',
+        }),
+        dict({
+          'availableInPhase': 3,
+          'group': 'orchestration',
+          'name': 'novetest compare',
+          'summary': 'Composed Regression and Coverage delta between two runs.',
+        }),
+        dict({
+          'availableInPhase': 4,
+          'group': 'localization',
+          'name': 'novetest localization',
+          'summary': 'Ranked suspicious code locations for a run.',
+        }),
+        dict({
+          'availableInPhase': 5,
+          'group': 'replay',
+          'name': 'novetest replay',
+          'summary': 'Re-execute a stored run and classify reproducibility.',
+        }),
+      ]),
+      'schemaVersion': 1,
+    }),
+    'errors': list([
+    ]),
+    'ok': True,
+    'schema': 'novetest/v1',
+    'warnings': list([
+    ]),
+  })
+# ---
