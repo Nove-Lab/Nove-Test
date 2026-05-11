@@ -24,10 +24,13 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - `cli/app.py` with Cyclopts root and empty subapp wiring (placeholders for `test`, `run`, `memory`, `coverage`, `regression`, `localization`, `replay`, `inspect`, `compare`, `status`).
 - JSON envelope (`cli/output.py`) and exit code constants.
 - `utils/asyncio_subprocess.py` canonical invocation helper.
-- `memory/store.py` SQLite scaffold with WAL, migration runner, `0001_init.sql`.
+- `memory/store.py` SQLite scaffold with WAL, migration runner, `0001_init.sql` (parameterized on Project Store path; not yet wired to any default path).
 - `models/` core entities (`run_reference.py`, `run_record.py`, `test_result.py`, `memory_entry.py`).
 - CI matrix: Linux/macOS/Windows x Python 3.11/3.12/3.13, `minimal` lane (no native engines required).
-- Snapshot test for `novetest --version` and `novetest --help` JSON envelopes via `syrupy`.
+- **Onboarding bindings** (from [`design/interace-contract/orchestration.md`](../interace-contract/orchestration.md) §1):
+  - `orchestration/onboarding/identity.py` (`report_cli_identity`) and `orchestration/onboarding/command_surface.py` (`describe_command_surface`).
+  - `cli/app.py` dispatches `-v` / `--version` and `-h` / `--help` through these before any Project Store lookup runs.
+  - Snapshot tests for `novetest --version` and `novetest --help` JSON envelopes via `syrupy`, asserting the envelope is callable on a clean machine with no `.novetest/` present anywhere.
 - PyApp release pipeline that produces a binary on tag push but does not yet publish to PyPI.
 - **One-line install script (`scripts/install.sh`) for Linux/macOS** (`linux-x86_64`, `linux-aarch64`, `macos-arm64`, `macos-x86_64`) per the Tier-1 path in [`foundations.md`](./foundations.md#7-distribution). Detects OS+arch, downloads the matching PyApp binary, verifies SHA-256, installs to `~/.local/bin/novetest`, prints `PATH` hint if needed, idempotent on re-run.
 - GitHub Releases workflow uploads a `*.sha256` sidecar alongside every binary so the install script can verify.
@@ -40,6 +43,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - A signed binary builds on the `release-test` workflow.
 - **`curl -fsSL <release_install_url> | sh` end-to-end** produces a working `novetest --version` on a clean Linux container and a clean macOS runner. Re-running the same command upgrades in place.
 - The install script verifies SHA-256 and aborts loudly on mismatch; this is covered by an integration test that intentionally serves a tampered binary.
+- `novetest -v` and `novetest -h` return their structured envelopes in a directory tree that contains no `.novetest/` anywhere in the ancestor chain. This is the Phase 0 onboarding-readiness gate.
 
 **Risks / mitigations:**
 - *Cyclopts immaturity surfaces during Phase 0* - if blocked, swap to Click. Phase 0 is the cheapest time to make this swap; the command tree shape is identical.
@@ -47,36 +51,50 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 ---
 
-## Phase 1 - Run + Memory Foundation
+## Phase 1 - Onboarding + Run + Memory Foundation
 
-**Goal:** the minimum repeatable testing loop. Execute through one native engine, normalize, persist, retrieve, list, delete with tombstone.
+**Goal:** the minimum repeatable testing loop, entered through the documented onboarding flow. A user installs Nove Test (Phase 0), runs `novetest init` in their project, gets a `.novetest/` Project Store, sees a clear engine-readiness signal, then executes a test through one native engine and inspects / lists / deletes the result.
 
-**Interfaces in scope** (from [`design/interace-contract/run.md`](../interace-contract/run.md), [`memory.md`](../interace-contract/memory.md), [`orchestration.md`](../interace-contract/orchestration.md)):
-- `novetest run [target]`
-- `run/execute`, `run/resolve_test_target`, `run/select_native_engine`, `run/normalize_native_result`, `run/assign_run_reference`, `run/list_supported_engine_pairs`
-- `novetest memory list`, `novetest memory show <run_id>`, `novetest memory delete <run_id>`
-- `memory/store_run_evidence`, `memory/retrieve_run_evidence`, `memory/list_run_history`, `memory/delete_run_evidence`, `memory/get_memory_entry_availability`
-- `novetest inspect <run_id>` (without coverage/regression/localization/replay - those return `null` in the aggregated view)
-- `novetest status` and `orchestration/build_status_view` (with all sub-report flags returning `unavailable`)
+**Interfaces in scope** (from [`design/interace-contract/orchestration.md`](../interace-contract/orchestration.md), [`run.md`](../interace-contract/run.md), [`memory.md`](../interace-contract/memory.md)):
+- **Onboarding (orchestration §1):**
+  - `novetest init` (External) and `orchestration/initialize_project_workspace` (Internal).
+- **Project Store (memory §1):**
+  - `memory/create_project_store`, `memory/locate_project_store`, `memory/get_project_store_state`.
+- **Engine readiness (run):**
+  - `run/assess_engine_readiness`, `run/detect_engine_candidates`.
+- **Run + Memory operating set:**
+  - `novetest run [target]`
+  - `run/execute`, `run/resolve_test_target`, `run/select_native_engine`, `run/normalize_native_result`, `run/assign_run_reference`, `run/list_supported_engine_pairs`
+  - `novetest memory list`, `novetest memory show <run_id>`, `novetest memory delete <run_id>`
+  - `memory/store_run_evidence`, `memory/retrieve_run_evidence`, `memory/list_run_history`, `memory/delete_run_evidence`, `memory/get_memory_entry_availability`
+- **Stub fact surface:**
+  - `novetest inspect <run_id>` (without coverage/regression/localization/replay - those return `null` in the aggregated view)
+  - `novetest status` and `orchestration/build_status_view` (with all sub-report flags returning `unavailable`)
 
-**Engine adapter coverage:** **pytest only.** Other ecosystems get stub adapters that report "not yet implemented" in the doctor pass. This intentional narrowness lets us validate the whole Run -> Memory -> Inspect loop end-to-end before fanning out.
+**Engine adapter coverage:** **pytest only.** Other ecosystems contribute only their `detect()` hooks so `assess_engine_readiness` can identify them in the workspace; their full adapters are stubs that report "not yet implemented" when invoked for execution. This intentional narrowness lets us validate the whole onboarding -> Run -> Memory -> Inspect loop end-to-end before fanning out.
 
-**Persistence:** SQLite + filesystem layout finalized; migration `0001_init.sql` covers `run` + `test_outcome` + `schema_migration` tables. Tombstone status implemented; tombstoned runs remain readable to `inspect`.
+**Persistence:** per-project `.novetest/` Project Store layout from [`foundations.md` §4](./foundations.md#4-persistence) finalized; migration `0001_init.sql` covers `run` + `test_outcome` + `schema_migration` tables; `store.json` and the engine-subdirectory skeleton written by `create_project_store`. Tombstone status implemented; tombstoned runs remain readable to `inspect`.
 
-**Fixture projects:** `tests/fixtures/projects/pytest-basic/` and `pytest-failing/` (the latter exercising failed-test capture).
+**Fixture projects:** `tests/fixtures/projects/pytest-basic/`, `pytest-failing/` (the latter exercising failed-test capture), and `empty-no-engine/` (a project workspace with no detectable native engine, used to validate `engine-missing` readiness output and the corresponding init-then-no-run guidance).
 
 **Definition-of-done:**
-- `novetest run tests/test_x.py` against `pytest-basic` produces a Run Record stored under `$NOVETEST_HOME/runs/.../record.json` with a stable Run Reference.
+- `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`) and a populated `memory/index.db`.
+- Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
+- `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
+- `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
+- `novetest run` from `empty-no-engine/` returns `engine-missing` (exit code 4) before any subprocess is spawned, with the envelope distinguishing readiness failure from internal Nove Test failure (NFR-RUN-004).
 - `novetest memory list --output json` returns the run.
 - `novetest memory show <run_id> --output json` returns the run plus availability flags (all derived facts `false`).
 - `novetest memory delete <run_id>` tombstones; subsequent `memory show` still resolves (tombstoned).
 - `novetest status --output json` returns latest Run Reference and Run History readiness; all sub-reports `unavailable`.
 - `novetest test tests/test_x.py` runs the integrated workflow but with empty Coverage / Regression / Localization / Replay; recommendation is `all_green` or `unavailable_analysis`.
-- All workflow sequences documented in [`design/workflows/run.md`](../workflows/run.md), [`memory.md`](../workflows/memory.md), and the relevant rows of `orchestration.md` are exercised by integration tests.
+- Operating commands invoked from a directory tree with no ancestor `.novetest/` return a structured `uninitialized` envelope pointing at `novetest init` (no traceback, exit code 2).
+- All workflow sequences documented in [`design/workflows/orchestration.md`](../workflows/orchestration.md) §1, [`run.md`](../workflows/run.md), and [`memory.md`](../workflows/memory.md) (Sections 1 and 2) are exercised by integration tests.
 
 **Risks:**
 - *pytest-json-report version skew on Windows* - pin a minimum minor.
 - *Path normalization edge cases* in nodeids - centralize path normalization in `utils/paths.py`.
+- *Project Store discovery surprises* - walking up from CWD can cross workspace boundaries on shared dev machines (multiple projects under one ancestor). Phase 1 stops at the first `.novetest/`; document the behavior and add a `--store=<path>` override for users who need to disambiguate.
 
 ---
 
@@ -251,6 +269,8 @@ These are tracked across phases; resolving any of them updates the relevant doc.
 | 14 | `novetest self update` signing key rotation policy | Post-MVP | `foundations.md` distribution |
 | 15 | Install script hosting URL (custom domain like `get.novetest.dev` vs GitHub Pages vs raw GitHub) | Phase 0 | `foundations.md` distribution; install script in `scripts/install.sh` |
 | 16 | Windows `install.ps1` parity (post-Phase-0) | Post-MVP | `foundations.md` distribution |
+| 17 | Project Store discovery scope: stop-at-first vs walk-to-VCS-root vs disallow nested `.novetest/` | Phase 1 | `foundations.md` persistence section, `interace-contract/memory.md` §1 |
+| 18 | Engine readiness probe caching: per-invocation vs cached under `.novetest/run/readiness/` with a TTL | Phase 1 | `foundations.md` persistence section, `interace-contract/run.md` |
 
 ---
 

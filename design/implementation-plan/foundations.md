@@ -67,6 +67,16 @@ def show(run_id: RunReference) -> None: ...
 
 If Cyclopts ever blocks us, swapping to Click is a contained migration: keep the command tree shape, replace decorators, re-route output.
 
+### Onboarding commands
+
+Three commands sit above the sub-product tree and bind to [`design/interace-contract/orchestration.md`](../interace-contract/orchestration.md) §1. They must remain callable without an initialized Project Store - the CLI must dispatch them before any `locate_project_store` lookup runs.
+
+| Command | Bound interface | Notes |
+| --- | --- | --- |
+| `novetest -v` / `novetest --version` | `orchestration/report_cli_identity` | Returns CLI Installation identity (version, command name, build/platform). Snapshot-tested for envelope stability from Phase 0. |
+| `novetest -h` / `novetest --help` | `orchestration/describe_command_surface` | Returns the full command surface for onboarding + operating commands. Cyclopts's default help is post-processed into our JSON envelope when `--output json` is selected. |
+| `novetest init` | `orchestration/initialize_project_workspace` | Composes `memory/create_project_store` (idempotent) + `run/assess_engine_readiness` (informational). Engine-missing or engine-misconfigured outcomes do **not** roll back the created store; the envelope carries the readiness state so the caller (agent or human) can act on it. |
+
 ### Output contract (binding for every command)
 
 Every subcommand emits one of two shapes; never both, never mixed.
@@ -184,7 +194,9 @@ Do not pull in `sh`, `plumbum`, or `delegator`. They paper over the platform iss
 
 ## 4. Persistence
 
-**Decision: Hybrid - SQLite (WAL mode) for the index, filesystem tree for record JSON and native artifacts, content-addressed blob store for dedup. Stdlib `sqlite3`. No ORM.**
+**Decision: Project-scoped Project Store at `<project_root>/.novetest/`. Hybrid - SQLite (WAL mode) for the index, filesystem tree for record JSON and native artifacts, content-addressed blob store for dedup. One subdirectory per sub-product so each engine owns its own artifacts. Stdlib `sqlite3`. No ORM.**
+
+The per-project store is the only durable state Nove Test owns. There is no shared user-level database; every run, fact, and recommendation lives next to the project it was produced for, matching the UX goal in [`design/product-plans/ux-goal.md`](../product-plans/ux-goal.md) §3.
 
 Walking through the alternatives (this is part of the long-lived rationale):
 
@@ -194,33 +206,66 @@ Walking through the alternatives (this is part of the long-lived rationale):
 | Pure SQLite | Workable but inflates the DB with multi-MB native artifacts (JUnit XML, `.coverage`), bloats backups, and prevents engines from writing directly to a stable path. |
 | DuckDB | Tempting for analytics over historical SBFL, but our hot paths are point lookups and small range scans - SQLite's wheelhouse. Load DuckDB on demand for ad-hoc analytics if/when needed. |
 | lmdb | Fast but you reinvent every secondary index. **No.** |
-| Hybrid (chosen) | SQLite holds queryable metadata; engines write native artifacts to a stable filesystem path under the run directory. |
+| Hybrid (chosen) | SQLite holds queryable metadata under `memory/`; each engine writes its facts under its own subdirectory. |
+| Per-user `~/.novetest/` shared store | Rejected. Contradicts the UX goal: the user expects all artifacts under `.novetest/` at the project root, with no cross-project contamination. |
+
+### Project Store discovery
+
+- `novetest init` creates `.novetest/` in the current working directory and registers it as the active Project Store for that workspace (Memory `create_project_store`, see [`design/interace-contract/memory.md`](../interace-contract/memory.md) §1).
+- For every subsequent command, `memory/locate_project_store` walks upward from the current working directory looking for `.novetest/`. The first match becomes the active store. Behavior is git-style: a project is "in" Nove Test as soon as an ancestor directory has `.novetest/`.
+- If no Project Store is found, operating commands return a structured `uninitialized` envelope pointing the user at `novetest init`. Onboarding commands (`novetest -v`, `novetest -h`, `novetest init` itself) do not require a Project Store.
+- `$NOVETEST_HOME` is **not** the default location; it is a test/CI override only. Setting it pins the active store to that directory regardless of CWD, which keeps `tmp_path`-scoped unit tests hermetic.
 
 ### Layout
 
 ```
-$NOVETEST_HOME/                                 # default ~/.novetest
-  index.db                                      # SQLite, WAL
-  runs/
-    2026/05/11/
-      run_01HXYZ.../                            # ULID-named, sortable, unique
-        record.json                             # canonical Run Record (also indexed)
+<project_root>/.novetest/                       # the Project Store; one per project workspace
+  store.json                                    # store metadata: schema_version, initializedAt, storeState
+  schema_migrations.lock
+  blobs/sha256/ab/cd/abcd...                    # shared content-addressed dedup store
+  memory/                                       # Memory owns the cross-engine index + Run Records + tombstones
+    index.db                                    # SQLite, WAL - the queryable index for all engines
+    runs/
+      2026/05/11/run_01HXYZ.../                 # ULID-named run directory; canonical Run Record lives here
+        record.json
+    tombstones/
+      run_01HXYZ.../                            # tombstoned Memory Entries; Run Reference still resolvable
+  run/                                          # Run engine artifacts: raw native outputs and readiness probes
+    artifacts/
+      run_01HXYZ.../
         native/
           junit.xml
           pytest-report.json
-          coverage.sqlite
+          coverage.sqlite                       # raw native coverage payload (kept here, not under coverage/)
           stdout.log
           stderr.log
+    readiness/
+      latest.json                               # most recent assess_engine_readiness result (cached)
+  coverage/                                     # Coverage Facts derived from native coverage payloads
+    facts/
+      run_01HXYZ.../
         coverage_facts.json
+  regression/                                   # Regression Facts produced from run pairs
+    pairs/
+      run_01HXYZ__run_01HABC/
         regression_facts.json
+  localization/                                 # Localization Findings per analyzable run
+    findings/
+      run_01HXYZ.../
         localization_findings.json
+  replay/                                       # Replay Results per original run
+    results/
+      run_01HXYZ.../
         replay_result.json
-  blobs/
-    sha256/ab/cd/abcd...                        # dedup'd large artifacts
-  schema_migrations.lock
+  orchestration/                                # top-level outputs: recommendations, status snapshots
+    recommendations/
+      run_01HXYZ.../
+        recommendation.json                     # cited Recommendation set for the run
+    status/
+      latest.json                               # most recent computed Status view (cache)
 ```
 
-`$NOVETEST_HOME` overridable via env var; tests use `tmp_path`.
+Each engine owns its subdirectory exclusively; cross-engine read access goes through Memory's interfaces, not by reaching into a peer engine's directory. This mirrors the contract boundaries in `design/interace-contract/`.
 
 ### SQLite schema sketch (illustrative; finalize during Phase 1)
 
@@ -282,7 +327,16 @@ Use `BEGIN IMMEDIATE` for write transactions to fail fast instead of deadlocking
 
 ### Tombstones
 
-`memory delete <run_id>` does not delete the record. It sets `status = 'tombstoned'`, sets `tombstoned_at`, and (optionally, configurable) moves the run directory to `runs/_tombstoned/`. Evidence Citations elsewhere in the system remain resolvable; the tombstone is the contract that lets us promise this without leaking storage forever (a future `vacuum` command can hard-delete tombstones older than N days).
+`memory delete <run_id>` does not delete the record. It sets `status = 'tombstoned'`, sets `tombstoned_at`, and moves the run directory from `memory/runs/.../run_<id>/` to `memory/tombstones/run_<id>/`. Evidence Citations elsewhere in the system remain resolvable; the tombstone is the contract that lets us promise this without leaking storage forever (a future `vacuum` command can hard-delete tombstones older than N days).
+
+### Project Store creation (`novetest init`)
+
+`memory/create_project_store(project_workspace)`:
+
+1. Resolves `<project_root>/.novetest/`; refuses to write above the requested workspace path.
+2. If the directory already exists with a recognized `store.json`, returns the existing handle (idempotent per REQ-MEM-006). Durable state is never overwritten.
+3. Otherwise creates the directory skeleton above (top-level `blobs/`, plus an empty subdirectory per engine), writes `store.json` with `schema_version`, `initializedAt`, and `storeState: ready`, and runs `0001_init.sql` against `memory/index.db`.
+4. Returns the Project Store handle. The orchestration layer's `initialize_project_workspace` then invokes `run/assess_engine_readiness` against the workspace; that result is informational and never rolls back the store (see [`design/workflows/orchestration.md`](../workflows/orchestration.md)).
 
 ---
 
@@ -299,29 +353,35 @@ src/
     __main__.py                       # python -m novetest
     cli/
       __init__.py
-      app.py                          # Cyclopts root app + subapp wiring
+      app.py                          # Cyclopts root app + subapp wiring; dispatches -v / -h / init before Project Store lookup
       output.py                       # JSON envelope, NDJSON streamer, exit codes
       target.py                       # --target resolution / project-root walk
+      identity.py                     # backs `novetest -v`: composes orchestration/report_cli_identity output
     orchestration/
       __init__.py
       workflows/
+        init.py                       # novetest init - calls memory/project_store.create + run/readiness.assess
         integrated_test.py            # novetest test [target]
         inspect.py
         compare.py
         status.py
+      onboarding/
+        identity.py                   # report_cli_identity
+        command_surface.py            # describe_command_surface
       recommendation/
         synthesizer.py                # rule-based; see recommendation-synthesis.md
         citations.py
       eligibility.py                  # evaluate_stage_eligibility
     run/
       __init__.py
-      engine.py                       # execute / execute_with_engine_context
+      engine.py                       # execute / execute_with_engine_context (calls readiness.assess at head)
       target_resolver.py              # resolve_test_target
       engine_selector.py              # select_native_engine + list_supported_engine_pairs
       normalizer.py                   # normalize_native_result
+      readiness.py                    # assess_engine_readiness + detect_engine_candidates (NEVER installs)
       adapters/
         __init__.py                   # registry, decorator-based
-        base.py                       # NativeAdapter Protocol
+        base.py                       # NativeAdapter Protocol (includes .detect for readiness)
         pytest_.py                    # trailing underscore: avoid stdlib name clash
         jest.py
         junit.py
@@ -330,7 +390,8 @@ src/
         dotnet.py
     memory/
       __init__.py
-      store.py                        # SQLite + filesystem facade
+      store.py                        # SQLite + filesystem facade against the active Project Store
+      project_store.py                # create_project_store / locate_project_store / get_project_store_state
       run_repository.py
       tombstone.py
       migrations/
@@ -467,7 +528,7 @@ The MCP server imports the same orchestration / memory / etc. modules the CLI us
 ### Isolation rules
 
 1. **Child invocations get a clean environment.** When `tests/test_pytest_adapter.py` invokes our `pytest` adapter against `tests/fixtures/projects/pytest-basic/`, the child pytest must run with `cwd=fixtures/pytest-basic/` and **not** inherit our dev venv's plugins. Set `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` in the child unless the fixture explicitly requires a plugin.
-2. **`NOVETEST_HOME` is `tmp_path`-scoped per test.** Never let tests touch the user's real home.
+2. **`NOVETEST_HOME` pins the active Project Store to `tmp_path` per test.** In production, the Project Store is resolved by walking up from CWD to find `.novetest/`. In tests, set `NOVETEST_HOME=<tmp_path>` so the store resolves there and the test never touches the user's real home or escapes the fixture project. `novetest init` exercises (Phase 1 onward) should call into `memory/project_store.create_project_store` directly against a `tmp_path` fixture and assert the engine-subdirectory skeleton from §4 is created.
 3. **Mark subprocess tests.** Either `@pytest.mark.subprocess` or split: `tests/unit/` (no subprocess; mock at the `NativeAdapter` boundary) and `tests/integration/` (real engines; skip if not installed via `shutil.which("go") or pytest.skip(...)`).
 4. **Snapshot tests for JSON envelopes** with `syrupy`. Schema stability is part of the contract with AI agents; snapshots make break-changes loud.
 5. **`pytest-asyncio` in `mode=auto`.** Subprocess tests are `async def`. `anyio` is fine if abstracting the event loop matters later; not yet.

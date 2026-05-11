@@ -514,9 +514,19 @@ class PytestAdapter:
         ...
 ```
 
-### Doctor pass
+### Doctor pass / engine readiness
 
-Each adapter exposes a `doctor()` method that the `novetest run --doctor` (and integrated workflow's preflight) invokes. It returns structured `DoctorIssue` records: `severity`, `message`, `install_hint`. Exit code 4 if any blocker is found. AI agents can reason directly from the structured doctor output.
+Each adapter exposes a `doctor()` method that backs the engine-readiness pipeline. `run/readiness.assess_engine_readiness` (see [`design/interace-contract/run.md`](../interace-contract/run.md) §1) calls `detect_engine_candidates` to pick which adapters apply to the workspace, then invokes their `doctor()` calls. The combined result maps to the contract's three states:
+
+| Adapter `doctor()` outcome | Readiness state | CLI consequence |
+| --- | --- | --- |
+| Adapter detected, all required tooling resolvable | `ready` | Run / test execution proceeds. |
+| No adapter's `detect()` matches the workspace | `engine-missing` | Operating commands exit 4 with structured guidance listing the supported (ecosystem, engine) pairs. `novetest init` still succeeds; readiness is informational. |
+| Adapter detected but required tooling unresolvable (missing plugin, missing binary, version too old) | `engine-misconfigured` | Operating commands exit 4 with the structured `DoctorIssue` records below; init still succeeds. |
+
+`DoctorIssue` carries `severity`, `message`, `install_hint`. The install hint is text only - **Nove Test never executes it on the user's behalf**. AI agents can reason directly from the structured readiness payload; humans see the same hint in the text envelope.
+
+The `novetest run --doctor` surface remains as an explicit way to invoke this without running tests; it is the same code path as `assess_engine_readiness`.
 
 ### Failure budget for parsers
 
