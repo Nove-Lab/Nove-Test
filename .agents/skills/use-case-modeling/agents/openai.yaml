@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Case Modeling"
+  short_description: "Elicit system use cases"
+  default_prompt: "Use $use-case-modeling to derive actor-goal use cases from my context model and save the result as use-case-model.md."

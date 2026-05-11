@@ -1,0 +1,4 @@
+interface:
+  display_name: "Domain Modeling"
+  short_description: "Model domain entities and relationships"
+  default_prompt: "Use $domain-modeling to derive a domain model from my context and use-case models, then save the result as domain-model.md."
