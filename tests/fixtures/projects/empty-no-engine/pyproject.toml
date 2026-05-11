@@ -1,0 +1,5 @@
+[project]
+name = "empty-no-engine"
+version = "0.0.0"
+description = "Nove Test fixture: a project workspace with no detectable native test engine."
+requires-python = ">=3.11"
