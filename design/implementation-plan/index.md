@@ -5,7 +5,7 @@
 **Purpose:** Translate the planning, requirements, interface, and workflow design into concrete implementation decisions - language, libraries, project structure, native-engine integration strategy, persistence model, distribution, and delivery sequence. Reference-grade; lives long.
 
 **Upstream design references**
-- Product plans: [`design/product-plans/`](../product-plans/)
+- Product plans: [`design/product-plans/`](../product-plans/) (including [`ux-goal.md`](../product-plans/ux-goal.md))
 - Requirements analysis: [`design/requirements-analysis/`](../requirements-analysis/)
 - Interface contracts: [`design/interace-contract/`](../interace-contract/)
 - Workflow sequences: [`design/workflows/`](../workflows/)
@@ -34,7 +34,10 @@ A reader who needs only the headline answers should be able to stop here.
 | Implementation language | Python 3.11+ (target 3.11 floor; CI on 3.11/3.12/3.13) | [`foundations.md`](./foundations.md#1-language-and-runtime) |
 | CLI framework | Cyclopts (Click as the conservative fallback) | [`foundations.md`](./foundations.md#2-cli-framework-and-output-contract) |
 | Subprocess primitive | `asyncio.create_subprocess_exec` with concurrent stdout/stderr drains | [`foundations.md`](./foundations.md#3-subprocess-management) |
-| Persistence | Hybrid: SQLite (WAL) index + filesystem JSON / native artifacts, ULID-keyed run directories | [`foundations.md`](./foundations.md#4-persistence) |
+| Project Store location | Per-project `<project_root>/.novetest/` (created by `novetest init`); one subdirectory per engine (`memory/`, `run/`, `coverage/`, ...). Discovered by walking up from CWD. `$NOVETEST_HOME` is a test/CI override only - **not** a user default. | [`foundations.md`](./foundations.md#4-persistence) |
+| Onboarding entrypoints | `novetest -v` / `novetest -h` / `novetest init` callable without an existing Project Store; `init` composes `memory/create_project_store` + `run/assess_engine_readiness`. | [`foundations.md`](./foundations.md#2-cli-framework-and-output-contract) |
+| Native-engine readiness | `run/assess_engine_readiness` returns `ready` / `engine-missing` / `engine-misconfigured` (machine-distinguishable). Nove Test **never** installs, bundles, or upgrades a native engine on the user's behalf - it reports state and prints install hints. | [`engine-adapters.md`](./engine-adapters.md#adapter-implementation-pattern) |
+| Persistence | Hybrid: SQLite (WAL) index under `memory/` + filesystem JSON / native artifacts per engine subdirectory, ULID-keyed run directories | [`foundations.md`](./foundations.md#4-persistence) |
 | Domain models | `dataclasses(slots=True, frozen=True)` internally; `pydantic` v2 only at I/O edges | [`foundations.md`](./foundations.md#5-project-structure) |
 | Project layout | One PyPI distribution `novetest`, single import root, sub-product submodules, adapter registry | [`foundations.md`](./foundations.md#5-project-structure) |
 | Self-testing | pytest with `tmp_path`-scoped `NOVETEST_HOME`; OS x Python matrix in CI | [`foundations.md`](./foundations.md#6-self-testing) |
@@ -45,7 +48,7 @@ A reader who needs only the headline answers should be able to stop here.
 | Localization granularity | Symbol-level primary, line-level retained as evidence; `max(score)` aggregation up | [`localization-strategy.md`](./localization-strategy.md#3-code-location-granularity) |
 | Localization fallback when no per-test coverage | Tier the output by `mode`: `sbfl_per_test` -> `sbfl_aggregate` -> `failure_proximity` (regression-aware reweighting in the middle tier) | [`localization-strategy.md`](./localization-strategy.md#2-degradation-when-per-test-coverage-is-unavailable) |
 | Recommendation synthesis | Pure rule-based, deterministic, template-driven; no LLM in the synthesis path | [`recommendation-synthesis.md`](./recommendation-synthesis.md#1-deterministic-rule-based-synthesis) |
-| Delivery phasing | Six phases mirror `archive/implementation-plan.md`: Run+Memory -> Coverage -> Regression -> Localization -> Replay -> Recommendation Synthesis | [`delivery-phasing.md`](./delivery-phasing.md) |
+| Delivery phasing | Phase 0 (Foundations + install + `-v`/`-h`) -> Phase 1 (Onboarding via `novetest init` + Project Store + engine readiness + Run+Memory) -> Coverage -> Regression -> Localization -> Replay -> Recommendation Synthesis | [`delivery-phasing.md`](./delivery-phasing.md) |
 
 ---
 
