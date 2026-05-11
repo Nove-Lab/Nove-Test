@@ -1,11 +1,12 @@
 # Interface Contract - Run
 
-**Scope:** Run sub-product. Resolves Test Target, selects Native Engine, invokes execution, normalizes Native Result into a Run Record, and assigns a stable Run Reference. Run is a wrapper over native test engines; it does not redefine native discovery, assertion, or reporting semantics.
+**Scope:** Run sub-product. Assesses native-engine readiness for a Project Workspace, resolves Test Target, selects Native Engine, invokes execution, normalizes Native Result into a Run Record, and assigns a stable Run Reference. Run is a wrapper over native test engines; it does not redefine native discovery, assertion, or reporting semantics, and it does not install, bundle, or configure native engines on the user's behalf.
 
 **Upstream references**
 - `design/product-plans/subproducts/nove-test-run.md`
+- `design/product-plans/ux-goal.md`
 - `design/requirements-analysis/requirements-specification/groups/run.md`
-- `design/requirements-analysis/system-responsibility-model.md` (SR-002, SR-003, SR-004, SR-005, SR-006)
+- `design/requirements-analysis/system-responsibility-model.md` (SR-002, SR-003, SR-004, SR-005, SR-006, SR-024)
 - `design/requirements-analysis/domain-model.md`
 
 ---
@@ -15,7 +16,7 @@
 - **External** - Directly invokable by an actor (AI Agent, Developer) through the `novetest` CLI surface.
 - **Internal** - Invokable only by other Nove Test modules (Orchestration, Replay) within the tool boundary.
 - **Native CLI** (Section 2 only) - External native test engine command surfaces that Run invokes as a subprocess. These are owned by the external Native Test Engine Ecosystem actor, not by Nove Test.
-- Inputs and outputs use domain-entity vocabulary from `design/requirements-analysis/domain-model.md`.
+- Inputs and outputs use domain-entity vocabulary from `design/requirements-analysis/domain-model.md` (including `Project Workspace` for readiness interfaces).
 
 ---
 
@@ -31,6 +32,8 @@
 | `normalize_native_result(native_result, native_engine_context)` | Internal | Native Result bundle plus its Native Engine context | Run Record with normalized status, Test Result entries, summary counts, captured-output handles |
 | `assign_run_reference(run_record)` | Internal | Run Record without a Run Reference | Run Record bound to a stable Run Reference (`runId`, `createdAt`) |
 | `list_supported_engine_pairs()` | Internal | (none) | Set of supported (ecosystem, Native Engine) pairs covering at minimum: Python+pytest, JavaScript/TypeScript+jest, Java+JUnit, Go+`go test`, Rust+`cargo test`, .NET/C#+xUnit (per REQ-RUN-006) |
+| `assess_engine_readiness(project_workspace)` | Internal | Project Workspace context (workspace path, workspace type, engine hints) | Engine readiness result with a machine-distinguishable state of one of: `ready` (a supported Native Engine context is detected and usable), `engine-missing` (no supported native engine is currently usable in the workspace), `engine-misconfigured` (a supported native engine is present but cannot be invoked as configured); plus the detected Native Engine context when available and the workspace-derived evidence backing the classification. Does not attempt installation or configuration. (REQ-RUN-007, REQ-RUN-008, NFR-RUN-004) |
+| `detect_engine_candidates(project_workspace)` | Internal | Project Workspace context | Ordered set of candidate Native Engine contexts inferred from the workspace (based on supported (ecosystem, Native Engine) pairs and workspace markers), or an empty set when no supported engine is detected. Used internally by `assess_engine_readiness`. |
 
 ---
 
@@ -94,3 +97,5 @@ The following native CLI surfaces are invoked by Run to produce Native Results. 
 - Section 1 interfaces are the only Run surfaces other Nove Test engines depend on; Section 2 lists external Native Engine commands that Run invokes on their behalf.
 - Native Engine interfaces preserved here intentionally cover discovery, execution, and tightly-coupled coverage emission so that Run can produce Native Results that downstream sub-products (Memory, Coverage) can consume.
 - Run does not own the semantics of any Section 2 interface; the Native Engine remains the source of truth (NFR-RUN-001).
+- `assess_engine_readiness` is invoked by Orchestration during `novetest init` (informational, never installs) and again before governed test execution to surface a clear `engine-missing` / `engine-misconfigured` state instead of letting native invocations fail opaquely. The result is structurally distinguishable from internal Nove Test failures so callers - human or agent - can branch on it (NFR-RUN-004).
+- Run never installs, bundles, or configures native test engines. If `assess_engine_readiness` returns `engine-missing` or `engine-misconfigured`, the caller is expected to guide the user; Run only reports the state.
