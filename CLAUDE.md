@@ -1,20 +1,24 @@
 ## Source Structure
 
+All code lives under a single import root `novetest`. Transports (`cli/`, `mcp/`) are peers to the engines: they own user-facing concerns (argument binding, JSON envelope, exit codes) and contain no business logic.
+
 ```
-src/
+src/novetest/                   # Single import root (one PyPI distribution: novetest)
+├── cli/                        # CLI transport (Cyclopts root, JSON envelope, exit codes)
 ├── orchestration/              # Top-level orchestration layer
 │   ├── workflows/              # Workflow coordination
 │   └── recommendation/         # Recommendation synthesis
 ├── run/                        # Run engine
 │   └── adapters/               # Native test engine adapters
-├── memory/                     # Memory engin
+├── memory/                     # Memory engine
 ├── coverage/                   # Coverage engine
 ├── regression/                 # Regression engine
 ├── localization/               # Localization engine
 │   └── sbfl/                   # SBFL algorithms
-├── replay/                     # Replay engin
-├── models/                     # Shared domain model entitiy definitions
-└── utils/                      # Shared low-level utilities
+├── replay/                     # Replay engine
+├── models/                     # Shared domain model entity definitions
+├── utils/                      # Shared low-level utilities
+└── mcp/                        # MCP transport (Phase 6 / future)
 ```
 
 ---
