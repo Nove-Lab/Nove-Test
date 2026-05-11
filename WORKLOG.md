@@ -19,6 +19,16 @@ When this file exceeds ~200 lines, move entries older than the current phase int
 
 ---
 
+## 2026-05-11 — phase0 / domain-models
+
+- Landed: `src/novetest/models/run_reference.py`, `run_record.py`, `test_result.py`, `memory_entry.py`, plus `models/__init__.py` re-exports; matching unit tests under `tests/unit/models/`. All four entities are `@dataclass(slots=True, frozen=True)` with hand-rolled `to_dict()` / `from_dict()` and a v1 `schema_version` field per `foundations.md` §4–§5.
+- Verified: `uv run pytest tests/unit/models -q` → 27 passed; `uv run mypy` → clean (21 files, `--strict`).
+- Left open: no DoD bullet in `delivery-phasing.md` closes on models alone — every Phase 0/1 bullet also depends on CLI/Memory/Run code that has not yet landed, so `delivery-phasing.md` checkboxes are intentionally untouched. Per the (concurrently staged) file-only-persistence pivot in `foundations.md` §4 / `delivery-phasing.md` / `index.md`, there is no SQLite or `memory/migrations/` work owed in Phase 1; `record.json` written by Memory will use these dataclasses' `to_dict()` directly.
+- Gotcha: `TestResult` clashes with pytest's `Test*` auto-collection. Suppressed with `__test__: ClassVar[bool] = False`. If you ever rename the entity, drop the marker. Native Engine context is inlined onto `RunRecord` (`engine_name` / `engine_version` / `ecosystem`) rather than a separate dataclass — v1 has no behavior that requires it to round-trip on its own.
+- Next: the Phase 1 Project Store + `memory/create_project_store` slice can now consume these models as the wire format for `memory/runs/YYYY/MM/DD/run_<ulid>/record.json`. The Phase 5 derived SQLite cache (when it lands) should source its `schema_version` value from each model's `CURRENT_SCHEMA_VERSION` ClassVar so the JSON-as-source-of-truth invariant stays honest.
+
+---
+
 ## 2026-05-11 — phase1 / fixtures
 
 - Landed: `tests/fixtures/projects/pytest-basic/`, `tests/fixtures/projects/pytest-failing/`, `tests/fixtures/projects/empty-no-engine/` — each with own `pyproject.toml`, README, and (for the pytest fixtures) a small package + tests. No `novetest` import in any fixture.

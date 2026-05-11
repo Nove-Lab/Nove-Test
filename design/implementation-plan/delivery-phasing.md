@@ -26,7 +26,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - `cli/app.py` with Cyclopts root and empty subapp wiring (placeholders for `test`, `run`, `memory`, `coverage`, `regression`, `localization`, `replay`, `inspect`, `compare`, `status`).
 - JSON envelope (`cli/output.py`) and exit code constants.
 - `utils/asyncio_subprocess.py` canonical invocation helper.
-- `memory/store.py` SQLite scaffold with WAL, migration runner, `0001_init.sql` (parameterized on Project Store path; not yet wired to any default path).
+- `memory/store.py` file-only Project Store façade (path resolution + `record.json` read/write helpers). No index database in Phase 0-4 per `[foundations.md` §4](./foundations.md#4-persistence).
 - `models/` core entities (`run_reference.py`, `run_record.py`, `test_result.py`, `memory_entry.py`).
 - CI matrix: Linux/macOS/Windows x Python 3.11/3.12/3.13, `minimal` lane (no native engines required).
 - **Onboarding bindings** (from `[design/interace-contract/orchestration.md](../interace-contract/orchestration.md)` §1):
@@ -78,13 +78,13 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Engine adapter coverage:** **pytest only.** Other ecosystems contribute only their `detect()` hooks so `assess_engine_readiness` can identify them in the workspace; their full adapters are stubs that report "not yet implemented" when invoked for execution. This intentional narrowness lets us validate the whole onboarding -> Run -> Memory -> Inspect loop end-to-end before fanning out.
 
-**Persistence:** per-project `.novetest/` Project Store layout from `[foundations.md` §4](./foundations.md#4-persistence) finalized; migration `0001_init.sql` covers `run` + `test_outcome` + `schema_migration` tables; `store.json` and the engine-subdirectory skeleton written by `create_project_store`. Tombstone status implemented; tombstoned runs remain readable to `inspect`.
+**Persistence:** per-project `.novetest/` Project Store layout from `[foundations.md` §4](./foundations.md#4-persistence) finalized; `store.json` and the engine-subdirectory skeleton written by `create_project_store`. Run Records persist as `memory/runs/YYYY/MM/DD/run_<ulid>/record.json` (date path derived from the ULID timestamp prefix). Tombstone is a POSIX-atomic `rename(2)` from `memory/runs/...` to `memory/tombstones/...`; tombstoned runs remain readable to `inspect`. No index database in this phase.
 
 **Fixture projects:** `tests/fixtures/projects/pytest-basic/`, `pytest-failing/` (the latter exercising failed-test capture), and `empty-no-engine/` (a project workspace with no detectable native engine, used to validate `engine-missing` readiness output and the corresponding init-then-no-run guidance).
 
 **Definition-of-done:**
 
-- [ ] `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`) and a populated `memory/index.db`.
+- [ ] `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/runs/`, `memory/tombstones/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`). No index database is created.
 - [ ] Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
 - [ ] `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
 - [ ] `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
@@ -117,7 +117,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Engine adapter coverage:** pytest (per-test via coverage.py contexts) plus the **first three of the remaining five** in priority order driven by user demand and adapter complexity. Recommended Phase 2 set: pytest + jest + go test. JUnit and dotnet land in Phase 2.5 (a same-phase extension); cargo lands in Phase 3 unless a user blocker surfaces.
 
-**Schema additions:** Coverage Fact tables in SQLite + JSON files under each run directory. `coverage_fact_set.json` per run with `mapping_granularity` populated.
+**Schema additions:** `coverage_fact_set.json` written under `.novetest/coverage/facts/run_<ulid>/`, with `mapping_granularity` populated and `schema_version: 1`. No SQLite in this phase — Coverage Facts are read by loading the per-run JSON, which is sufficient for all Phase 2/3 query patterns (`coverage show`, `coverage diff`, `inspect`).
 
 **Per-test attribution tiers:** as defined in `[engine-adapters.md](./engine-adapters.md#cross-cutting-per-test-coverage-attribution)`.
 
@@ -212,6 +212,8 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - Multiple-run replay support (e.g. `--reruns=5`) for flake detection.
 - Replay Result classification: `reproducible` / `inconsistent` / `unable_to_replay`.
 
+**Persistence — first introduction of the derived SQLite cache:** Phase 5 is the first sub-product whose hot path is a per-test cross-run query (flakiness ratio over recent runs of a given nodeid). File-scan cost over Run History becomes prohibitive at this scale. Phase 5 introduces a derived SQLite index at `.novetest/memory/index.db` that caches `run` and `test_outcome` rows built from existing `record.json` files. The DB is a cache, not the source of truth; deleting it is always safe and a `novetest reindex` command rebuilds it from scratch. Schema is designed against the actual Phase 5 query set (per-nodeid history, latest-N joins), stamped with its own `index_schema_version = 1`. Forward-only `memory/migrations/` is created here. Settings and rationale are in `[foundations.md` §4 "Phase 5 SQLite cache"](./foundations.md#4-persistence).
+
 **Fixture projects:** `flaky-python/` (deliberately non-deterministic test), `pytest-basic/` (reproducible).
 
 **Definition-of-done:**
@@ -299,6 +301,8 @@ These are tracked across phases; resolving any of them updates the relevant doc.
 | 16  | Windows `install.ps1` parity (post-Phase-0)                                                          | Post-MVP            | `foundations.md` distribution                                          |
 | 17  | Project Store discovery scope: stop-at-first vs walk-to-VCS-root vs disallow nested `.novetest/`     | Phase 1             | `foundations.md` persistence section, `interace-contract/memory.md` §1 |
 | 18  | Engine readiness probe caching: per-invocation vs cached under `.novetest/run/readiness/` with a TTL | Phase 1             | `foundations.md` persistence section, `interace-contract/run.md`       |
+| 19  | Phase 5 derived SQLite index — schema for `run` + `test_outcome` tables (Phase 5 query set), and rebuild trigger (lazy on first SQL-dependent query vs explicit `novetest reindex` vs both) | Phase 5             | `foundations.md` §4 "Phase 5 SQLite cache"; new `memory/migrations/` introduced at Phase 5 |
+| 20  | Marker-file filter index (`memory/by_target/`, `memory/by_engine/`) — adopt eagerly from Phase 1 vs lazily when `find_runs_for_target` perf becomes noticeable | Phase 3             | `foundations.md` §4 persistence section                                |
 
 
 ---
