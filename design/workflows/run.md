@@ -42,13 +42,15 @@ The following shorthand identifiers are used in workflow sequences to keep the c
 | Interface | Workflow Sequence |
 | --- | --- |
 | `novetest run [target]` | `run/execute` -> `memory/store_run_evidence` |
-| `execute(test_target)` | `run/resolve_test_target` -> `run/select_native_engine` -> `[optional discovery: { run/pytest:collect \| run/jest:list \| run/go-test:list \| run/cargo-test:list \| run/dotnet-test:list }]` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov }]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
-| `execute_with_engine_context(test_target, native_engine_context)` | `run/resolve_test_target` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov } selected per supplied native_engine_context]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
+| `execute(test_target)` | `run/resolve_test_target` -> `run/assess_engine_readiness` -> `run/select_native_engine` -> `[optional discovery: { run/pytest:collect \| run/jest:list \| run/go-test:list \| run/cargo-test:list \| run/dotnet-test:list }]` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov }]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
+| `execute_with_engine_context(test_target, native_engine_context)` | `run/resolve_test_target` -> `run/assess_engine_readiness` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov } selected per supplied native_engine_context]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
 | `resolve_test_target(target_expression, workspace_context)` | - |
 | `select_native_engine(test_target)` | `run/list_supported_engine_pairs` |
 | `normalize_native_result(native_result, native_engine_context)` | - |
 | `assign_run_reference(run_record)` | - |
 | `list_supported_engine_pairs()` | - |
+| `assess_engine_readiness(project_workspace)` | `run/detect_engine_candidates` -> `run/list_supported_engine_pairs` |
+| `detect_engine_candidates(project_workspace)` | - |
 
 ---
 
@@ -85,3 +87,4 @@ Each native engine CLI is invoked by Run as a subprocess and produces a Native R
 - `run/execute` enumerates every Section 2 entry as either a discovery, test-invocation, or coverage-emission alternate, ensuring every native CLI is referenced in at least one upstream workflow.
 - `run/execute_with_engine_context` skips `run/select_native_engine` because the native engine context is supplied (Replay path), but it still routes through the same Section 2 alternates.
 - `run/normalize_native_result` and `run/assign_run_reference` are pure transformations that close every execution flow.
+- `run/assess_engine_readiness` is invoked twice in the product lifetime: once by orchestration during `novetest init` (`orchestration/initialize_project_workspace`), and again at the head of every governed execution path (`run/execute`, `run/execute_with_engine_context`) so an `engine-missing` or `engine-misconfigured` outcome is surfaced as a machine-distinguishable result before any native CLI invocation. Readiness assessment never installs or configures a native engine.
