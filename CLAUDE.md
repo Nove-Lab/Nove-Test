@@ -65,3 +65,28 @@ tests/fixtures/projects/
 ├── junit-basic/
 └── localization-branch/
 ```
+
+---
+
+## Multi-Agent Worklog Harness
+
+Multiple Claude agents work on this repo across sessions. The rules below keep them in sync without external state.
+
+### Pre-flight (before any code change)
+
+Read these in order; skip what is clearly unrelated to the task.
+
+1. `WORKLOG.md` — top 3 entries. What was just landed, what was left open, what to do next.
+2. `design/implementation-plan/delivery-phasing.md` — locate the current phase; unchecked `- [ ]` DoD bullets are the canonical todo.
+3. `design/interace-contract/<engine>.md` and `design/workflows/<engine>.md` for each engine the task touches.
+4. `design/implementation-plan/foundations.md` for cross-cutting infra concerns.
+
+In-session sub-tasks belong in TaskCreate, not on disk.
+
+### Post-flight (before `git commit` of `src/` or `tests/` changes)
+
+1. Append a new entry to the top of `WORKLOG.md` using the format documented in that file.
+2. Tick (`- [x]`) any DoD bullets in `delivery-phasing.md` that this commit fully satisfies. Do not tick partial work.
+3. Stage `WORKLOG.md` (and `delivery-phasing.md` if changed) in the same commit as the code.
+
+A `PreToolUse` hook (`.claude/hooks/check-worklog-before-commit.sh`) blocks `git commit` when `src/` or `tests/` are staged but `WORKLOG.md` is not. To bypass intentionally (e.g. pure refactor that does not warrant a log entry), stage `WORKLOG.md` with a single new line — but prefer a real entry.
