@@ -15,9 +15,9 @@
 
 | Group         | Description                                                                                                                | File                      | Status   |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------- |
-| orchestration | Top-level Nove Test workflow orchestration, status reporting, recommendation synthesis, and evidence citation.             | `groups/orchestration.md` | Approved |
-| run           | Test-target resolution, native-engine selection, execution invocation, result normalization, and run reference assignment. | `groups/run.md`           | Approved |
-| memory        | Run evidence persistence, retrieval, listing, and safer deletion or tombstone handling.                                    | `groups/memory.md`        | Approved |
+| orchestration | Top-level onboarding and workflow orchestration, status reporting, recommendation synthesis, and evidence citation.        | `groups/orchestration.md` | Approved |
+| run           | Native-engine readiness, test-target resolution, execution invocation, result normalization, and run reference assignment. | `groups/run.md`           | Approved |
+| memory        | Project-store governance, run evidence persistence, retrieval, listing, and safer deletion or tombstone handling.         | `groups/memory.md`        | Approved |
 | coverage      | Coverage fact derivation and cross-run coverage comparison.                                                                | `groups/coverage.md`      | Approved |
 | regression    | Latest comparison-baseline resolution and regression fact derivation.                                                      | `groups/regression.md`    | Approved |
 | localization  | Latest analyzable-run selection and suspicious-location derivation.                                                        | `groups/localization.md`  | Approved |
@@ -31,9 +31,9 @@
 
 | Group         | Functional Count | Non-Functional Count | Total |
 | ------------- | ---------------- | -------------------- | ----- |
-| orchestration | 5                | 3                    | 8     |
-| run           | 6                | 3                    | 9     |
-| memory        | 5                | 3                    | 8     |
+| orchestration | 7                | 4                    | 11    |
+| run           | 8                | 4                    | 12    |
+| memory        | 7                | 4                    | 11    |
 | coverage      | 4                | 2                    | 6     |
 | regression    | 4                | 2                    | 6     |
 | localization  | 4                | 2                    | 6     |
@@ -48,7 +48,7 @@
 | Status      | Count |
 | ----------- | ----- |
 | Draft       | 0     |
-| Approved    | 49    |
+| Approved    | 58    |
 | Implemented | 0     |
 | Verified    | 0     |
 
@@ -60,6 +60,7 @@
 - Each functional requirement is traced to at least one approved system responsibility and to the related use cases and entities named in upstream artifacts.
 - Requirement groups are aligned to the product structure requested by the user: one top-level `orchestration` group plus one group per active sub-product.
 - All reviewed requirements are in `Approved` status. Status transitions should follow `Draft` -> `Approved` -> `Implemented` -> `Verified`.
+- Onboarding traceability validation remains intact across layers: `AI Agent` -> `Initialize Project Workspace` -> `SR-023` / `SR-024` / `SR-025` -> `REQ-ORCH-007`, `REQ-RUN-007`, `REQ-MEM-006`, `REQ-MEM-007`.
 
 ---
 
@@ -67,6 +68,7 @@
 
 - The current analysis workspace remains `design/requirements-analysis/` for this Nove Test task.
 - Safer deletion behavior in the Memory group means preserving citation and history integrity through tombstone or equivalent retained trace behavior.
+- The user-approved requirement grouping remains unchanged even though onboarding requirements were added; they were distributed into the existing `orchestration`, `run`, and `memory` groups by behavioral fit.
 
 ---
 
@@ -82,4 +84,3 @@ None.
 - **Approved**: Reviewed and accepted by a human; ready for implementation
 - **Implemented**: Implemented in the system
 - **Verified**: Verified through testing or validation
-

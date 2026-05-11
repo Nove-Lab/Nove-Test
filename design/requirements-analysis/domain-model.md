@@ -8,11 +8,16 @@
 
 - design/requirements-analysis/use-case-model.md
 
+## Revision Context
+
+- User request: propagate the onboarding UX goals in `design/product-plans/ux-goal.md` into the existing requirements analysis while preserving prior approved content and marking revised interpretations as draft until re-approved.
+- Supporting artifacts: `design/product-plans/overall-plan.md`, `design/product-plans/overall-architecture.md`, `design/product-plans/ux-goal.md`
+
 ---
 
 ## Domain Description
 
-Nove Test starts from a **Test Target** and asks a **Native Engine** to produce a **Native Result** from the external project and test ecosystem. The native result is an engine-specific umbrella for execution outcomes, logs, reports, coverage files, and other native evidence. The system normalizes the native result into a **Run Record** identified by a stable **Run Reference**, with associated **Test Result** evidence. A stored **Memory Entry** becomes part of **Run History**, which supports inspection, latest-run workflows, comparison, replay, and status review. When available, **Coverage Fact** data identifies exercised or uncovered **Code Location** values. **Regression Fact** records test result, output, or coverage changes derived from comparing run evidence. **Localization Finding** ranks suspicious code locations for a run. A **Replay Attempt** may execute again through the native engine path, producing a new native result that becomes a replay run record; the **Replay Result** is the reproducibility classification derived by comparing original and replay run records. Top-level Nove Test turns available facts into a **Recommendation** and connects each recommendation to supporting evidence through an **Evidence Citation**. **Status** summarizes current Nove Test evidence availability and workflow readiness.
+ Nove Test onboarding starts when a supported delivery path provides an **Installable Binary** that becomes a usable **CLI Installation** after the user installs Nove Test and verifies that the command surface responds. In a specific codebase, the user then initializes a **Project Workspace**, causing Nove Test to create and govern a per-project **Project Store** represented by the `.novetest/` directory. From there, Nove Test starts from a **Test Target** and asks a **Native Engine** to produce a **Native Result** from the external project and test ecosystem. The native result is an engine-specific umbrella for execution outcomes, logs, reports, coverage files, and other native evidence. The system normalizes the native result into a **Run Record** identified by a stable **Run Reference**, with associated **Test Result** evidence. A stored **Memory Entry** becomes part of **Run History**, which supports inspection, latest-run workflows, comparison, replay, and status review. When available, **Coverage Fact** data identifies exercised or uncovered **Code Location** values. **Regression Fact** records test result, output, or coverage changes derived from comparing run evidence. **Localization Finding** ranks suspicious code locations for a run. A **Replay Attempt** may execute again through the native engine path, producing a new native result that becomes a replay run record; the **Replay Result** is the reproducibility classification derived by comparing original and replay run records. Top-level Nove Test turns available facts into a **Recommendation** and connects each recommendation to supporting evidence through an **Evidence Citation**. **Status** summarizes current Nove Test evidence availability and workflow readiness.
 
 ---
 
@@ -20,6 +25,10 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 
 | Entity Name | Description | Attributes | Source |
 |-------------|------------|-----------|--------|
+| Installable Binary | Versioned Nove Test executable package made available through the supported onboarding channel for a target platform. | version, platform, distributionChannel, checksumReference | use-case |
+| CLI Installation | Installed and callable Nove Test command surface on a user's machine after the onboarding path completes. | installedVersion, commandName, installLocation, verifiedAt | use-case |
+| Project Workspace | Project root context in which Nove Test is initialized and later operates. | workspacePath, workspaceType, engineHints | context |
+| Project Store | Nove Test-managed per-project `.novetest/` store that holds configuration and project-scoped artifacts for later commands. | storePath, initializedAt, storeState | use-case |
 | Test Target | Selected project, file, suite, package, or other scope requested for test execution or analysis. | targetExpression, targetType, workspaceContext | use-case |
 | Native Engine | External test engine or tightly-coupled engine ecosystem used to execute tests and expose native-derived results. | engineName, engineVersion, ecosystem | context |
 | Native Result | Engine-specific raw result bundle produced by a native engine, before Nove Test normalization. It may include execution status, test summaries, failed test references, stdout or stderr logs, stack traces, reports, coverage files, and other native artifacts. | resultId, sourceEngine, status, resultHandle, producedAt | product-plan |
@@ -44,6 +53,13 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 
 | Source | Relationship | Target | Cardinality |
 |--------|--------------|--------|-------------|
+| CLI Installation | is created from | Installable Binary | 1 to 1 |
+| CLI Installation | initializes | Project Workspace | 1 to 0..* |
+| Project Workspace | contains | Project Store | 1 to 0..1 |
+| Test Target | is scoped within | Project Workspace | 1 to 1 |
+| Project Store | retains | Memory Entry | 1 to 0..* |
+| Project Store | retains | Recommendation | 1 to 0..* |
+| Project Store | supports | Status | 1 to 0..* |
 | Run Record | executes | Test Target | 1 to 1 |
 | Run Record | records | Native Engine | 1 to 1 |
 | Native Engine | produces | Native Result | 1 to 0..* |
@@ -80,6 +96,10 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 
 | Term | Definition |
 |------|-----------|
+| Installable binary | A platform-appropriate Nove Test executable delivered by the supported onboarding path. |
+| CLI installation | A successfully installed and callable `novetest` command surface on a user machine. |
+| Project workspace | The root directory of a project in which Nove Test is initialized and run. |
+| Project store | The `.novetest/` directory managed by Nove Test inside a project workspace. |
 | Native-derived | Produced by, exposed by, or traceable to the native test engine ecosystem. |
 | Native result | Engine-specific raw result bundle that can include structured outcomes, logs, reports, coverage files, and other native artifacts before Nove Test normalization. |
 | Fact | A factual observation or primitive signal produced by Nove Test sub-products without prescribing a fix. |
@@ -99,6 +119,7 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 | Note | Description |
 | --- | --- |
 | Actor exclusion | AI Agent, Developer, Native Test Engine Ecosystem, and Project Under Test remain context actors rather than domain entities. Domain entities model the evidence and facts Nove Test manages. |
+| Onboarding domain additions | Installable Binary, CLI Installation, Project Workspace, and Project Store were added to trace the onboarding UX goal into the domain layer without changing the existing run-analysis entities. |
 | Native engine representation | Native Engine is included as a domain entity because run records must preserve which external engine produced the facts, even though the engine itself remains outside the system boundary. |
 | Native result abstraction | Native Result intentionally aggregates engine-specific outcomes, logs, reports, coverage files, and artifacts. The internal structure can differ by native engine; Run Record is the normalized Nove Test representation derived from it. |
 | Latest workflows | Run History is included to support `status`, `regression latest`, and `localization latest` behavior without modeling those commands as entities. |
@@ -106,6 +127,7 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 | Coverage comparison abstraction | Coverage gaps are represented through Coverage Fact state instead of a separate entity; cross-run coverage changes are derived by comparing Coverage Facts rather than modeled as a separate entity. |
 | Replay result boundary | A replay execution can produce a new Native Result that normalizes into a replay Run Record. Replay Result is the comparison/classification over original and replay evidence, not the native result itself. |
 | Source locations | Code Location is inferred because coverage gaps, localization findings, and evidence citations need a shared vocabulary for file, line, branch, or symbol references. |
+| Review status | The onboarding-related domain additions and any downstream reinterpretation they cause should be treated as draft updates until explicitly re-approved. |
 
 ---
 
@@ -113,6 +135,9 @@ Nove Test starts from a **Test Target** and asks a **Native Engine** to produce 
 
 | Assumption | Rationale |
 | --- | --- |
+| CLI Installation models successful availability of the `novetest` command, not package-manager-specific mechanics of how the binary reached the machine. | Delivery infrastructure stays outside the system boundary even though install success is user-visible. |
+| Project Store is the dominant durable project-scoped state boundary for Nove Test, even if implementation later uses additional user-level cache or shared install state. | The UX goal binds user-facing durable state to `.novetest/`. |
+| Project initialization may capture engine hints from the project workspace without guaranteeing that test execution is immediately possible. | The UX goal requires zero Nove Test setup after `init` but does not promise a native engine is already installed. |
 | Run Reference is stable within the active Nove Test evidence scope. | The design requires repeatable references but does not define global uniqueness. |
 | A Run Record may exist for a failed, interrupted, or incomplete execution attempt. | The product needs evidence for failed and non-passing test workflows. |
 | Coverage Fact, Regression Fact, Localization Finding, and Replay Result may be absent for some runs. | These facts depend on stored history, failures, replay attempts, or native ecosystem support. |
