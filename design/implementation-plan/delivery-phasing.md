@@ -41,12 +41,12 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Definition-of-done:**
 
 - [ ] `uv run pytest -q` green on all three OSes and three Python versions.
-- [ ] `novetest --output json --help` returns the standard envelope.
-- [ ] A no-op `novetest test --help` exits 0; the rest of the subcommands exist as stubs that exit 2 with a "not yet implemented" envelope.
+- [x] `novetest --output json --help` returns the standard envelope.
+- [x] A no-op `novetest test --help` exits 0; the rest of the subcommands exist as stubs that exit 2 with a "not yet implemented" envelope.
 - [ ] A signed binary builds on the `release-test` workflow.
 - [ ] `**curl -fsSL <release_install_url> | sh` end-to-end** produces a working `novetest --version` on a clean Linux container and a clean macOS runner. Re-running the same command upgrades in place.
 - [ ] The install script verifies SHA-256 and aborts loudly on mismatch; this is covered by an integration test that intentionally serves a tampered binary.
-- [ ] `novetest -v` and `novetest -h` return their structured envelopes in a directory tree that contains no `.novetest/` anywhere in the ancestor chain. This is the Phase 0 onboarding-readiness gate.
+- [x] `novetest -v` and `novetest -h` return their structured envelopes in a directory tree that contains no `.novetest/` anywhere in the ancestor chain. This is the Phase 0 onboarding-readiness gate.
 
 **Risks / mitigations:**
 
