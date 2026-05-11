@@ -1,0 +1,4 @@
+interface:
+  display_name: "Requirements Specification"
+  short_description: "Generate traceable requirement specs"
+  default_prompt: "Use $requirement-specification to generate traceable functional and non-functional requirements from my modeling artifacts."

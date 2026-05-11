@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context Modeling"
+  short_description: "Define system boundary and actors"
+  default_prompt: "Use $context-modeling to define the system boundary and actors for the system I describe, then save the result as context-model.md."

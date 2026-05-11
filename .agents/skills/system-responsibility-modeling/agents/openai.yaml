@@ -1,0 +1,4 @@
+interface:
+  display_name: "System Responsibility Modeling"
+  short_description: "Map use cases to system responsibilities"
+  default_prompt: "Use $system-responsibility-modeling to derive system responsibilities from my use-case and domain models, then save the result as system-responsibility-model.md."
