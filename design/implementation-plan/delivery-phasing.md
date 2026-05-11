@@ -3,12 +3,13 @@
 **Scope:** The phased build sequence for Nove Test. Each phase has a goal, a definition-of-done, the interfaces and workflows in scope, the engine adapter coverage, and exit criteria. Plus risks and open questions.
 
 **Upstream**
-- Foundations: [`foundations.md`](./foundations.md)
-- Engine adapters: [`engine-adapters.md`](./engine-adapters.md)
-- Localization strategy: [`localization-strategy.md`](./localization-strategy.md)
-- Recommendation synthesis: [`recommendation-synthesis.md`](./recommendation-synthesis.md)
-- Original phase plan: [`design/archive/implementation-plan.md`](../archive/implementation-plan.md)
-- Roadmap: [`design/product-plans/overall-plan.md`](../product-plans/overall-plan.md)
+
+- Foundations: `[foundations.md](./foundations.md)`
+- Engine adapters: `[engine-adapters.md](./engine-adapters.md)`
+- Localization strategy: `[localization-strategy.md](./localization-strategy.md)`
+- Recommendation synthesis: `[recommendation-synthesis.md](./recommendation-synthesis.md)`
+- Original phase plan: `[design/archive/implementation-plan.md](../archive/implementation-plan.md)`
+- Roadmap: `[design/product-plans/overall-plan.md](../product-plans/overall-plan.md)`
 
 The phase boundaries follow the original 6-phase roadmap. This doc converts each into a concrete build order with measurable exit criteria.
 
@@ -19,7 +20,8 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** make the repo buildable, runnable, releasable, and CI-green before any sub-product code lands.
 
 **In scope:**
-- Project skeleton matching [`foundations.md`](./foundations.md#5-project-structure).
+
+- Project skeleton matching `[foundations.md](./foundations.md#5-project-structure)`.
 - `pyproject.toml` with `python_requires = ">=3.11"`, `uv` for dev workflow.
 - `cli/app.py` with Cyclopts root and empty subapp wiring (placeholders for `test`, `run`, `memory`, `coverage`, `regression`, `localization`, `replay`, `inspect`, `compare`, `status`).
 - JSON envelope (`cli/output.py`) and exit code constants.
@@ -27,25 +29,27 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - `memory/store.py` SQLite scaffold with WAL, migration runner, `0001_init.sql` (parameterized on Project Store path; not yet wired to any default path).
 - `models/` core entities (`run_reference.py`, `run_record.py`, `test_result.py`, `memory_entry.py`).
 - CI matrix: Linux/macOS/Windows x Python 3.11/3.12/3.13, `minimal` lane (no native engines required).
-- **Onboarding bindings** (from [`design/interace-contract/orchestration.md`](../interace-contract/orchestration.md) §1):
+- **Onboarding bindings** (from `[design/interace-contract/orchestration.md](../interace-contract/orchestration.md)` §1):
   - `orchestration/onboarding/identity.py` (`report_cli_identity`) and `orchestration/onboarding/command_surface.py` (`describe_command_surface`).
   - `cli/app.py` dispatches `-v` / `--version` and `-h` / `--help` through these before any Project Store lookup runs.
   - Snapshot tests for `novetest --version` and `novetest --help` JSON envelopes via `syrupy`, asserting the envelope is callable on a clean machine with no `.novetest/` present anywhere.
 - PyApp release pipeline that produces a binary on tag push but does not yet publish to PyPI.
-- **One-line install script (`scripts/install.sh`) for Linux/macOS** (`linux-x86_64`, `linux-aarch64`, `macos-arm64`, `macos-x86_64`) per the Tier-1 path in [`foundations.md`](./foundations.md#7-distribution). Detects OS+arch, downloads the matching PyApp binary, verifies SHA-256, installs to `~/.local/bin/novetest`, prints `PATH` hint if needed, idempotent on re-run.
+- **One-line install script (`scripts/install.sh`) for Linux/macOS** (`linux-x86_64`, `linux-aarch64`, `macos-arm64`, `macos-x86_64`) per the Tier-1 path in `[foundations.md](./foundations.md#7-distribution)`. Detects OS+arch, downloads the matching PyApp binary, verifies SHA-256, installs to `~/.local/bin/novetest`, prints `PATH` hint if needed, idempotent on re-run.
 - GitHub Releases workflow uploads a `*.sha256` sidecar alongside every binary so the install script can verify.
 - Install script hosting (specific URL TBD - see Open Question #15). Until the final URL is wired up, the script is reachable from `https://raw.githubusercontent.com/...` for `release-test` validation.
 
 **Definition-of-done:**
-- `uv run pytest -q` green on all three OSes and three Python versions.
-- `novetest --output json --help` returns the standard envelope.
-- A no-op `novetest test --help` exits 0; the rest of the subcommands exist as stubs that exit 2 with a "not yet implemented" envelope.
-- A signed binary builds on the `release-test` workflow.
-- **`curl -fsSL <release_install_url> | sh` end-to-end** produces a working `novetest --version` on a clean Linux container and a clean macOS runner. Re-running the same command upgrades in place.
-- The install script verifies SHA-256 and aborts loudly on mismatch; this is covered by an integration test that intentionally serves a tampered binary.
-- `novetest -v` and `novetest -h` return their structured envelopes in a directory tree that contains no `.novetest/` anywhere in the ancestor chain. This is the Phase 0 onboarding-readiness gate.
+
+- [ ] `uv run pytest -q` green on all three OSes and three Python versions.
+- [ ] `novetest --output json --help` returns the standard envelope.
+- [ ] A no-op `novetest test --help` exits 0; the rest of the subcommands exist as stubs that exit 2 with a "not yet implemented" envelope.
+- [ ] A signed binary builds on the `release-test` workflow.
+- [ ] `**curl -fsSL <release_install_url> | sh` end-to-end** produces a working `novetest --version` on a clean Linux container and a clean macOS runner. Re-running the same command upgrades in place.
+- [ ] The install script verifies SHA-256 and aborts loudly on mismatch; this is covered by an integration test that intentionally serves a tampered binary.
+- [ ] `novetest -v` and `novetest -h` return their structured envelopes in a directory tree that contains no `.novetest/` anywhere in the ancestor chain. This is the Phase 0 onboarding-readiness gate.
 
 **Risks / mitigations:**
+
 - *Cyclopts immaturity surfaces during Phase 0* - if blocked, swap to Click. Phase 0 is the cheapest time to make this swap; the command tree shape is identical.
 - *PyApp + python-build-standalone availability for `windows-arm64`* - currently unsupported; we ship `windows-x86_64` only and document the gap.
 
@@ -55,7 +59,8 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Goal:** the minimum repeatable testing loop, entered through the documented onboarding flow. A user installs Nove Test (Phase 0), runs `novetest init` in their project, gets a `.novetest/` Project Store, sees a clear engine-readiness signal, then executes a test through one native engine and inspects / lists / deletes the result.
 
-**Interfaces in scope** (from [`design/interace-contract/orchestration.md`](../interace-contract/orchestration.md), [`run.md`](../interace-contract/run.md), [`memory.md`](../interace-contract/memory.md)):
+**Interfaces in scope** (from `[design/interace-contract/orchestration.md](../interace-contract/orchestration.md)`, `[run.md](../interace-contract/run.md)`, `[memory.md](../interace-contract/memory.md)`):
+
 - **Onboarding (orchestration §1):**
   - `novetest init` (External) and `orchestration/initialize_project_workspace` (Internal).
 - **Project Store (memory §1):**
@@ -73,25 +78,27 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Engine adapter coverage:** **pytest only.** Other ecosystems contribute only their `detect()` hooks so `assess_engine_readiness` can identify them in the workspace; their full adapters are stubs that report "not yet implemented" when invoked for execution. This intentional narrowness lets us validate the whole onboarding -> Run -> Memory -> Inspect loop end-to-end before fanning out.
 
-**Persistence:** per-project `.novetest/` Project Store layout from [`foundations.md` §4](./foundations.md#4-persistence) finalized; migration `0001_init.sql` covers `run` + `test_outcome` + `schema_migration` tables; `store.json` and the engine-subdirectory skeleton written by `create_project_store`. Tombstone status implemented; tombstoned runs remain readable to `inspect`.
+**Persistence:** per-project `.novetest/` Project Store layout from `[foundations.md` §4](./foundations.md#4-persistence) finalized; migration `0001_init.sql` covers `run` + `test_outcome` + `schema_migration` tables; `store.json` and the engine-subdirectory skeleton written by `create_project_store`. Tombstone status implemented; tombstoned runs remain readable to `inspect`.
 
 **Fixture projects:** `tests/fixtures/projects/pytest-basic/`, `pytest-failing/` (the latter exercising failed-test capture), and `empty-no-engine/` (a project workspace with no detectable native engine, used to validate `engine-missing` readiness output and the corresponding init-then-no-run guidance).
 
 **Definition-of-done:**
-- `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`) and a populated `memory/index.db`.
-- Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
-- `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
-- `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
-- `novetest run` from `empty-no-engine/` returns `engine-missing` (exit code 4) before any subprocess is spawned, with the envelope distinguishing readiness failure from internal Nove Test failure (NFR-RUN-004).
-- `novetest memory list --output json` returns the run.
-- `novetest memory show <run_id> --output json` returns the run plus availability flags (all derived facts `false`).
-- `novetest memory delete <run_id>` tombstones; subsequent `memory show` still resolves (tombstoned).
-- `novetest status --output json` returns latest Run Reference and Run History readiness; all sub-reports `unavailable`.
-- `novetest test tests/test_x.py` runs the integrated workflow but with empty Coverage / Regression / Localization / Replay; recommendation is `all_green` or `unavailable_analysis`.
-- Operating commands invoked from a directory tree with no ancestor `.novetest/` return a structured `uninitialized` envelope pointing at `novetest init` (no traceback, exit code 2).
-- All workflow sequences documented in [`design/workflows/orchestration.md`](../workflows/orchestration.md) §1, [`run.md`](../workflows/run.md), and [`memory.md`](../workflows/memory.md) (Sections 1 and 2) are exercised by integration tests.
+
+- [ ] `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`) and a populated `memory/index.db`.
+- [ ] Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
+- [ ] `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
+- [ ] `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
+- [ ] `novetest run` from `empty-no-engine/` returns `engine-missing` (exit code 4) before any subprocess is spawned, with the envelope distinguishing readiness failure from internal Nove Test failure (NFR-RUN-004).
+- [ ] `novetest memory list --output json` returns the run.
+- [ ] `novetest memory show <run_id> --output json` returns the run plus availability flags (all derived facts `false`).
+- [ ] `novetest memory delete <run_id>` tombstones; subsequent `memory show` still resolves (tombstoned).
+- [ ] `novetest status --output json` returns latest Run Reference and Run History readiness; all sub-reports `unavailable`.
+- [ ] `novetest test tests/test_x.py` runs the integrated workflow but with empty Coverage / Regression / Localization / Replay; recommendation is `all_green` or `unavailable_analysis`.
+- [ ] Operating commands invoked from a directory tree with no ancestor `.novetest/` return a structured `uninitialized` envelope pointing at `novetest init` (no traceback, exit code 2).
+- [ ] All workflow sequences documented in `[design/workflows/orchestration.md](../workflows/orchestration.md)` §1, `[run.md](../workflows/run.md)`, and `[memory.md](../workflows/memory.md)` (Sections 1 and 2) are exercised by integration tests.
 
 **Risks:**
+
 - *pytest-json-report version skew on Windows* - pin a minimum minor.
 - *Path normalization edge cases* in nodeids - centralize path normalization in `utils/paths.py`.
 - *Project Store discovery surprises* - walking up from CWD can cross workspace boundaries on shared dev machines (multiple projects under one ancestor). Phase 1 stops at the first `.novetest/`; document the behavior and add a `--store=<path>` override for users who need to disambiguate.
@@ -103,6 +110,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** structured Coverage Facts and cross-run Coverage deltas.
 
 **Interfaces in scope:**
+
 - `novetest coverage show <run_id>`, `novetest coverage diff <run_id1> <run_id2>`
 - `coverage/derive_coverage_facts`, `coverage/get_coverage_facts`, `coverage/compare_coverage_facts`, `coverage/check_coverage_availability`
 - `novetest inspect <run_id>` extends to populate Coverage section (not just availability flag).
@@ -111,17 +119,19 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Schema additions:** Coverage Fact tables in SQLite + JSON files under each run directory. `coverage_fact_set.json` per run with `mapping_granularity` populated.
 
-**Per-test attribution tiers:** as defined in [`engine-adapters.md`](./engine-adapters.md#cross-cutting-per-test-coverage-attribution).
+**Per-test attribution tiers:** as defined in `[engine-adapters.md](./engine-adapters.md#cross-cutting-per-test-coverage-attribution)`.
 
 **Fixture projects:** `pytest-coverage/` (per-test), `jest-basic-coverage/` (per-file degraded), `gotest-basic-coverage/` (aggregate).
 
 **Definition-of-done:**
-- `novetest test --coverage` against pytest-coverage emits per-test coverage with `mapping_granularity: per-test`.
-- `novetest coverage diff` returns structured deltas with stable Code Location identity.
-- `inspect` returns the Coverage section populated.
-- Performance NFR-COV-002 met on a fixture with 50k covered locations.
+
+- [ ] `novetest test --coverage` against pytest-coverage emits per-test coverage with `mapping_granularity: per-test`.
+- [ ] `novetest coverage diff` returns structured deltas with stable Code Location identity.
+- [ ] `inspect` returns the Coverage section populated.
+- [ ] Performance NFR-COV-002 met on a fixture with 50k covered locations.
 
 **Risks:**
+
 - *Test-to-code mapping degradation surprises*. Document the per-mapping-granularity behavior loudly in the CLI text + JSON `warnings`.
 
 ---
@@ -131,6 +141,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** factual run-to-run behavior change reports.
 
 **Interfaces in scope:**
+
 - `novetest regression compare <run_id1> <run_id2>`, `novetest regression latest`
 - `regression/compare_runs`, `regression/resolve_latest_baseline`, `regression/derive_latest_regression`, `regression/get_regression_facts`, `regression/check_regression_availability`
 - `novetest compare <run_id1> <run_id2>` (orchestration-level Regression + Coverage diff composition)
@@ -141,11 +152,13 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Schema additions:** Regression Fact tables; `regression_facts.json` per run pair.
 
 **Definition-of-done:**
-- `novetest regression latest` resolves the latest pair for the resolved Test Target and returns Regression Facts (with Coverage changes when available).
-- `novetest compare` returns the composed Regression + Coverage delta.
-- `inspect` populates Regression section using the resolved baseline.
+
+- [ ] `novetest regression latest` resolves the latest pair for the resolved Test Target and returns Regression Facts (with Coverage changes when available).
+- [ ] `novetest compare` returns the composed Regression + Coverage delta.
+- [ ] `inspect` populates Regression section using the resolved baseline.
 
 **Risks:**
+
 - *Baseline resolution ambiguity* when multiple recent runs share a target. Default policy: latest two by `created_at`; document and parameterize via `--since` / `--baseline=<run_id>` overrides.
 
 ---
@@ -155,24 +168,28 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** ranked suspicious Code Locations with mode-aware degradation.
 
 **Interfaces in scope:**
+
 - `novetest localization <run_id>`, `novetest localization latest`
 - `localization/derive_localization_findings`, `localization/resolve_latest_analyzable_run`, `localization/derive_latest_localization`, `localization/get_localization_findings`, `localization/check_localization_availability`
 - `inspect` extends to populate Localization section.
 
 **Implementation:**
-- All four SBFL formulas (Ochiai default, Op2, DStar(\*=2), Tarantula) under `localization/sbfl/`.
-- Three modes (`sbfl_per_test`, `sbfl_aggregate`, `failure_proximity`) with mode-selection algorithm from [`localization-strategy.md`](./localization-strategy.md#2-degradation-when-per-test-coverage-is-unavailable).
+
+- All four SBFL formulas (Ochiai default, Op2, DStar(=2), Tarantula) under `localization/sbfl/`.
+- Three modes (`sbfl_per_test`, `sbfl_aggregate`, `failure_proximity`) with mode-selection algorithm from `[localization-strategy.md](./localization-strategy.md#2-degradation-when-per-test-coverage-is-unavailable)`.
 - Symbol resolver: Python (`ast`) ready; JS/TS, Java/Kotlin, Go, Rust, C# ship with file-level fallback to be upgraded post-MVP.
 
 **Fixture projects:** `localization-branch/` (a deliberate single-line bug with rich coverage), `localization-aggregate-only/` (no per-test coverage), `localization-no-coverage/` (failure-proximity mode).
 
 **Definition-of-done:**
-- `novetest localization latest --output json` against `localization-branch` ranks the bug in top 3.
-- Mode field populated correctly across all three fixtures.
-- Performance NFR-LOC-002 met (500 failed tests + 50k covered locations within 8s).
-- All four formulas computed and persisted; `--formula` flag selects which is presented as primary.
+
+- [ ] `novetest localization latest --output json` against `localization-branch` ranks the bug in top 3.
+- [ ] Mode field populated correctly across all three fixtures.
+- [ ] Performance NFR-LOC-002 met (500 failed tests + 50k covered locations within 8s).
+- [ ] All four formulas computed and persisted; `--formula` flag selects which is presented as primary.
 
 **Risks:**
+
 - *Spectra matrix size on very large suites*. Validate at Phase 4 against the largest available fixture; introduce sparse representation if needed.
 - *Symbol resolver coverage* - file-level fallback is acceptable for ecosystems where the resolver is not yet ready; document loudly.
 
@@ -183,12 +200,14 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** classify reproducibility via Replay Result.
 
 **Interfaces in scope:**
+
 - `novetest replay <run_id>`
 - `replay/replay_run`, `replay/reconstruct_replay_context`, `replay/classify_replay_consistency`, `replay/get_replay_result`, `replay/check_replay_availability`
 - `run/execute_with_engine_context` (used by Replay; finalized here even though contract was earlier).
 - `inspect` extends to populate Replay section.
 
 **Implementation:**
+
 - Replay reuses `run/execute_with_engine_context` to keep the same Native Engine path as the original run.
 - Multiple-run replay support (e.g. `--reruns=5`) for flake detection.
 - Replay Result classification: `reproducible` / `inconsistent` / `unable_to_replay`.
@@ -196,11 +215,13 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Fixture projects:** `flaky-python/` (deliberately non-deterministic test), `pytest-basic/` (reproducible).
 
 **Definition-of-done:**
-- `novetest replay <run_id_of_flaky>` with `--reruns=5` produces `inconsistent` classification.
-- `novetest replay <run_id_of_basic>` produces `reproducible`.
-- A run whose target no longer exists produces `unable_to_replay`.
+
+- [ ] `novetest replay <run_id_of_flaky>` with `--reruns=5` produces `inconsistent` classification.
+- [ ] `novetest replay <run_id_of_basic>` produces `reproducible`.
+- [ ] A run whose target no longer exists produces `unable_to_replay`.
 
 **Risks:**
+
 - *Environment drift between original and replay* (dependency versions, time-sensitive tests). Document explicitly that "reproducible" is "reproducible under reconstructed conditions" not "reproducible against arbitrary future state."
 
 ---
@@ -210,40 +231,46 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Goal:** the integrated `novetest test [target]` returns deterministic, cited recommendations.
 
 **Interfaces in scope:**
+
 - `orchestration/synthesize_recommendation`, `orchestration/cite_recommendation_evidence`, `orchestration/evaluate_stage_eligibility`
-- The integrated `novetest test [target]` workflow as defined in [`design/workflows/orchestration.md`](../workflows/orchestration.md).
-- All seven recommendation categories from [`recommendation-synthesis.md`](./recommendation-synthesis.md#2-recommendation-categories).
+- The integrated `novetest test [target]` workflow as defined in `[design/workflows/orchestration.md](../workflows/orchestration.md)`.
+- All seven recommendation categories from `[recommendation-synthesis.md](./recommendation-synthesis.md#2-recommendation-categories)`.
 
 **Implementation:**
+
 - Pure rule-based synthesis under `orchestration/recommendation/`.
 - Closed taxonomy frozen at v1 of `recommendation_schema_version`.
 - Golden-fixture snapshot tests pinning the recommendation output for each fixture project.
 
 **Definition-of-done:**
-- `novetest test tests/` against each fixture produces the expected category set per fixture, byte-identical across runs.
-- Snapshots pinned with `syrupy`.
-- Integration test demonstrates an AI agent can traverse `recommendation -> evidence_citations -> retrieve_run_evidence` round-trip end-to-end.
+
+- [ ] `novetest test tests/` against each fixture produces the expected category set per fixture, byte-identical across runs.
+- [ ] Snapshots pinned with `syrupy`.
+- [ ] Integration test demonstrates an AI agent can traverse `recommendation -> evidence_citations -> retrieve_run_evidence` round-trip end-to-end.
 
 **Risks:**
+
 - *Closed taxonomy gets restrictive*. v2 is a deliberate bump; `recommendation_schema_version` is the contract.
 
 ---
 
 ## Phase 7 (post-MVP) - MCP Transport
 
-Not part of the original 6-phase roadmap but called out in [`foundations.md`](./foundations.md#5-project-structure) as a structural concern from day one.
+Not part of the original 6-phase roadmap but called out in `[foundations.md](./foundations.md#5-project-structure)` as a structural concern from day one.
 
 **Goal:** the same domain operations are available via the Model Context Protocol so AI agents that prefer MCP do not have to shell out.
 
 **Implementation:**
+
 - `novetest/mcp/server.py` with `mcp` Python SDK (FastMCP-style decorators).
 - `novetest-mcp` console script entry point.
 - All `novetest` operations exposed as MCP tools: `test`, `inspect`, `compare`, `status`, `replay`, `localize`, `regression-compare`, `regression-latest`, `coverage-show`, `coverage-diff`, `memory-list`, `memory-show`, `memory-delete`.
 - Same internal modules as the CLI; MCP is a transport, not a parallel implementation.
 
 **Definition-of-done:**
-- An MCP-aware agent can invoke each tool and consume the JSON envelope identical to what the CLI emits.
-- Snapshot tests cover at least one MCP tool round-trip per sub-product.
+
+- [ ] An MCP-aware agent can invoke each tool and consume the JSON envelope identical to what the CLI emits.
+- [ ] Snapshot tests cover at least one MCP tool round-trip per sub-product.
 
 ---
 
@@ -251,26 +278,28 @@ Not part of the original 6-phase roadmap but called out in [`foundations.md`](./
 
 These are tracked across phases; resolving any of them updates the relevant doc.
 
-| # | Question | Phase | Updates |
-| --- | --- | --- | --- |
-| 1 | Should Run Reference uniqueness be scoped per workspace, per machine, or globally? | Phase 1 | `foundations.md` persistence section, domain-model open questions |
-| 2 | Branch / symbol resolution as a Code Location kind across all six ecosystems | Phase 4 | `localization-strategy.md` Open Items |
-| 3 | `cargo nextest libtest-json` graduation off nightly | Phase 2.5 / Phase 3 | `engine-adapters.md` Rust section |
-| 4 | Coverlet `PerTestCoverage` exact configuration key in the version we pin | Phase 2.5 | `engine-adapters.md` .NET section |
-| 5 | JUnit Platform Console Launcher: vendor vs download-on-first-use | Phase 2.5 | `engine-adapters.md` Java section |
-| 6 | Memory Entry deletion - tombstone retention period and `vacuum` semantics | Phase 1 | `foundations.md` persistence section |
-| 7 | Vitest as alternate JS/TS adapter | Phase 2+ | `engine-adapters.md` JS/TS section |
-| 8 | Static enumeration of individual Jest `it()` blocks via TS/JS AST parser | Phase 2+ | `engine-adapters.md` JS/TS Discovery |
-| 9 | Recommendation persistence per run vs re-derive on `inspect` | Phase 6 | `recommendation-synthesis.md` Implementation Notes |
-| 10 | `recommendation_schema_version` v1 freeze - exact slot keys per category | Phase 6 entry | `recommendation-synthesis.md` |
-| 11 | Spectra matrix size limits / sparse representation threshold | Phase 4 | `localization-strategy.md` Open Items |
-| 12 | Per-language symbol resolvers landing order post-MVP | Post-Phase 4 | `localization-strategy.md` |
-| 13 | Homebrew tap publishing | Post-MVP | `foundations.md` distribution |
-| 14 | `novetest self update` signing key rotation policy | Post-MVP | `foundations.md` distribution |
-| 15 | Install script hosting URL (custom domain like `get.novetest.dev` vs GitHub Pages vs raw GitHub) | Phase 0 | `foundations.md` distribution; install script in `scripts/install.sh` |
-| 16 | Windows `install.ps1` parity (post-Phase-0) | Post-MVP | `foundations.md` distribution |
-| 17 | Project Store discovery scope: stop-at-first vs walk-to-VCS-root vs disallow nested `.novetest/` | Phase 1 | `foundations.md` persistence section, `interace-contract/memory.md` §1 |
-| 18 | Engine readiness probe caching: per-invocation vs cached under `.novetest/run/readiness/` with a TTL | Phase 1 | `foundations.md` persistence section, `interace-contract/run.md` |
+
+| #   | Question                                                                                             | Phase               | Updates                                                                |
+| --- | ---------------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------- |
+| 1   | Should Run Reference uniqueness be scoped per workspace, per machine, or globally?                   | Phase 1             | `foundations.md` persistence section, domain-model open questions      |
+| 2   | Branch / symbol resolution as a Code Location kind across all six ecosystems                         | Phase 4             | `localization-strategy.md` Open Items                                  |
+| 3   | `cargo nextest libtest-json` graduation off nightly                                                  | Phase 2.5 / Phase 3 | `engine-adapters.md` Rust section                                      |
+| 4   | Coverlet `PerTestCoverage` exact configuration key in the version we pin                             | Phase 2.5           | `engine-adapters.md` .NET section                                      |
+| 5   | JUnit Platform Console Launcher: vendor vs download-on-first-use                                     | Phase 2.5           | `engine-adapters.md` Java section                                      |
+| 6   | Memory Entry deletion - tombstone retention period and `vacuum` semantics                            | Phase 1             | `foundations.md` persistence section                                   |
+| 7   | Vitest as alternate JS/TS adapter                                                                    | Phase 2+            | `engine-adapters.md` JS/TS section                                     |
+| 8   | Static enumeration of individual Jest `it()` blocks via TS/JS AST parser                             | Phase 2+            | `engine-adapters.md` JS/TS Discovery                                   |
+| 9   | Recommendation persistence per run vs re-derive on `inspect`                                         | Phase 6             | `recommendation-synthesis.md` Implementation Notes                     |
+| 10  | `recommendation_schema_version` v1 freeze - exact slot keys per category                             | Phase 6 entry       | `recommendation-synthesis.md`                                          |
+| 11  | Spectra matrix size limits / sparse representation threshold                                         | Phase 4             | `localization-strategy.md` Open Items                                  |
+| 12  | Per-language symbol resolvers landing order post-MVP                                                 | Post-Phase 4        | `localization-strategy.md`                                             |
+| 13  | Homebrew tap publishing                                                                              | Post-MVP            | `foundations.md` distribution                                          |
+| 14  | `novetest self update` signing key rotation policy                                                   | Post-MVP            | `foundations.md` distribution                                          |
+| 15  | Install script hosting URL (custom domain like `get.novetest.dev` vs GitHub Pages vs raw GitHub)     | Phase 0             | `foundations.md` distribution; install script in `scripts/install.sh`  |
+| 16  | Windows `install.ps1` parity (post-Phase-0)                                                          | Post-MVP            | `foundations.md` distribution                                          |
+| 17  | Project Store discovery scope: stop-at-first vs walk-to-VCS-root vs disallow nested `.novetest/`     | Phase 1             | `foundations.md` persistence section, `interace-contract/memory.md` §1 |
+| 18  | Engine readiness probe caching: per-invocation vs cached under `.novetest/run/readiness/` with a TTL | Phase 1             | `foundations.md` persistence section, `interace-contract/run.md`       |
+
 
 ---
 
@@ -289,8 +318,10 @@ These are tracked across phases; resolving any of them updates the relevant doc.
 ## Doc Map for Active Work
 
 When picking up a phase:
+
 1. Read the relevant `design/interace-contract/<engine>.md`.
 2. Read the matching `design/workflows/<engine>.md`.
-3. Read [`foundations.md`](./foundations.md) for cross-cutting infra.
-4. Read the focused implementation doc for that phase ([`engine-adapters.md`](./engine-adapters.md), [`localization-strategy.md`](./localization-strategy.md), [`recommendation-synthesis.md`](./recommendation-synthesis.md)).
+3. Read `[foundations.md](./foundations.md)` for cross-cutting infra.
+4. Read the focused implementation doc for that phase (`[engine-adapters.md](./engine-adapters.md)`, `[localization-strategy.md](./localization-strategy.md)`, `[recommendation-synthesis.md](./recommendation-synthesis.md)`).
 5. Open the matching open-questions row above; close it as the phase progresses.
+
