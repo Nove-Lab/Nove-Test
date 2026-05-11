@@ -33,7 +33,7 @@ Why not 3.13 as the floor:
 
 ### Runtime style
 
-- **Async-first for I/O.** All subprocess invocation, file I/O against the run directory, and SQLite writes go through `asyncio`. Wrap synchronous CLI entrypoints with `asyncio.run(main_async())` at the boundary.
+- **Async-first for I/O.** Subprocess invocation and concurrent file I/O against the run directory go through `asyncio`. Wrap synchronous CLI entrypoints with `asyncio.run(main_async())` at the boundary. (Phase 5+ derived SQLite index, when introduced, can remain synchronous behind the `memory` façade — that's a Phase 5 decision.)
 - **Type hints everywhere.** `mypy --strict` in CI. Domain entities are dataclasses with full annotations.
 - **Avoid metaclasses, multiple inheritance, dynamic dispatch tricks.** AI agents read this code; clarity beats cleverness.
 
@@ -194,20 +194,40 @@ Do not pull in `sh`, `plumbum`, or `delegator`. They paper over the platform iss
 
 ## 4. Persistence
 
-**Decision: Project-scoped Project Store at `<project_root>/.novetest/`. Hybrid - SQLite (WAL mode) for the index, filesystem tree for record JSON and native artifacts, content-addressed blob store for dedup. One subdirectory per sub-product so each engine owns its own artifacts. Stdlib `sqlite3`. No ORM.**
+**Decision: Project-scoped Project Store at `<project_root>/.novetest/`. File-only persistence for Phase 1-4: `record.json` files under a ULID-encoded directory layout that provides O(1) point lookups and naturally sorted Run History without an index database. A derived SQLite index is reserved for Phase 5+ when cross-run per-test queries (flakiness detection in Replay) make file-scan costs prohibitive; that index is a cache, not a source of truth, and can be rebuilt from `record.json` files at any time. One subdirectory per sub-product so each engine owns its own artifacts.**
 
 The per-project store is the only durable state Nove Test owns. There is no shared user-level database; every run, fact, and recommendation lives next to the project it was produced for, matching the UX goal in [`design/product-plans/ux-goal.md`](../product-plans/ux-goal.md) §3.
+
+### Why file-only first (and SQLite later, not now)
+
+Memory must serve exactly these query patterns through Phase 4:
+
+1. Point lookup by `run_id` (Memory `retrieve_run_evidence`, every sub-product's read path).
+2. Latest N runs by `created_at` (Memory `list_run_history`, Status, Localization latest).
+3. Filter by Test Target + latest (Regression `find_runs_for_target` baseline resolution).
+4. Filter by analyzability + latest (Localization `find_latest_analyzable_run`).
+5. Tombstone state transition (`delete_run_evidence`).
+
+ULID-as-`run_id` already encodes a millisecond timestamp in its first 10 characters. That single fact resolves queries 1-2 without an index:
+
+- `run_id` → `runs/YYYY/MM/DD/run_<ulid>/record.json` is **computable**. Point lookup is one `open(2)`.
+- Listing latest N is a reverse-chronological walk of `runs/YYYY/MM/DD/`; ULID lexicographic order within a day is creation order.
+
+Queries 3-4 require reading `record.json` to inspect target/availability. At Phase 1-3 scale (dozens to a few thousand runs per project) this is acceptable. When it stops being acceptable, a small marker-file index (`runs/by_target/<hash>/<ulid>`, materialized on write) closes the gap in ~30 LOC without introducing SQL. Tombstoning is a POSIX-atomic `rename(2)` from `memory/runs/...` to `memory/tombstones/...` — no consistency primitive beyond the filesystem is required.
+
+The one query pattern this layout cannot serve cheaply is **per-test cross-run history**: "for nodeid X, what was its outcome in the last 50 runs?" That query first surfaces in Phase 5 (Replay flakiness detection). At that point — and only at that point — we introduce SQLite as a derived index built from existing `record.json` files; the DB is rebuildable, the schema is designed against the actual Phase 5 query set rather than speculation, and `record.json` remains the source of truth.
 
 Walking through the alternatives (this is part of the long-lived rationale):
 
 | Option | Verdict |
 | --- | --- |
-| Pure filesystem JSON tree | Simple but every list/filter command becomes O(n) directory walk + re-parse. Tombstones become rename-to-`.deleted` with no consistency. **No.** |
-| Pure SQLite | Workable but inflates the DB with multi-MB native artifacts (JUnit XML, `.coverage`), bloats backups, and prevents engines from writing directly to a stable path. |
-| DuckDB | Tempting for analytics over historical SBFL, but our hot paths are point lookups and small range scans - SQLite's wheelhouse. Load DuckDB on demand for ad-hoc analytics if/when needed. |
-| lmdb | Fast but you reinvent every secondary index. **No.** |
-| Hybrid (chosen) | SQLite holds queryable metadata under `memory/`; each engine writes its facts under its own subdirectory. |
-| Per-user `~/.novetest/` shared store | Rejected. Contradicts the UX goal: the user expects all artifacts under `.novetest/` at the project root, with no cross-project contamination. |
+| Pure filesystem JSON tree with naive layout | Every list/filter becomes O(n) directory walk + re-parse; tombstones via rename-to-`.deleted` lack discoverability. **Skip.** |
+| Pure SQLite from day one | Inflates DB with multi-MB native artifacts (JUnit XML, `.coverage`), bloats backups, prevents engines from writing directly to a stable path. **Skip.** |
+| **ULID-encoded directory layout (chosen for Phase 1-4)** | ULID encodes a ms timestamp, so `run_id` → date path is computable. Point lookup O(1); latest-N is reverse-chronological walk; filter by target/engine uses lazy marker files under `runs/by_target/...` when filter cost becomes noticeable. Tombstone via `rename(2)` is POSIX-atomic. No schema lock-in. |
+| **SQLite as derived cache index (deferred to Phase 5+)** | Introduced when per-test cross-run queries (flakiness detection in Replay) surface. Built from `record.json` files; rebuildable; schema designed against actual usage. |
+| DuckDB | Tempting for SBFL analytics, but hot paths are point lookups; the layout above serves them better. Defer indefinitely. |
+| lmdb | Reinvents secondary indexes. **No.** |
+| Per-user `~/.novetest/` shared store | Contradicts UX goal: all artifacts under `.novetest/` at project root. **No.** |
 
 ### Project Store discovery
 
@@ -221,15 +241,16 @@ Walking through the alternatives (this is part of the long-lived rationale):
 ```
 <project_root>/.novetest/                       # the Project Store; one per project workspace
   store.json                                    # store metadata: schema_version, initializedAt, storeState
-  schema_migrations.lock
   blobs/sha256/ab/cd/abcd...                    # shared content-addressed dedup store
-  memory/                                       # Memory owns the cross-engine index + Run Records + tombstones
-    index.db                                    # SQLite, WAL - the queryable index for all engines
+  memory/                                       # Memory owns Run Records + tombstones (no index DB in Phase 1-4)
     runs/
       2026/05/11/run_01HXYZ.../                 # ULID-named run directory; canonical Run Record lives here
-        record.json
+        record.json                             # source of truth for the run; ULID encodes created_at
     tombstones/
       run_01HXYZ.../                            # tombstoned Memory Entries; Run Reference still resolvable
+    by_target/                                  # (Phase 3+, lazy) marker files for target filter acceleration
+    by_engine/                                  # (Phase 3+, lazy) marker files for engine filter acceleration
+    index.db                                    # (Phase 5+) derived SQLite cache of run + test_outcome rows
   run/                                          # Run engine artifacts: raw native outputs and readiness probes
     artifacts/
       run_01HXYZ.../
@@ -267,67 +288,15 @@ Walking through the alternatives (this is part of the long-lived rationale):
 
 Each engine owns its subdirectory exclusively; cross-engine read access goes through Memory's interfaces, not by reaching into a peer engine's directory. This mirrors the contract boundaries in `design/interace-contract/`.
 
-### SQLite schema sketch (illustrative; finalize during Phase 1)
+### Record format and schema versioning
 
-```sql
-CREATE TABLE run (
-  run_id          TEXT PRIMARY KEY,             -- ULID
-  created_at      INTEGER NOT NULL,             -- epoch ms
-  target          TEXT NOT NULL,                -- normalized target expression
-  engine          TEXT NOT NULL,                -- pytest|jest|junit|gotest|cargo|dotnet
-  status          TEXT NOT NULL,                -- passed|failed|errored|tombstoned
-  schema_version  INTEGER NOT NULL,
-  record_path     TEXT NOT NULL,                -- relative path to record.json
-  tombstoned_at   INTEGER
-);
-CREATE INDEX run_created_idx ON run(created_at DESC);
-CREATE INDEX run_target_idx  ON run(target, created_at DESC);
-CREATE INDEX run_engine_idx  ON run(engine, created_at DESC);
-
-CREATE TABLE test_outcome (
-  run_id      TEXT NOT NULL REFERENCES run(run_id),
-  nodeid      TEXT NOT NULL,
-  outcome     TEXT NOT NULL,
-  duration_ms INTEGER,
-  PRIMARY KEY (run_id, nodeid)
-);
-CREATE INDEX test_outcome_nodeid_idx ON test_outcome(nodeid, run_id);
-
-CREATE TABLE schema_migration (
-  version    INTEGER PRIMARY KEY,
-  applied_at INTEGER NOT NULL
-);
-```
-
-Coverage / regression / localization fact tables get added in their respective phases. The pattern: small queryable rows in SQLite, full fact bundle in JSON next to `record.json`.
-
-### SQLite settings
-
-```python
-conn.execute("PRAGMA journal_mode = WAL")
-conn.execute("PRAGMA synchronous = NORMAL")
-conn.execute("PRAGMA busy_timeout = 5000")
-conn.execute("PRAGMA foreign_keys = ON")
-```
-
-Use `BEGIN IMMEDIATE` for write transactions to fail fast instead of deadlocking concurrent writers.
-
-### Why no ORM
-
-- ~10 tables. SQLAlchemy is overkill, hides the SQL, and slows CLI startup.
-- Hand-rolled per-entity repository module under `memory/`. Each repository's job is to map between domain dataclasses and SQL rows.
-
-### Schema versioning
-
-- `schema_version: int` stamped on every `record.json` and every SQLite row.
-- Forward-only migrations under `memory/migrations/0001_init.sql`, `0002_*.sql`, ...
-- Tracked in `schema_migration` table.
-- **Never edit a migration after release.** Always add a new one.
-- Domain-model migrations on read: `models/migrations.py::upgrade_run_record(d, from_v) -> dict` chains. Old records remain readable forever.
+- Every `record.json` (and every fact bundle written by Coverage / Regression / Localization / Replay) carries a `schema_version: int`. v1 is the Phase 1 freeze.
+- Domain-model migrations are applied on read: `models/migrations.py::upgrade_run_record(d, from_v) -> dict` chains forward. Old records remain readable forever; we never rewrite written `record.json` to a newer schema.
+- The `run_id` is a ULID; its first 10 characters encode `created_at` as a Crockford-base32 millisecond timestamp. This is how date-bucketed directory paths are derived without a separate index.
 
 ### Tombstones
 
-`memory delete <run_id>` does not delete the record. It sets `status = 'tombstoned'`, sets `tombstoned_at`, and moves the run directory from `memory/runs/.../run_<id>/` to `memory/tombstones/run_<id>/`. Evidence Citations elsewhere in the system remain resolvable; the tombstone is the contract that lets us promise this without leaking storage forever (a future `vacuum` command can hard-delete tombstones older than N days).
+`memory delete <run_id>` does not delete the record. It moves the run directory from `memory/runs/YYYY/MM/DD/run_<id>/` to `memory/tombstones/run_<id>/` via `rename(2)`, which is POSIX-atomic on the same filesystem. `record.json` inside is updated in place to set `status: tombstoned` and `tombstoned_at`. Evidence Citations elsewhere in the system remain resolvable through Memory's `retrieve_run_evidence`, which checks both `runs/` and `tombstones/`. A future `vacuum` command can hard-delete tombstones older than N days.
 
 ### Project Store creation (`novetest init`)
 
@@ -335,8 +304,12 @@ Use `BEGIN IMMEDIATE` for write transactions to fail fast instead of deadlocking
 
 1. Resolves `<project_root>/.novetest/`; refuses to write above the requested workspace path.
 2. If the directory already exists with a recognized `store.json`, returns the existing handle (idempotent per REQ-MEM-006). Durable state is never overwritten.
-3. Otherwise creates the directory skeleton above (top-level `blobs/`, plus an empty subdirectory per engine), writes `store.json` with `schema_version`, `initializedAt`, and `storeState: ready`, and runs `0001_init.sql` against `memory/index.db`.
+3. Otherwise creates the directory skeleton above (top-level `blobs/`, plus an empty subdirectory per engine — including an empty `memory/runs/` and `memory/tombstones/`), and writes `store.json` with `schema_version`, `initializedAt`, and `storeState: ready`. No index database is created in Phase 1-4.
 4. Returns the Project Store handle. The orchestration layer's `initialize_project_workspace` then invokes `run/assess_engine_readiness` against the workspace; that result is informational and never rolls back the store (see [`design/workflows/orchestration.md`](../workflows/orchestration.md)).
+
+### Phase 5 SQLite cache (forward note)
+
+When Replay's flakiness detection arrives (Phase 5), a derived SQLite index materializes at `memory/index.db`. It caches `run` and `test_outcome` rows derived from `record.json` files; schema is designed against the actual Phase 5 query set, stamped with its own `index_schema_version` (independent of `record.json` `schema_version`), and rebuildable from scratch via `novetest reindex`. The DB is never authoritative; deleting it must always be safe. Settings: WAL journal mode, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `BEGIN IMMEDIATE` for writes. No ORM — stdlib `sqlite3` with hand-rolled repository functions, because the table count remains small. Detailed schema and migration mechanics are deferred to the Phase 5 design slice.
 
 ---
 
@@ -390,12 +363,11 @@ src/
         dotnet.py
     memory/
       __init__.py
-      store.py                        # SQLite + filesystem facade against the active Project Store
+      store.py                        # filesystem facade against the active Project Store (record.json read/write, path helpers)
       project_store.py                # create_project_store / locate_project_store / get_project_store_state
-      run_repository.py
+      run_repository.py               # ULID-derived path lookup, latest-N walks, tombstone rename
       tombstone.py
-      migrations/
-        0001_init.sql
+      # migrations/ and index.db arrive at Phase 5 only (see §4 forward note)
     coverage/
       __init__.py
       derive.py
