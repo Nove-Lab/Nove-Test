@@ -19,6 +19,16 @@ When this file exceeds ~200 lines, move entries older than the current phase int
 
 ---
 
+## 2026-05-11 — phase0 / cli-onboarding-envelope
+
+- Landed: `src/novetest/cli/output.py` (envelope dataclass, exit-code constants, NDJSON/JSON emitters, `--output` / `NOVETEST_OUTPUT` / TTY resolution); `src/novetest/orchestration/onboarding/identity.py` (`report_cli_identity`) and `command_surface.py` (`describe_command_surface`) — neither touches the filesystem or any Project Store lookup; `src/novetest/cli/app.py` rewritten to register all 14 documented subcommands as not-implemented stubs that emit envelope + exit 2, and to intercept top-level `-v` / `-h` (in any position relative to `--output`) **before** Cyclopts parsing. Tests under `tests/unit/cli/` (5 files, 39 cases) and `tests/integration/cli/` (3 files + conftest, 25 cases including a syrupy snapshot for the help envelope).
+- Verified: `uv run pytest -q` → 87 passed; `uv run mypy` → clean (25 source files, `--strict`). Manual smoke: `python -m novetest --version --output json` / `--help --output json` / `memory list` / `test --help` all behave per Phase 0 DoD.
+- Left open: text-mode renderers (Phase 0 text mode currently falls back to pretty JSON — acceptable per `foundations.md` §2 for now); structured envelope for *subcommand*-level `--help` (Cyclopts emits its native text help with ANSI for `<sub> --help`, which is fine for DoD #3's "exit 0" requirement). Per-OS / per-Python CI matrix (DoD #1) is the CI workflow slice, not this one. PyApp release + `install.sh` (DoD #4–#6) are out of scope here.
+- Gotcha: Cyclopts 4.11 does **not** auto-register `--output` as a global option; we strip `--output[=]value` from argv inside `main()` before calling `app(args)` so it works in any position. Resolved mode is stashed in a module-level `_active_mode` that stubs read — keep this in mind if you ever introduce concurrent CLI invocations in-process (tests use subprocess, not in-process). `pyproject.toml` `[tool.pytest.ini_options]` was tightened: `testpaths = ["tests/unit", "tests/integration"]` and `norecursedirs = ["tests/fixtures"]` — otherwise pytest tried to collect the SuT projects under `tests/fixtures/projects/` and exploded on their `from pytest_basic.math_utils import ...` lines.
+- Next: Slice B (Phase 1 entry) — `memory/store.py` + `memory/project_store.py` (file-only per the updated `foundations.md` §4), `novetest init` workflow wiring `create_project_store` + `run/assess_engine_readiness`, `locate_project_store` walk-up, and the `uninitialized` envelope for operating commands invoked outside an initialized store. The fixture `empty-no-engine/` is the readiness input.
+
+---
+
 ## 2026-05-11 — phase0 / domain-models
 
 - Landed: `src/novetest/models/run_reference.py`, `run_record.py`, `test_result.py`, `memory_entry.py`, plus `models/__init__.py` re-exports; matching unit tests under `tests/unit/models/`. All four entities are `@dataclass(slots=True, frozen=True)` with hand-rolled `to_dict()` / `from_dict()` and a v1 `schema_version` field per `foundations.md` §4–§5.
