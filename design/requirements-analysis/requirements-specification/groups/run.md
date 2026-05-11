@@ -2,7 +2,7 @@
 
 ## Description
 
-Run-sub-product behavior that resolves the requested target, selects the correct native engine path, executes tests, normalizes native results, and assigns stable run references for later workflows.
+Run-sub-product behavior that assesses native-engine readiness, resolves the requested target, selects the correct native engine path, executes tests, normalizes native results, and assigns stable run references for later workflows.
 
 ---
 
@@ -17,6 +17,8 @@ Run-sub-product behavior that resolves the requested target, selects the correct
 | REQ-RUN-004 | The system shall normalize each native result bundle into a run record that includes execution status, summary counts, failed-test references where available, and execution metadata required by downstream workflows.                                               | Execute Test Workflow, Run Test Target, Replay Prior Run            | SR-005                | Native Result, Run Record, Test Result    | High     | Approved |
 | REQ-RUN-005 | The system shall assign a stable run reference to each normalized run record before the run is exposed for storage, inspection, comparison, replay, or citation.                                                                                                      | Execute Test Workflow, Run Test Target, Replay Prior Run            | SR-006                | Run Reference, Run Record                 | High     | Approved |
 | REQ-RUN-006 | The system shall support selecting and invoking native test engines for all of the following ecosystem-engine pairs: Python with `pytest`, JavaScript/TypeScript with `jest`, Java with `JUnit`, Go with `go test`, Rust with `cargo test`, and .NET/C# with `xUnit`. | Run Test Target, Replay Prior Run, Provide Native Execution Facts   | SR-003, SR-004        | Test Target, Native Engine, Native Result | High     | Approved |
+| REQ-RUN-007 | The system shall assess an initialized project workspace for supported native-engine readiness before governed test execution proceeds.                                                                                                                               | Initialize Project Workspace, Execute Test Workflow, Run Test Target | SR-024               | Project Workspace, Project Store, Native Engine, Test Target, Status | High | Approved |
+| REQ-RUN-008 | The system shall return a structured readiness result that distinguishes a usable native-engine context from native-engine-missing or misconfigured states without attempting to install or configure native engines on the user's behalf. | Initialize Project Workspace, Execute Test Workflow, Run Test Target | SR-024 | Project Workspace, Native Engine, Status | High | Approved |
 
 
 ---
@@ -29,6 +31,7 @@ Run-sub-product behavior that resolves the requested target, selects the correct
 | NFR-RUN-001 | The system shall preserve the native engine as the source of truth for test discovery, assertion semantics, and native reporting behavior.                   | Reliability     | High     | Approved |
 | NFR-RUN-002 | The system shall preserve enough execution metadata in normalized run records to support deterministic downstream storage, comparison, and replay workflows. | Maintainability | High     | Approved |
 | NFR-RUN-003 | The system shall return a normalized run record or an explicit execution-failure state within 5 seconds after the underlying native engine process exits.    | Performance     | Medium   | Approved |
+| NFR-RUN-004 | The system shall preserve a machine-distinguishable failure mode for native-engine readiness problems so callers can separate them from internal Nove Test failures. | Reliability | High | Approved |
 
 
 ---
@@ -46,6 +49,7 @@ Run-sub-product behavior that resolves the requested target, selects the correct
 
 - The Run group does not decide the meaning of coverage gaps, regressions, suspicious locations, or recommendations.
 - Replay reuses this group's execution behavior but does not own it.
+- `REQ-RUN-007`, `REQ-RUN-008`, and `NFR-RUN-004` are onboarding-driven readiness requirements introduced from `design/product-plans/ux-goal.md` and are now approved.
 
 ---
 
