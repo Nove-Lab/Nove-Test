@@ -29,10 +29,24 @@ def test_timestamp_round_trip() -> None:
     assert extract_timestamp_ms(ulid) == ts
 
 
+def test_timestamp_zero_round_trip() -> None:
+    assert extract_timestamp_ms(generate_ulid(timestamp_ms=0)) == 0
+
+
+def test_timestamp_at_48bit_max_round_trip() -> None:
+    ts = (1 << 48) - 1
+    assert extract_timestamp_ms(generate_ulid(timestamp_ms=ts)) == ts
+
+
 def test_timestamp_is_monotonic_when_clock_is() -> None:
     earlier = generate_ulid(timestamp_ms=1_700_000_000_000)
     later = generate_ulid(timestamp_ms=1_700_000_000_500)
     assert earlier[:10] < later[:10]
+
+
+def test_generate_rejects_negative_timestamp() -> None:
+    with pytest.raises(ValueError, match="negative"):
+        generate_ulid(timestamp_ms=-1)
 
 
 def test_extract_rejects_wrong_length() -> None:
