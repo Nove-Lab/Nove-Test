@@ -1,3 +1,14 @@
+## Coding Guidelines
+
+When writing or modifying any code in this repository, you MUST follow the `/andrej-karpathy-skills:karpathy-guidelines` skill. Invoke it via the Skill tool before making code changes to ensure:
+
+1. Think Before Coding
+2. Simplicity First
+3. Surgical Changes
+4. Goal-Driven Execution
+
+---
+
 ## Source Structure
 
 All code lives under a single import root `novetest`. Transports (`cli/`, `mcp/`) are peers to the engines: they own user-facing concerns (argument binding, JSON envelope, exit codes) and contain no business logic.
