@@ -249,10 +249,12 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - [ ] `novetest test tests/` against each fixture produces the expected category set per fixture, byte-identical across runs.
 - [ ] Snapshots pinned with `syrupy`.
 - [ ] Integration test demonstrates an AI agent can traverse `recommendation -> evidence_citations -> retrieve_run_evidence` round-trip end-to-end.
+- [ ] **Default-verb alias activated.** `novetest <target>` resolves to `novetest test <target>` per the note in `[design/interace-contract/orchestration.md](../interace-contract/orchestration.md)` §"Notes" (Default verb). Bare `novetest` (no arguments) continues to print the structured help envelope and does **not** trigger an implicit run. Integration test asserts: (1) `novetest tests/test_x.py` is byte-equivalent in its envelope to `novetest test tests/test_x.py`; (2) `novetest` alone still returns the help envelope and exit 0; (3) `novetest run` remains reachable as the explicit raw-evidence path.
 
 **Risks:**
 
 - *Closed taxonomy gets restrictive*. v2 is a deliberate bump; `recommendation_schema_version` is the contract.
+- *Default-verb alias is ambiguous when the first positional looks like a verb token.* Concrete failure shape: a user creates `tests/inspect/` and runs `novetest inspect` — does the CLI treat `inspect` as the existing verb or as a Test Target? Mitigation: reserve the known verb tokens (Section 2 Operating verbs + Section 1 `init`) as non-alias-eligible; route `novetest <token>` to the verb handler whenever `<token>` is in that reserved set, regardless of whether a same-named path exists. Document this disambiguation rule next to the alias.
 
 ---
 
