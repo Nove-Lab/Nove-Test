@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import sys
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, NoReturn
 
 from cyclopts import App
 
 from novetest import __version__
 from novetest.cli.output import (
+    EXIT_ENGINE_MISSING,
     EXIT_GENERIC,
     EXIT_OK,
+    EXIT_STORAGE,
     EXIT_USAGE,
+    EXIT_USER_TESTS_FAILED,
     Envelope,
     EnvelopeError,
     OutputMode,
@@ -18,8 +23,25 @@ from novetest.cli.output import (
     not_implemented_envelope,
     resolve_output_mode,
 )
+from novetest.memory import (
+    ProjectStore,
+    ProjectStoreCorruptError,
+    RunEvidenceNotFoundError,
+    delete_run_evidence,
+    list_run_history,
+    locate_project_store,
+    retrieve_run_evidence,
+)
+from novetest.models import RunReference
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
+from novetest.orchestration.workflows import (
+    build_status_view,
+    initialize_project_workspace,
+    run_target_in_store,
+)
+from novetest.run import AdapterInvocationError, EngineNotReadyError
+
 
 _SUBCOMMAND_TOKENS: frozenset[str] = frozenset(
     {
@@ -46,6 +68,11 @@ app = App(
 _active_mode: OutputMode = OutputMode.JSON
 
 
+# ---------------------------------------------------------------------------
+# Stub helpers (still used for Phase 1 commands without an orchestration path)
+# ---------------------------------------------------------------------------
+
+
 def _make_stub(command_path: str) -> Callable[..., None]:
     def _stub(*args: Any, **kwargs: Any) -> None:
         emit_envelope(not_implemented_envelope(command_path), _active_mode)
@@ -56,12 +83,300 @@ def _make_stub(command_path: str) -> Callable[..., None]:
     return _stub
 
 
-def _register_flat(name: str) -> None:
+# ---------------------------------------------------------------------------
+# Envelope helpers
+# ---------------------------------------------------------------------------
+
+
+def _emit_and_exit(envelope: Envelope, code: int) -> NoReturn:
+    emit_envelope(envelope, _active_mode)
+    sys.exit(code)
+
+
+def _uninitialized(command: str) -> Envelope:
+    return Envelope(
+        command=command,
+        ok=False,
+        errors=(
+            EnvelopeError(
+                code="uninitialized",
+                message=(
+                    "No Project Store found in this directory or any ancestor. "
+                    "Run `novetest init` to create one."
+                ),
+            ),
+        ),
+    )
+
+
+def _require_store(command: str) -> ProjectStore:
+    try:
+        store = locate_project_store(Path.cwd())
+    except ProjectStoreCorruptError as exc:
+        _emit_and_exit(
+            Envelope(
+                command=command,
+                ok=False,
+                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
+            ),
+            EXIT_STORAGE,
+        )
+    if store is None:
+        _emit_and_exit(_uninitialized(command), EXIT_USAGE)
+    return store
+
+
+def _readiness_payload(readiness: Any) -> dict[str, Any]:
+    ctx = readiness.engine_context
+    return {
+        "state": readiness.state,
+        "engine": ctx.engine_name if ctx is not None else None,
+        "ecosystem": ctx.ecosystem if ctx is not None else None,
+        "engine_version": ctx.engine_version if ctx is not None else None,
+        "evidence": list(readiness.evidence),
+        "issues": list(readiness.issues),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Onboarding + operating handlers
+# ---------------------------------------------------------------------------
+
+
+@app.command
+def init() -> None:
+    """Initialize a Project Store in the current working directory."""
+    workspace = Path.cwd()
+    try:
+        result = asyncio.run(initialize_project_workspace(workspace))
+    except FileNotFoundError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="init",
+                ok=False,
+                errors=(EnvelopeError(code="workspace-missing", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
+    except ProjectStoreCorruptError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="init",
+                ok=False,
+                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
+            ),
+            EXIT_STORAGE,
+        )
+
+    data: dict[str, Any] = {
+        "store_path": str(result.store.path),
+        "store_state": result.store.store_state,
+        "initialized_at": result.store.initialized_at,
+        "engine_readiness": _readiness_payload(result.engine_readiness),
+    }
+    _emit_and_exit(Envelope(command="init", ok=True, data=data), EXIT_OK)
+
+
+@app.command(name="run")
+def run_cmd(target: str = "") -> None:
+    """Execute the resolved Test Target and persist the Run Record."""
+    store = _require_store("run")
+    try:
+        outcome = asyncio.run(run_target_in_store(target, store))
+    except EngineNotReadyError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="run",
+                ok=False,
+                data={"engine_readiness": _readiness_payload(exc.readiness)},
+                errors=(
+                    EnvelopeError(
+                        code=f"engine-{exc.readiness.state}",
+                        message=str(exc),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+    except AdapterInvocationError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="run",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code=f"adapter-{exc.kind}",
+                        message=str(exc),
+                        details=(
+                            {"install_hint": exc.install_hint}
+                            if exc.install_hint is not None
+                            else {}
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+
+    entry = outcome.memory_entry
+    record = entry.run_record
+    if record.status == "passed":
+        exit_code = EXIT_OK
+        ok = True
+    elif record.status == "failed":
+        exit_code = EXIT_USER_TESTS_FAILED
+        ok = True  # the run itself succeeded; the *user's* tests failed
+    else:
+        exit_code = EXIT_GENERIC
+        ok = False
+    _emit_and_exit(
+        Envelope(
+            command="run",
+            ok=ok,
+            data={"memory_entry": entry.to_dict()},
+        ),
+        exit_code,
+    )
+
+
+@app.command
+def status() -> None:
+    """Summarize the current Project Store: latest run + sub-report availability."""
+    store = _require_store("status")
+    view = build_status_view(store)
+    _emit_and_exit(
+        Envelope(command="status", ok=True, data=view.to_dict()),
+        EXIT_OK,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Memory subcommand group
+# ---------------------------------------------------------------------------
+
+
+memory_app = App(name="memory", help="Memory commands: list / show / delete run evidence.")
+app.command(memory_app)
+
+
+@memory_app.command(name="list")
+def memory_list() -> None:
+    """List Run History newest-first."""
+    store = _require_store("memory.list")
+    entries = list_run_history(store)
+    _emit_and_exit(
+        Envelope(
+            command="memory.list",
+            ok=True,
+            data={
+                "count": len(entries),
+                "entries": [e.to_dict() for e in entries],
+            },
+        ),
+        EXIT_OK,
+    )
+
+
+@memory_app.command(name="show")
+def memory_show(run_id: str) -> None:
+    """Show the Memory Entry for ``run_id`` (live or tombstoned)."""
+    store = _require_store("memory.show")
+    entries = list_run_history(store)
+    target = next(
+        (e for e in entries if e.run_record.run_reference.run_id == run_id),
+        None,
+    )
+    if target is None:
+        _emit_and_exit(
+            Envelope(
+                command="memory.show",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="not-found",
+                        message=f"No Memory Entry for run_id={run_id!r}",
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    ref = target.run_record.run_reference
+    try:
+        entry = retrieve_run_evidence(store, ref)
+    except RunEvidenceNotFoundError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="memory.show",
+                ok=False,
+                errors=(EnvelopeError(code="not-found", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
+    _emit_and_exit(
+        Envelope(command="memory.show", ok=True, data={"memory_entry": entry.to_dict()}),
+        EXIT_OK,
+    )
+
+
+@memory_app.command(name="delete")
+def memory_delete(run_id: str) -> None:
+    """Tombstone the Memory Entry for ``run_id`` (POSIX-atomic rename)."""
+    store = _require_store("memory.delete")
+    entries = list_run_history(store)
+    target = next(
+        (e for e in entries if e.run_record.run_reference.run_id == run_id),
+        None,
+    )
+    if target is None:
+        _emit_and_exit(
+            Envelope(
+                command="memory.delete",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="not-found",
+                        message=f"No Memory Entry for run_id={run_id!r}",
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    ref = RunReference(
+        run_id=target.run_record.run_reference.run_id,
+        created_at=target.run_record.run_reference.created_at,
+    )
+    try:
+        entry = delete_run_evidence(store, ref)
+    except RunEvidenceNotFoundError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="memory.delete",
+                ok=False,
+                errors=(EnvelopeError(code="not-found", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
+    _emit_and_exit(
+        Envelope(
+            command="memory.delete",
+            ok=True,
+            data={"memory_entry": entry.to_dict()},
+        ),
+        EXIT_OK,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Remaining stubs (not in Phase 1 Run+Memory scope)
+# ---------------------------------------------------------------------------
+
+
+def _register_flat_stub(name: str) -> None:
     stub = _make_stub(name)
     app.command(stub, name=name)
 
 
-def _register_group(group: str, verbs: tuple[str, ...]) -> None:
+def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
     sub = App(name=group, help=f"{group} commands (stub - not yet implemented).")
     app.command(sub)
     for verb in verbs:
@@ -69,15 +384,15 @@ def _register_group(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-def _register_stubs() -> None:
-    for name in ("test", "run", "inspect", "compare", "status", "init", "replay", "localization"):
-        _register_flat(name)
-    _register_group("memory", ("list", "show", "delete"))
-    _register_group("coverage", ("show", "diff"))
-    _register_group("regression", ("compare", "latest"))
+for _name in ("test", "inspect", "compare", "replay", "localization"):
+    _register_flat_stub(_name)
+_register_group_stub("coverage", ("show", "diff"))
+_register_group_stub("regression", ("compare", "latest"))
 
 
-_register_stubs()
+# ---------------------------------------------------------------------------
+# Top-level argv plumbing (unchanged from Phase 0)
+# ---------------------------------------------------------------------------
 
 
 def _extract_output_flag(argv: list[str]) -> tuple[str | None, list[str]]:
