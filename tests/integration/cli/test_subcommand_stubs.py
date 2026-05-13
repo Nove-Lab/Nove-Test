@@ -3,19 +3,16 @@ from __future__ import annotations
 import pytest
 
 
+# Commands that remain as Phase 1 stubs (every other Phase 1 surface — init,
+# run, status, memory list/show/delete — is implemented and has its own
+# integration coverage under tests/integration/orchestration/).
 @pytest.mark.parametrize(
     "argv,expected_command",
     [
-        (["run"], "run"),
         (["inspect"], "inspect"),
         (["compare"], "compare"),
-        (["status"], "status"),
-        (["init"], "init"),
         (["replay"], "replay"),
         (["localization"], "localization"),
-        (["memory", "list"], "memory.list"),
-        (["memory", "show"], "memory.show"),
-        (["memory", "delete"], "memory.delete"),
         (["coverage", "show"], "coverage.show"),
         (["coverage", "diff"], "coverage.diff"),
         (["regression", "compare"], "regression.compare"),

@@ -84,18 +84,18 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Definition-of-done:**
 
-- [ ] `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/runs/`, `memory/tombstones/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`). No index database is created.
-- [ ] Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
-- [ ] `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
-- [ ] `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
-- [ ] `novetest run` from `empty-no-engine/` returns `engine-missing` (exit code 4) before any subprocess is spawned, with the envelope distinguishing readiness failure from internal Nove Test failure (NFR-RUN-004).
-- [ ] `novetest memory list --output json` returns the run.
-- [ ] `novetest memory show <run_id> --output json` returns the run plus availability flags (all derived facts `false`).
-- [ ] `novetest memory delete <run_id>` tombstones; subsequent `memory show` still resolves (tombstoned).
-- [ ] `novetest status --output json` returns latest Run Reference and Run History readiness; all sub-reports `unavailable`.
+- [x] `novetest init` in a fresh project root creates `.novetest/` with the engine-subdirectory skeleton (`memory/runs/`, `memory/tombstones/`, `run/`, `coverage/`, `regression/`, `localization/`, `replay/`, `orchestration/`, plus `blobs/` and `store.json`). No index database is created.
+- [x] Re-running `novetest init` is idempotent: existing `store.json`, run records, and tombstones are preserved (REQ-MEM-006 verified by a fixture that pre-creates evidence and re-runs init).
+- [x] `novetest init` against `empty-no-engine/` returns `storeState: ready` plus `engine_readiness: engine-missing` in the envelope; the store is still created (readiness is informational), and no native engine is installed or downloaded as a side effect.
+- [x] `novetest run tests/test_x.py` against `pytest-basic/` produces a Run Record stored under `.novetest/memory/runs/.../record.json` with a stable Run Reference and corresponding native artifacts under `.novetest/run/artifacts/.../`.
+- [x] `novetest run` from `empty-no-engine/` returns `engine-missing` (exit code 4) before any subprocess is spawned, with the envelope distinguishing readiness failure from internal Nove Test failure (NFR-RUN-004).
+- [x] `novetest memory list --output json` returns the run.
+- [x] `novetest memory show <run_id> --output json` returns the run plus availability flags (all derived facts `false`).
+- [x] `novetest memory delete <run_id>` tombstones; subsequent `memory show` still resolves (tombstoned).
+- [x] `novetest status --output json` returns latest Run Reference and Run History readiness; all sub-reports `unavailable`.
 - [ ] `novetest test tests/test_x.py` runs the integrated workflow but with empty Coverage / Regression / Localization / Replay; recommendation is `all_green` or `unavailable_analysis`.
-- [ ] Operating commands invoked from a directory tree with no ancestor `.novetest/` return a structured `uninitialized` envelope pointing at `novetest init` (no traceback, exit code 2).
-- [ ] All workflow sequences documented in `[design/workflows/orchestration.md](../workflows/orchestration.md)` §1, `[run.md](../workflows/run.md)`, and `[memory.md](../workflows/memory.md)` (Sections 1 and 2) are exercised by integration tests.
+- [x] Operating commands invoked from a directory tree with no ancestor `.novetest/` return a structured `uninitialized` envelope pointing at `novetest init` (no traceback, exit code 2).
+- [x] All workflow sequences documented in `[design/workflows/orchestration.md](../workflows/orchestration.md)` §1, `[run.md](../workflows/run.md)`, and `[memory.md](../workflows/memory.md)` (Sections 1 and 2) are exercised by integration tests.
 
 **Risks:**
 
