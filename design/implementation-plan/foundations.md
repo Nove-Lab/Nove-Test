@@ -531,8 +531,11 @@ User reality: a Go developer (or any non-Python SuT developer) running Nove Test
 ### Tier 1 - One-line install script
 
 ```bash
-curl -fsSL https://get.novetest.dev/install.sh | sh
+curl -fsSL https://ailovestesting.com/novetest/install.sh | sh
 ```
+
+The canonical URL and the brand namespace principle are fixed in
+`agent-comms/decisions/2026-05-14-install-script-hosting-url.md`.
 
 What the script does:
 1. Detects OS + arch (`uname -s` / `uname -m`).
@@ -599,7 +602,7 @@ Ship `novetest self update` as a thin command that pulls the latest GitHub relea
 
 | Audience | Command |
 | --- | --- |
-| **Default for everyone (any language SuT)** | `curl -fsSL https://get.novetest.dev/install.sh \| sh` |
+| **Default for everyone (any language SuT)** | `curl -fsSL https://ailovestesting.com/novetest/install.sh \| sh` |
 | Inspect-first users / hermetic CI | Direct binary download + SHA-256 verify (Tier 2 above) |
 | macOS / Linux Homebrew users | `brew install nove/tap/novetest` (once the tap is published) |
 | Python developers | `uv tool install novetest` or `pipx install novetest` |

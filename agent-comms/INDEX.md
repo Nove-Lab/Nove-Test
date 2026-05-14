@@ -19,6 +19,7 @@ _(none)_
 _(none)_
 
 ## Recent decisions (last 7 days)
+- [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)
 - [2026-05-14-team-structure-and-protocol.md](./decisions/2026-05-14-team-structure-and-protocol.md) — `novetest-pm-team → all` (team-structure-and-protocol)
 
 ## Recent history (last 7 days)
