@@ -8,7 +8,9 @@ Last regenerated: 2026-05-14
 _(none)_
 
 ## Pending
-_(none)_
+- [coverage-team-2026-05-14-coverage-fact-set-foundation.md](./tasks/coverage-team-2026-05-14-coverage-fact-set-foundation.md) — `novetest-pm-team → novetest-coverage-team` (coverage-fact-set-foundation)
+- [release-team-2026-05-14-phase0-ci-and-distribution.md](./tasks/release-team-2026-05-14-phase0-ci-and-distribution.md) — `novetest-pm-team → novetest-release-team` (phase0-ci-and-distribution)
+- [run-team-2026-05-14-pytest-coverage-emission.md](./tasks/run-team-2026-05-14-pytest-coverage-emission.md) — `novetest-pm-team → novetest-run-team` (pytest-coverage-emission)
 
 ## Blocked
 _(none)_

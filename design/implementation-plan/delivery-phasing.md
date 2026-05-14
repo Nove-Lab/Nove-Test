@@ -117,7 +117,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Engine adapter coverage:** pytest (per-test via coverage.py contexts) plus the **first three of the remaining five** in priority order driven by user demand and adapter complexity. Recommended Phase 2 set: pytest + jest + go test. JUnit and dotnet land in Phase 2.5 (a same-phase extension); cargo lands in Phase 3 unless a user blocker surfaces.
 
-**Schema additions:** `coverage_fact_set.json` written under `.novetest/coverage/facts/run_<ulid>/`, with `mapping_granularity` populated and `schema_version: 1`. No SQLite in this phase — Coverage Facts are read by loading the per-run JSON, which is sufficient for all Phase 2/3 query patterns (`coverage show`, `coverage diff`, `inspect`).
+**Schema additions:** `coverage_facts.json` written under `.novetest/coverage/facts/run_<ulid>/`, with `mapping_granularity` populated and `schema_version: 1`. No SQLite in this phase — Coverage Facts are read by loading the per-run JSON, which is sufficient for all Phase 2/3 query patterns (`coverage show`, `coverage diff`, `inspect`).
 
 **Per-test attribution tiers:** as defined in `[engine-adapters.md](./engine-adapters.md#cross-cutting-per-test-coverage-attribution)`.
 
