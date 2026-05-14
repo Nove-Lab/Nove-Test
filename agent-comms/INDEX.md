@@ -17,7 +17,7 @@ _(none)_
 _(none)_
 
 ## Recent decisions (last 7 days)
-_(none)_
+- [2026-05-14-team-structure-and-protocol.md](./decisions/2026-05-14-team-structure-and-protocol.md) — `novetest-pm-team → all` (team-structure-and-protocol)
 
 ## Recent history (last 7 days)
 _(none)_
