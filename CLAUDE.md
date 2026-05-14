@@ -43,7 +43,7 @@ tests/
 ├── unit/                       # Mirrors src/ tree; one test module per source module
 ├── integration/                # Cross-component / subprocess-boundary tests
 ├── fixtures/projects/          # Controlled SuT projects (deterministic, isolated, no novetest imports)
-└── manual-test-workspace/      # Manual Test scratch space for E2E experiments (do not commit)
+└── manual-test-workspace/      # Human-facing demo scratch space; contents ephemeral (see its README)
 ```
 
 ---
