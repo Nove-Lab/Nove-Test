@@ -19,6 +19,16 @@ When this file exceeds ~200 lines, move entries older than the current phase int
 
 ---
 
+## 2026-05-14 — tooling / manual-test-workspace
+
+- Landed: `tests/manual-test-workspace/README.md` + `tests/manual-test-workspace/.gitignore`. New convention folder for live human-facing demos that exercise `novetest` commands against a copy of a fixture project. Only the README and a local `.gitignore` (`*` / `!README.md` / `!.gitignore`) are tracked; everything else inside is ephemeral by design. Canonical fixtures under `tests/fixtures/projects/` remain read-only — always copy in.
+- Verified: convention exercised end-to-end against `pytest-basic` this session. `novetest init` → `.novetest/` skeleton + `store.json`; `novetest run` ×3 → three ULID run dirs under `memory/runs/2026/05/14/` + matching `run/artifacts/`; `novetest memory show` resolves the entry; `novetest memory delete` rename(2)-moves the run dir to `memory/tombstones/` while leaving `run/artifacts/` untouched, and a subsequent `memory show` still resolves the tombstoned id with `status: "tombstoned"`; `novetest status` returns `run_history_size`, `latest_run_reference`, and `sub_reports` (all four `unavailable` per the Phase 1 hard-coded simplification in `workflows/status.py`). Demo content removed before commit; only convention files retained.
+- Left open: none.
+- Gotcha: don't `git add -f` anything into a scenario folder. If you need a tracked example, it belongs under `tests/fixtures/projects/` instead. The local `.gitignore` is what makes this folder visible in the tree while keeping its contents ephemeral.
+- Next: when a future task wants to *show* on-disk side effects of a command, follow the README pattern — copy a fixture into a new `<scenario-slug>/`, run commands, delete the scenario folder when done.
+
+---
+
 ## 2026-05-13 — phase1 / orchestration-integration
 
 - Landed: `src/novetest/orchestration/workflows/init.py` (`initialize_project_workspace`), `workflows/run.py` (`run_target_in_store` — pre-generates ULID, hands Run an `artifact_dir` already under `<store>/run/artifacts/run_<ulid>/`, rewrites `artifact_paths` to Project-Store-relative before persisting), `workflows/status.py` (`build_status_view` — Phase 1 simplified, derived facts hard-coded to unavailable), `workflows/__init__.py` re-exports. Rewrote `src/novetest/cli/app.py`: real handlers for `init`, `run`, `status`, `memory list|show|delete` that emit the v1 envelope; remaining commands stay as `not-implemented` stubs. Added `_require_store` helper that walks up via `locate_project_store` and emits a structured `uninitialized` envelope with exit code 2 when no ancestor `.novetest/` exists. Integration tests under `tests/integration/orchestration/`: `test_workflows.py` (12 Python-API cases covering init / run-and-persist / list / show / delete / status / locate / idempotent re-init preserves evidence) and `test_cli_lifecycle.py` (5 subprocess E2E cases including the `init → run → memory list → memory show → memory delete → status` lifecycle, exit 3 on user-test failure, exit 4 on engine-missing, exit 2 on uninitialized). Pruned the Phase 0 `test_subcommand_stubs.py` parametrize list to remove the now-implemented commands.

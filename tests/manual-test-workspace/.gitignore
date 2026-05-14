@@ -1,0 +1,5 @@
+# Everything in this directory is ephemeral by convention — copy fixtures here,
+# run things, delete when done. Only this file and README.md are tracked.
+*
+!.gitignore
+!README.md
