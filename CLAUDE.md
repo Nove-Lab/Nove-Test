@@ -1,24 +1,32 @@
+# Nove Test
+
+Polyglot test orchestration tool. AI-friendly CLI emitting structured JSON envelopes for AI-agent consumption.
+
+This file holds only the project-wide rules every agent needs. Team-specific rules (coding conventions, testing rules, file ownership, reporting format) live in each team's charter: **`.claude/agents/novetest-<your-team>-team.md`** — read your own charter first.
+
+---
+
 ## Coding Guidelines
 
-When writing or modifying any code in this repository, you MUST follow the `/andrej-karpathy-skills:karpathy-guidelines` skill. Invoke it via the Skill tool before making code changes to ensure:
+Whenever you write or modify code (any source file, script, config, hook — anywhere in this repo), you MUST invoke the `andrej-karpathy-skills:karpathy-guidelines` skill via the Skill tool before making the change. It ensures:
 
 1. Think Before Coding
 2. Simplicity First
 3. Surgical Changes
 4. Goal-Driven Execution
 
+This applies to every team that edits code, including PM (utility scripts), Main Branch (merge conflict resolution), and Release (build/CI/install scripts). Manual Test, which only reads source, is exempt by virtue of never editing.
+
 ---
 
-## Source Structure
-
-All code lives under a single import root `novetest`. Transports (`cli/`, `mcp/`) are peers to the engines: they own user-facing concerns (argument binding, JSON envelope, exit codes) and contain no business logic.
+## Structure
 
 ```
 src/novetest/                   # Single import root (one PyPI distribution: novetest)
-├── cli/                        # CLI transport (Cyclopts root, JSON envelope, exit codes)
-├── orchestration/              # Top-level orchestration layer
-│   ├── workflows/              # Workflow coordination
-│   └── recommendation/         # Recommendation synthesis
+├── cli/                        # CLI transport (Cyclopts, JSON envelope, exit codes)
+├── orchestration/              # Top-level workflows + recommendation synthesis
+│   ├── workflows/
+│   └── recommendation/
 ├── run/                        # Run engine
 │   └── adapters/               # Native test engine adapters
 ├── memory/                     # Memory engine
@@ -27,77 +35,36 @@ src/novetest/                   # Single import root (one PyPI distribution: nov
 ├── localization/               # Localization engine
 │   └── sbfl/                   # SBFL algorithms
 ├── replay/                     # Replay engine
-├── models/                     # Shared domain model entity definitions
+├── models/                     # Shared domain entity definitions
 ├── utils/                      # Shared low-level utilities
-└── mcp/                        # MCP transport (Phase 6 / future)
-```
+└── mcp/                        # MCP transport (post-MVP)
 
----
-
-## Testing Rules
-
-### Unit Tests
-
-- Core implementation logic must always be accompanied by unit tests.
-- Unit tests must be placed under the top-level `tests/` directory.
-- The test directory structure should mirror the corresponding `src/` structure whenever possible.
-
-### Integration Tests
-
-- Workflow-level behavior should be covered by integration tests under `tests/integration/`.
-- Cross-component orchestration behavior should be validated through integration tests when architectural workflows or component interactions are introduced or modified.
-
-
-### Fixture Projects
-
-Nove Test uses controlled fixture projects to validate behavior across native test ecosystems.
-
-Fixture projects:
-- simulate software under test for Nove Test
-- validate workflows involving native engine adapters and result normalization
-- are deterministic, small, isolated, and self-contained test assets owned by the repository
-- should avoid unnecessary real-world complexity
-
-Fixture projects should be placed under:
-
-```plaintext
 tests/
-└── fixtures/
-    └── projects/
-```
-
-Example fixture projects:
-
-```plaintext
-tests/fixtures/projects/
-├── pytest-basic/
-├── pytest-coverage/
-├── flaky-python/
-├── junit-basic/
-└── localization-branch/
+├── unit/                       # Mirrors src/ tree; one test module per source module
+├── integration/                # Cross-component / subprocess-boundary tests
+├── fixtures/projects/          # Controlled SuT projects (deterministic, isolated, no novetest imports)
+└── manual-test-workspace/      # Manual Test scratch space for E2E experiments (do not commit)
 ```
 
 ---
 
-## Multi-Agent Worklog Harness
+## Multi-Agent Coordination Harness
 
-Multiple Claude agents work on this repo across sessions. The rules below keep them in sync without external state.
+Coordination uses two layers:
 
-### Pre-flight (before any code change)
+- **`WORKLOG.md`** — immutable per-commit retrospective (committed history).
+- **`agent-comms/`** — in-flight coordination (tasks, handoffs, verifications, findings, questions, decisions, history). Protocol: `agent-comms/README.md`.
 
-Read these in order; skip what is clearly unrelated to the task.
+Each agent's pre-flight reading list and end-of-work routine live in its own charter at `.claude/agents/novetest-<team>-team.md`. PM owns cross-team process oversight and DoD bookkeeping.
 
-1. `WORKLOG.md` — top 3 entries. What was just landed, what was left open, what to do next.
-2. `design/implementation-plan/delivery-phasing.md` — locate the current phase; unchecked `- [ ]` DoD bullets are the canonical todo.
-3. `design/interace-contract/<engine>.md` and `design/workflows/<engine>.md` for each engine the task touches.
-4. `design/implementation-plan/foundations.md` for cross-cutting infra concerns.
+### Team communication overview
 
-In-session sub-tasks belong in TaskCreate, not on disk.
-
-### Post-flight (before `git commit` of `src/` or `tests/` changes)
-
-1. Append a new entry to the top of `WORKLOG.md` using the format documented in that file.
-2. Tick (`- [x]`) any DoD bullets in `delivery-phasing.md` that this commit fully satisfies. Do not tick partial work.
-3. Stage `WORKLOG.md` (and `delivery-phasing.md` if changed) in the same commit as the code.
-
-A `PreToolUse` hook (`.claude/hooks/check-worklog-before-commit.sh`) blocks `git commit` when `src/` or `tests/` are staged but `WORKLOG.md` is not. To bypass intentionally (e.g. pure refactor that does not warrant a log entry), stage `WORKLOG.md` with a single new line — but prefer a real entry.
+| Folder | Flow | Purpose |
+|---|---|---|
+| `agent-comms/tasks/` | PM → Team | Work assignments |
+| `agent-comms/handoffs/` | Team → Main Branch | Worktree ready to merge |
+| `agent-comms/verifications/` | Main Branch → Manual Test | Merged commit; what to verify |
+| `agent-comms/findings/` | Manual Test → PM | E2E results, regressions |
+| `agent-comms/questions/` | Any → PM/CEO | Blockers, ambiguities |
+| `agent-comms/decisions/` | PM (CEO-approved) → All | Binding directives (permanent) |
+| `agent-comms/history/` | PM → All | Curated cycle summaries (permanent) |

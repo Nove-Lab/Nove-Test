@@ -7,8 +7,12 @@
 .claude/history.jsonl
 .claude/__store.db*
 .claude/.credentials*
+.claude/worktrees/
 .codex/.credentials*
 .codex/history.jsonl
+
+# Manual Test scratch space — ad-hoc E2E experiments, never committed
+tests/manual-test-workspace/
 
 # Python
 .venv/
