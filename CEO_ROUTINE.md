@@ -30,7 +30,18 @@ read this for the daily sequence.
 
 ## Step 0 — Status check (≈5 min, CEO does this directly)
 
-No PM, no teams. The CEO reads three things to learn "what is urgent today":
+No PM, no teams. Run the standup script for a one-command briefing:
+
+```bash
+./tools/novetest-standup.sh
+```
+
+It refreshes `agent-comms/INDEX.md`, then prints — in priority order — open
+blockers (`questions/`), findings awaiting review, in-flight work per channel,
+recent decisions, recent commits, and stale worktrees, ending with a suggested
+entry point into this routine. Read-only except for the index refresh.
+
+If you prefer to read the raw files, the three that matter are:
 
 - `agent-comms/INDEX.md` — what was in progress yesterday, open questions, blockers.
 - `agent-comms/findings/` — Manual Test verification results. Failures or regressions here are top priority.
