@@ -11,9 +11,6 @@
 .codex/.credentials*
 .codex/history.jsonl
 
-# Manual Test scratch space — ad-hoc E2E experiments, never committed
-tests/manual-test-workspace/
-
 # Python
 .venv/
 __pycache__/
