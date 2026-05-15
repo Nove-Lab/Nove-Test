@@ -8,9 +8,7 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-- [coverage-team-2026-05-14-coverage-fact-set-foundation.md](./tasks/coverage-team-2026-05-14-coverage-fact-set-foundation.md) — `novetest-pm-team → novetest-coverage-team` (coverage-fact-set-foundation)
-- [release-team-2026-05-14-phase0-ci-and-distribution.md](./tasks/release-team-2026-05-14-phase0-ci-and-distribution.md) — `novetest-pm-team → novetest-release-team` (phase0-ci-and-distribution)
-- [run-team-2026-05-14-pytest-coverage-emission.md](./tasks/run-team-2026-05-14-pytest-coverage-emission.md) — `novetest-pm-team → novetest-run-team` (pytest-coverage-emission)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -25,4 +23,4 @@ _(none)_
 - [2026-05-16-gotchas-md-policy.md](./decisions/2026-05-16-gotchas-md-policy.md) — `novetest-pm-team → all` (gotchas-md-policy)
 
 ## Recent history (last 7 days)
-_(none)_
+- [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)
