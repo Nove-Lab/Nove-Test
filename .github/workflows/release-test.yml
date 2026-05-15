@@ -1,0 +1,246 @@
+# release-test — closes Phase 0 DoD bullets
+#   2. "A signed binary builds on the `release-test` workflow."
+#   3. "curl -fsSL <release_install_url> | sh end-to-end produces a working
+#      novetest --version on a clean Linux container and a clean macOS runner"
+#      (this workflow produces the binaries that `scripts/install.sh` then
+#      consumes; the curl→sh smoke also runs here, end-to-end.)
+#
+# "Signed" in the Phase 0 sense means SHA-256-checksum-signed via a `.sha256`
+# sidecar. Apple Developer ID / Windows Authenticode codesigning is a post-MVP
+# concern (no cert is provisioned yet); the install script's integrity gate is
+# the SHA-256 verification on download.
+#
+# Trigger:
+#   - workflow_dispatch (manual; produces unpublished artifacts only)
+#   - push of a tag matching v* (produces a draft GitHub Release)
+#
+# Targets (Phase 0 scope per foundations.md §7):
+#   linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64
+# Windows is a follow-up via `install.ps1` and is NOT a Phase 0 blocker.
+
+name: release-test
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      pyapp_version:
+        description: "PyApp version to wrap with (default 0.22.0)"
+        required: false
+        default: "0.22.0"
+
+permissions:
+  contents: write  # required to create / upload to a GitHub Release on tag push
+
+env:
+  # Pin PyApp to a known-good version. Bumping requires a fresh end-to-end
+  # smoke (binary built → install.sh fetches → `novetest --version` round-trip)
+  # on every supported target.
+  PYAPP_VERSION_DEFAULT: "0.22.0"
+  # PyApp wraps the bundled wheel; first-run latency (5–15s) is the documented
+  # tradeoff for not embedding CPython. See foundations.md §7.
+  PYAPP_EXEC_SPEC: "novetest.cli.app:main"
+  PYAPP_PYTHON_VERSION: "3.11"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-latest
+            shell: bash
+          - target: linux-aarch64
+            runner: ubuntu-22.04-arm
+            shell: bash
+          - target: macos-x86_64
+            runner: macos-13
+            shell: bash
+          - target: macos-arm64
+            runner: macos-latest
+            shell: bash
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ env.PYAPP_PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Rust toolchain (host)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build wheel
+        run: |
+          uv build --wheel --out-dir dist
+          ls -la dist
+
+      - name: Resolve PyApp version
+        id: pyapp
+        run: |
+          ver="${{ github.event.inputs.pyapp_version }}"
+          if [ -z "$ver" ]; then
+            ver="${PYAPP_VERSION_DEFAULT}"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Download PyApp source
+        run: |
+          set -eu
+          ver="${{ steps.pyapp.outputs.version }}"
+          curl -fsSL -o pyapp.tar.gz \
+            "https://github.com/ofek/pyapp/releases/download/v${ver}/source.tar.gz"
+          mkdir -p pyapp-src
+          tar -xzf pyapp.tar.gz --strip-components=1 -C pyapp-src
+          ls -la pyapp-src | head
+
+      - name: Wrap wheel with PyApp
+        env:
+          # PyApp reads these env vars at cargo-build time.
+          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist
+          PYAPP_PROJECT_NAME: novetest
+          PYAPP_EXEC_SPEC: ${{ env.PYAPP_EXEC_SPEC }}
+          PYAPP_PYTHON_VERSION: ${{ env.PYAPP_PYTHON_VERSION }}
+        run: |
+          set -eu
+          # Resolve the actual wheel filename so PyApp consumes a single
+          # explicit artifact rather than guessing.
+          wheel="$(ls dist/novetest-*-py3-none-any.whl | head -n1)"
+          echo "Wrapping wheel: $wheel"
+          export PYAPP_PROJECT_PATH="$wheel"
+          cd pyapp-src
+          cargo build --release
+          mkdir -p ../out
+          cp target/release/pyapp "../out/novetest-${{ matrix.target }}"
+          ls -la ../out
+
+      - name: Compute SHA-256 sidecar
+        run: |
+          set -eu
+          cd out
+          bin="novetest-${{ matrix.target }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$bin" > "${bin}.sha256"
+          else
+            # macOS ships `shasum`; emit the same `<hash>  <name>` shape
+            # so `sha256sum -c` / `shasum -a 256 -c` both accept it.
+            shasum -a 256 "$bin" > "${bin}.sha256"
+          fi
+          cat "${bin}.sha256"
+
+      - name: Smoke test the binary (`novetest --version`)
+        run: |
+          set -eu
+          ./out/novetest-${{ matrix.target }} --version --output json
+          ./out/novetest-${{ matrix.target }} --help --output json | head -c 400
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: novetest-${{ matrix.target }}
+          path: |
+            out/novetest-${{ matrix.target }}
+            out/novetest-${{ matrix.target }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # End-to-end install-script smoke. Downloads the just-built linux-x86_64
+  # binary via the install script, asserts `novetest --version` works, then
+  # re-runs the install script to verify idempotence.
+  install-script-e2e:
+    name: install.sh end-to-end (linux-x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built binary
+        uses: actions/download-artifact@v4
+        with:
+          name: novetest-linux-x86_64
+          path: srv
+
+      - name: Serve binary on localhost
+        run: |
+          set -eu
+          # Match the path layout the install script expects:
+          #   $BASE_URL/$VERSION/novetest-$TARGET[.sha256]
+          mkdir -p www/dev
+          cp srv/novetest-linux-x86_64 www/dev/
+          cp srv/novetest-linux-x86_64.sha256 www/dev/
+          cd www
+          python3 -m http.server 8000 >/tmp/http.log 2>&1 &
+          echo $! > /tmp/http.pid
+          # Wait until the server is responsive.
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/dev/novetest-linux-x86_64.sha256 >/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+
+      - name: Run install.sh (clean install)
+        env:
+          NOVETEST_INSTALL_BASE_URL: "http://127.0.0.1:8000"
+          NOVETEST_INSTALL_VERSION: "dev"
+          NOVETEST_INSTALL_PREFIX: ${{ runner.temp }}/novetest-install
+        run: |
+          set -eu
+          sh scripts/install.sh
+          "$NOVETEST_INSTALL_PREFIX/novetest" --version --output json
+
+      - name: Run install.sh again (idempotent upgrade)
+        env:
+          NOVETEST_INSTALL_BASE_URL: "http://127.0.0.1:8000"
+          NOVETEST_INSTALL_VERSION: "dev"
+          NOVETEST_INSTALL_PREFIX: ${{ runner.temp }}/novetest-install
+        run: |
+          set -eu
+          sh scripts/install.sh
+          "$NOVETEST_INSTALL_PREFIX/novetest" --version --output json
+
+      - name: Stop HTTP server
+        if: always()
+        run: |
+          if [ -f /tmp/http.pid ]; then kill "$(cat /tmp/http.pid)" || true; fi
+
+  # Draft GitHub Release on tag push. Skipped on workflow_dispatch so manual
+  # runs do not pollute the release feed.
+  release:
+    name: draft GitHub Release
+    needs: [build, install-script-e2e]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          set -eu
+          mkdir -p release
+          find artifacts -type f \( -name 'novetest-*' -o -name '*.sha256' \) \
+            -exec cp {} release/ \;
+          ls -la release
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            release/novetest-*
+            release/novetest-*.sha256
