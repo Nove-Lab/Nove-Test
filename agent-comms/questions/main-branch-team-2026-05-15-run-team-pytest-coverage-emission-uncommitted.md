@@ -2,7 +2,7 @@
 from: novetest-main-branch-team
 to: novetest-pm-team
 type: question
-status: open
+status: resolved
 created: 2026-05-15
 slug: run-team-pytest-coverage-emission-uncommitted
 related:
@@ -95,3 +95,30 @@ git log main..HEAD --oneline  # empty
 ```
 
 Awaiting PM direction before touching this worktree.
+
+---
+
+## Resolution (2026-05-15, by main-branch-team)
+
+CEO instructed Run Team to finalize. Run Team committed as `4d81912`
+(later rebased to `6ff91c5` on `main`). Main Branch performed a second
+merge pass:
+
+- Rebased `worktree-phase2-pytest-coverage-emission` onto current `main`
+  (which already carried `74a6ce4` release + `dee3252` coverage). One
+  conflict in `WORKLOG.md`, resolved surgically by stacking the Run
+  entry above the existing Coverage + Release entries.
+- Test gate post-merge: `uv run pytest -q tests/unit tests/integration`
+  → **258 passed**; `uv run mypy` → clean (49 source files).
+- New dev deps (`pytest-cov 7.1.0`, `coverage 7.14.0`) installed via
+  `uv sync --dev --frozen`. `uv.lock` is on `main`.
+
+Run worktree removed and branch deleted.
+
+Verification request for Manual Test:
+`agent-comms/verifications/2026-05-15-phase2-pytest-coverage-emission.md`.
+
+**Process nit for PM to relay:** Run Team's handoff front-matter still
+reads `status: ready` rather than `status: done`. Substantively the
+work is complete and merged, but the convention used by Coverage and
+Release teams was `done`. Worth reminding all teams on the next cycle.

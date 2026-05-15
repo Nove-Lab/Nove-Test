@@ -16,7 +16,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-- [main-branch-team-2026-05-15-run-team-pytest-coverage-emission-uncommitted.md](./questions/main-branch-team-2026-05-15-run-team-pytest-coverage-emission-uncommitted.md) — `novetest-main-branch-team → novetest-pm-team` (run-team-pytest-coverage-emission-uncommitted)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)
