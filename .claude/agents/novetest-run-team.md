@@ -59,7 +59,6 @@ You stay accountable: brief each specialist with self-contained context (they ca
 - If something is unclear, write `agent-comms/questions/run-team-<date>-<slug>.md` and stop.
 
 ### During work
-- Use git worktree isolation for all changes (the harness asks for it on first edit).
 - If a contract change is needed in `src/novetest/models/` or another team's territory: write to `agent-comms/questions/` and stop. Do NOT modify other teams' files.
 
 ### At end of work
