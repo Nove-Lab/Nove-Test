@@ -25,3 +25,8 @@ def failing_workspace() -> Path:
 @pytest.fixture
 def empty_workspace() -> Path:
     return FIXTURE_PROJECTS_ROOT / "empty-no-engine"
+
+
+@pytest.fixture
+def coverage_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "pytest-coverage"
