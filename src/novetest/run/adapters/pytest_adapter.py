@@ -6,9 +6,12 @@ Invokes ``python -m pytest`` against a workspace, capturing the
 because Phase 1 only ships this one adapter.
 
 Foundations §6 guarantees: child gets ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1``
-so the dev venv's plugins do not leak in. The pytest-json-report plugin is
-loaded explicitly with ``-p pytest_jsonreport``. ``cwd`` is required and
-must be the fixture / target workspace root.
+so the dev venv's plugins do not leak in. The pytest-json-report plugin
+is loaded explicitly with ``-p pytest_jsonreport``. When
+``collect_coverage`` is requested, ``pytest_cov`` is loaded the same way
+and a per-run ``.coveragerc`` is generated under ``artifact_dir`` so the
+workspace's own coverage config is never modified. ``cwd`` is required
+and must be the fixture / target workspace root.
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ from novetest.utils.asyncio_subprocess import run_subprocess
 PYTEST_REPORT_FILENAME = "pytest-report.json"
 STDOUT_LOG_FILENAME = "stdout.log"
 STDERR_LOG_FILENAME = "stderr.log"
+COVERAGE_JSON_FILENAME = "coverage.json"
+COVERAGE_XML_FILENAME = "coverage.xml"
+COVERAGE_RC_FILENAME = ".coveragerc"
 
 
 async def run_pytest(
@@ -34,12 +40,22 @@ async def run_pytest(
     *,
     artifact_dir: Path,
     timeout: float | None = 600.0,
+    collect_coverage: bool = False,
 ) -> NativeResult:
     """Run pytest against ``test_target`` and return the parsed Native Result.
 
     ``artifact_dir`` is the per-run directory under
     ``.novetest/run/artifacts/run_<ulid>/`` where ``native/`` is created;
     in tests, pass a ``tmp_path``-rooted directory.
+
+    When ``collect_coverage`` is True, pytest is invoked with the canonical
+    coverage flags (`--cov=.`, `--cov-branch`, `--cov-context=test`,
+    `--cov-report=json:<...>/coverage.json`,
+    `--cov-report=xml:<...>/coverage.xml`) and a per-run ``.coveragerc``
+    (written into ``artifact_dir``) that sets ``[json] show_contexts = True``
+    so the JSON report carries the per-line `contexts` map the Coverage
+    engine consumes. Defaults to False so Phase 1 callers see no behavior
+    change.
     """
 
     native_dir = artifact_dir / "native"
@@ -58,6 +74,26 @@ async def run_pytest(
         f"--json-report-file={report_path}",
         "-q",
     ]
+
+    coverage_json_path: Path | None = None
+    coverage_xml_path: Path | None = None
+    if collect_coverage:
+        coverage_json_path = native_dir / COVERAGE_JSON_FILENAME
+        coverage_xml_path = native_dir / COVERAGE_XML_FILENAME
+        rc_path = _write_coverage_rc(artifact_dir)
+        argv.extend(
+            [
+                "-p",
+                "pytest_cov",
+                "--cov=.",
+                "--cov-branch",
+                "--cov-context=test",
+                f"--cov-config={rc_path}",
+                f"--cov-report=json:{coverage_json_path}",
+                f"--cov-report=xml:{coverage_xml_path}",
+            ]
+        )
+
     if test_target.target_expression:
         argv.append(test_target.target_expression)
 
@@ -91,6 +127,13 @@ async def run_pytest(
                 kind="missing-plugin",
                 install_hint="pip install pytest-json-report",
             )
+        if collect_coverage and "No module named" in stderr_text and "pytest_cov" in stderr_text:
+            raise AdapterInvocationError(
+                "pytest-cov plugin is not importable from the resolved "
+                "interpreter; install with: pip install pytest-cov",
+                kind="missing-plugin",
+                install_hint="pip install pytest-cov",
+            )
         if "No module named pytest" in stderr_text:
             raise AdapterInvocationError(
                 "pytest is not importable from the resolved interpreter; "
@@ -118,21 +161,66 @@ async def run_pytest(
             kind="unparseable-output",
         )
 
+    if collect_coverage:
+        assert coverage_json_path is not None and coverage_xml_path is not None
+        if not coverage_json_path.exists():
+            stderr_text = result.stderr.decode("utf-8", errors="replace")
+            raise AdapterInvocationError(
+                f"pytest-cov did not write coverage JSON to {coverage_json_path}; "
+                f"stderr tail: {stderr_text[-400:]}",
+                kind="unparseable-output",
+            )
+
     engine_version = _read_pytest_version(test_target.workspace_path)
+
+    artifact_paths: dict[str, Path] = {
+        "pytest_json_report": report_path,
+        "stdout": stdout_path,
+        "stderr": stderr_path,
+    }
+    if collect_coverage:
+        assert coverage_json_path is not None and coverage_xml_path is not None
+        artifact_paths["coverage_json"] = coverage_json_path
+        artifact_paths["coverage_xml"] = coverage_xml_path
 
     return NativeResult(
         engine_name="pytest",
         payload=payload,
-        artifact_paths={
-            "pytest_json_report": report_path,
-            "stdout": stdout_path,
-            "stderr": stderr_path,
-        },
+        artifact_paths=artifact_paths,
         returncode=result.returncode,
         started_at_ms=started_ms,
         completed_at_ms=completed_ms,
         engine_version=engine_version,
     )
+
+
+def _write_coverage_rc(artifact_dir: Path) -> Path:
+    """Generate a per-run ``.coveragerc`` under ``artifact_dir``.
+
+    ``show_contexts`` is mandatory: ``--cov-context=test`` controls which
+    context name coverage.py records *during* the run, but the per-line
+    `contexts` map only lands in `coverage.json` when ``show_contexts``
+    is enabled at report time. ``relative_files`` keeps emitted paths
+    workspace-relative so Memory / Coverage do not have to strip absolute
+    build prefixes. ``data_file`` is pinned under ``artifact_dir`` so
+    coverage.py's intermediate SQLite cache never leaks into the SuT's
+    workspace (default would land it in cwd).
+    """
+
+    rc_path = artifact_dir / COVERAGE_RC_FILENAME
+    data_file = artifact_dir / ".coverage"
+    rc_path.write_text(
+        "[run]\n"
+        "relative_files = True\n"
+        "branch = True\n"
+        f"data_file = {data_file}\n"
+        "\n"
+        "[json]\n"
+        "show_contexts = True\n"
+        "pretty_print = True\n",
+        encoding="utf-8",
+    )
+    return rc_path
 
 
 def _build_child_env() -> dict[str, str]:
