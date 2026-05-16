@@ -125,7 +125,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Definition-of-done:**
 
-- [ ] `novetest test --coverage` against pytest-coverage emits per-test coverage with `mapping_granularity: per-test`.
+- [x] `novetest run --coverage` against pytest-coverage emits per-test coverage with `mapping_granularity: per-test`.
 - [ ] `novetest coverage diff` returns structured deltas with stable Code Location identity.
 - [ ] `inspect` returns the Coverage section populated.
 - [ ] Performance NFR-COV-002 met on a fixture with 50k covered locations.
