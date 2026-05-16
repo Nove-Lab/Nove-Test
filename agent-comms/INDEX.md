@@ -8,12 +8,7 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-05-16-coverage-show-diff.md](./tasks/orchestration-team-2026-05-16-coverage-show-diff.md) — `novetest-pm-team → novetest-orchestration-team` (coverage-show-diff)
-- [release-team-2026-05-16-macos-universal2-transition.md](./tasks/release-team-2026-05-16-macos-universal2-transition.md) — `novetest-pm-team → novetest-release-team` (macos-universal2-transition)
-- [run-team-2026-05-16-jest-adapter-phase1.md](./tasks/run-team-2026-05-16-jest-adapter-phase1.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-phase1)
-- [2026-05-16-coverage-show-diff.md](./verifications/2026-05-16-coverage-show-diff.md) — `novetest-main-branch-team → novetest-manual-test-team` (coverage-show-diff)
-- [2026-05-16-jest-adapter-phase1.md](./verifications/2026-05-16-jest-adapter-phase1.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-phase1)
-- [2026-05-16-macos-universal2-transition.md](./verifications/2026-05-16-macos-universal2-transition.md) — `novetest-main-branch-team → novetest-manual-test-team` (macos-universal2-transition)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -25,11 +20,13 @@ _(none)_
 - [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)
 - [2026-05-14-team-structure-and-protocol.md](./decisions/2026-05-14-team-structure-and-protocol.md) — `novetest-pm-team → all` (team-structure-and-protocol)
 - [2026-05-15-coverage-facts-json-layout.md](./decisions/2026-05-15-coverage-facts-json-layout.md) — `novetest-pm-team → all` (coverage-facts-json-layout)
+- [2026-05-16-coverage-delta-envelope-shape.md](./decisions/2026-05-16-coverage-delta-envelope-shape.md) — `novetest-pm-team → all` (coverage-delta-envelope-shape)
 - [2026-05-16-coverage-outcome-envelope-shape.md](./decisions/2026-05-16-coverage-outcome-envelope-shape.md) — `novetest-pm-team → all` (coverage-outcome-envelope-shape)
 - [2026-05-16-gotchas-md-policy.md](./decisions/2026-05-16-gotchas-md-policy.md) — `novetest-pm-team → all` (gotchas-md-policy)
 
 ## Recent history (last 7 days)
 - [2026-05-16-coverage-cli-wiring.md](./history/2026-05-16-coverage-cli-wiring.md) — `novetest-pm-team → all` (coverage-cli-wiring)
 - [2026-05-16-phase0-closure-partial.md](./history/2026-05-16-phase0-closure-partial.md) — `novetest-pm-team → all` (phase0-closure-partial)
+- [2026-05-16-phase0-complete-and-phase2-2.5-entry.md](./history/2026-05-16-phase0-complete-and-phase2-2.5-entry.md) — `novetest-pm-team → all` (phase0-complete-and-phase2-2.5-entry)
 - [2026-05-16-phase0-gha-attempt-red.md](./history/2026-05-16-phase0-gha-attempt-red.md) — `novetest-pm-team → all` (phase0-gha-attempt-red)
 - [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)

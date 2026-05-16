@@ -35,3 +35,46 @@ Output bytes, file mode, and `git diff` are byte-identical to what `Write` would
 ---
 
 <!-- Append new gotchas below this line. Newest at the bottom keeps anchors stable. -->
+
+
+## `uv run --with /<local-repo-path>` serves a stale wheel after source change
+
+**Symptom.** Repeated invocations of
+`uv run --with /home/yjshin/dev/Nove-Test novetest <verb>` from inside a
+target directory (e.g. a fixture project's checkout) return the
+*previously-cached* wheel's behavior even after `src/novetest/...` in the
+local repo changed. Manifests most dramatically as stub-era envelopes
+(`{"code": "not-implemented", "message": "<verb> is not yet implemented"}`)
+for verbs that have been promoted to real handlers on disk. Surfaces
+even with `uv run --refresh`.
+
+**Diagnosis.** `uv`'s wheel cache keys on the local-path directory +
+content hash; when the smoke target directory has its own `pyproject.toml`
+(fixture projects do), resolution may reuse an earlier-built wheel for
+`novetest`. Bare `--refresh` flushes index lookups but does not always
+rebuild a `--with /local/path` source dependency.
+
+**Sanctioned response.** From the repo root (or any directory after
+`NOVETEST_HOME` is set to the target store path), use the repo's
+editable venv directly without `--with`:
+
+```sh
+export NOVETEST_HOME=/path/to/target/store/.novetest
+uv run novetest <verb> <args>
+```
+
+Or explicitly refresh the local package:
+
+```sh
+uv run --refresh-package novetest --with /local/path novetest <verb> <args>
+```
+
+The `NOVETEST_HOME` export pattern is preferred — fewer moving parts and
+works from any cwd.
+
+**Status.** Open. Workaround is one-line; root cause is upstream (`uv`'s
+local-source-dep cache invalidation).
+
+**First documented.** 2026-05-16 (Manual Test cycle for
+`coverage-show-diff` — see
+`agent-comms/history/2026-05-16-phase0-complete-and-phase2-2.5-entry.md`).

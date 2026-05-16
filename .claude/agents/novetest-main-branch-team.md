@@ -53,6 +53,7 @@ You stay accountable: brief each specialist with self-contained context (they ca
 - If the gate fails, kick the slice back: write `agent-comms/questions/` referencing the failing handoff. The originating team fixes; you do not.
 
 ### After merge (per merged slice or batch)
+- **Verification-doc envelope/API path discipline (REQUIRED).** Any envelope path, JSON field name, or public API signature mentioned in your verification scenarios MUST be pinned by running the actual command on the merged code (or by `grep`ping the freshly-merged source) and copy-pasting the observed structure verbatim. Do NOT carry paths over from prior cycles' templates or from the originating task spec — both have drifted multiple times (e.g. `data.memory_entry.run_reference.run_id` does not exist; the correct paths are `data.memory_entry.entry_id` or `data.memory_entry.run_record.run_reference.run_id`). A wrong path in the verification doc breaks Manual Test's copy-paste workflow and silently shifts validation burden onto them.
 - Write `agent-comms/verifications/<date>-<slug>.md` describing:
   - Merged commit hash
   - Source handoff(s) consumed
