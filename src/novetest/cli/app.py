@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, Callable, NoReturn
+from typing import Annotated, Any, Callable, NoReturn
 
-from cyclopts import App
+from cyclopts import App, Parameter
 
 from novetest import __version__
 from novetest.cli.output import (
@@ -23,6 +23,7 @@ from novetest.cli.output import (
     not_implemented_envelope,
     resolve_output_mode,
 )
+from novetest.coverage import CoverageUnavailable
 from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
@@ -33,6 +34,7 @@ from novetest.memory import (
     retrieve_run_evidence,
 )
 from novetest.models import RunReference
+from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
 from novetest.orchestration.workflows import (
@@ -178,11 +180,25 @@ def init() -> None:
 
 
 @app.command(name="run")
-def run_cmd(target: str = "") -> None:
-    """Execute the resolved Test Target and persist the Run Record."""
+def run_cmd(
+    target: str = "",
+    *,
+    coverage: Annotated[bool, Parameter(name=["--coverage", "-c"])] = False,
+) -> None:
+    """Execute the resolved Test Target and persist the Run Record.
+
+    With ``--coverage`` / ``-c``, the run is invoked with coverage
+    instrumentation and Coverage's ``derive_coverage_facts`` is called
+    after persistence. The resulting fact-set (or an explicit
+    ``CoverageUnavailable`` outcome) is reported under the envelope's
+    ``data.coverage_outcome`` block; without the flag, the key is omitted
+    entirely so non-coverage runs stay byte-equivalent to Phase 1.
+    """
     store = _require_store("run")
     try:
-        outcome = asyncio.run(run_target_in_store(target, store))
+        outcome = asyncio.run(
+            run_target_in_store(target, store, collect_coverage=coverage)
+        )
     except EngineNotReadyError as exc:
         _emit_and_exit(
             Envelope(
@@ -229,14 +245,41 @@ def run_cmd(target: str = "") -> None:
     else:
         exit_code = EXIT_GENERIC
         ok = False
-    _emit_and_exit(
-        Envelope(
-            command="run",
-            ok=ok,
-            data={"memory_entry": entry.to_dict()},
+
+    data: dict[str, Any] = {"memory_entry": entry.to_dict()}
+    if outcome.coverage_outcome is not None:
+        data["coverage_outcome"] = _coverage_outcome_payload(outcome.coverage_outcome)
+    _emit_and_exit(Envelope(command="run", ok=ok, data=data), exit_code)
+
+
+def _coverage_outcome_payload(
+    outcome: CoverageFactSet | CoverageUnavailable,
+) -> dict[str, Any]:
+    """Project a Coverage derive outcome onto the envelope wire shape.
+
+    Two ``kind`` values discriminate at parse time: ``fact-set`` carries
+    the granularity + summary, ``unavailable`` carries the reason + detail.
+    The ``run_reference`` block is present in both (None only when the
+    Run Reference itself could not be resolved — which cannot happen on
+    this code path because we just persisted the record).
+    """
+    if isinstance(outcome, CoverageFactSet):
+        return {
+            "kind": "fact-set",
+            "run_reference": outcome.run_reference.to_dict(),
+            "mapping_granularity": outcome.mapping_granularity,
+            "summary": outcome.summary.to_dict(),
+        }
+    return {
+        "kind": "unavailable",
+        "run_reference": (
+            outcome.run_reference.to_dict()
+            if outcome.run_reference is not None
+            else None
         ),
-        exit_code,
-    )
+        "reason": outcome.reason,
+        "detail": outcome.detail,
+    }
 
 
 @app.command
