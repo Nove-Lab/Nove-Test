@@ -8,10 +8,10 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-- [release-team-2026-05-16-gha-push-and-watch.md](./tasks/release-team-2026-05-16-gha-push-and-watch.md) — `novetest-pm-team → novetest-release-team` (gha-push-and-watch)
+_(none)_
 
 ## Blocked
-- [release-team-2026-05-16-gha-push-and-watch.md](./handoffs/release-team-2026-05-16-gha-push-and-watch.md) — `novetest-release-team → novetest-pm-team` (gha-push-and-watch)
+_(none)_
 
 ## Open questions
 _(none)_
@@ -25,4 +25,5 @@ _(none)_
 
 ## Recent history (last 7 days)
 - [2026-05-16-coverage-cli-wiring.md](./history/2026-05-16-coverage-cli-wiring.md) — `novetest-pm-team → all` (coverage-cli-wiring)
+- [2026-05-16-phase0-gha-attempt-red.md](./history/2026-05-16-phase0-gha-attempt-red.md) — `novetest-pm-team → all` (phase0-gha-attempt-red)
 - [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)
