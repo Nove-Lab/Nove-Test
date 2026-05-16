@@ -11,6 +11,7 @@ _(none)_
 - [orchestration-team-2026-05-16-coverage-show-diff.md](./tasks/orchestration-team-2026-05-16-coverage-show-diff.md) — `novetest-pm-team → novetest-orchestration-team` (coverage-show-diff)
 - [release-team-2026-05-16-macos-universal2-transition.md](./tasks/release-team-2026-05-16-macos-universal2-transition.md) — `novetest-pm-team → novetest-release-team` (macos-universal2-transition)
 - [run-team-2026-05-16-jest-adapter-phase1.md](./tasks/run-team-2026-05-16-jest-adapter-phase1.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-phase1)
+- [2026-05-16-coverage-show-diff.md](./verifications/2026-05-16-coverage-show-diff.md) — `novetest-main-branch-team → novetest-manual-test-team` (coverage-show-diff)
 
 ## Blocked
 _(none)_
