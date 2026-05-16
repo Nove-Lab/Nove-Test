@@ -59,16 +59,19 @@ detect_target() {
     *) die "unsupported OS: ${_os} (Phase 0 supports linux, macos; Windows is post-MVP via install.ps1)" ;;
   esac
 
-  case "$_arch" in
-    x86_64|amd64)   _arch_id="x86_64" ;;
-    aarch64|arm64)  _arch_id="aarch64" ;;
-    *) die "unsupported arch: ${_arch} (Phase 0 supports x86_64, aarch64/arm64)" ;;
-  esac
-
-  # macOS binary names use `arm64`; Linux uses `aarch64`. Match the artifact
-  # names produced by .github/workflows/release-test.yml.
-  if [ "${_os_id}" = "macos" ] && [ "${_arch_id}" = "aarch64" ]; then
-    _arch_id="arm64"
+  # macOS ships a single universal2 fat binary that runs on both Apple
+  # Silicon and Intel — macOS picks the right Mach-O slice at exec time,
+  # so install.sh has nothing to branch on for arch. Upstream artifact
+  # name in release-test.yml: `novetest-macos-universal2`. Linux still
+  # ships one binary per architecture.
+  if [ "${_os_id}" = "macos" ]; then
+    _arch_id="universal2"
+  else
+    case "$_arch" in
+      x86_64|amd64)   _arch_id="x86_64" ;;
+      aarch64|arm64)  _arch_id="aarch64" ;;
+      *) die "unsupported arch: ${_arch} (Phase 0 Linux supports x86_64, aarch64/arm64; macOS ships universal2)" ;;
+    esac
   fi
 
   printf '%s-%s' "${_os_id}" "${_arch_id}"
