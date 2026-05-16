@@ -8,7 +8,8 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-_(none)_
+- [orchestration-team-2026-05-16-coverage-cli-wiring.md](./tasks/orchestration-team-2026-05-16-coverage-cli-wiring.md) — `novetest-pm-team → novetest-orchestration-team` (coverage-cli-wiring)
+- [release-team-2026-05-16-gha-push-and-watch.md](./tasks/release-team-2026-05-16-gha-push-and-watch.md) — `novetest-pm-team → novetest-release-team` (gha-push-and-watch)
 
 ## Blocked
 _(none)_
