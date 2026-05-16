@@ -4,15 +4,21 @@ Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
 1. `detect_engine_candidates` scans workspace markers and returns the
    inferred (ecosystem, engine) candidates.
 2. `assess_engine_readiness` reconciles those candidates with the supported
-   pairs from `list_supported_engine_pairs`, then for the Phase 1 engine
-   (pytest) does a deeper check: pytest config present in the workspace and
-   pytest + pytest-json-report importable from the resolved interpreter.
+   pairs from `list_supported_engine_pairs`, then per-engine does a deeper
+   check:
+   - pytest: pytest config present + pytest + pytest-json-report importable
+     from the resolved interpreter.
+   - jest: ``node`` on PATH + jest declared in ``package.json``
+     ``dependencies`` / ``devDependencies`` or installed under
+     ``node_modules/.bin/jest``.
 
 Both surfaces are pure inspection. **Nothing is ever installed.**
 """
 
 from __future__ import annotations
 
+import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -121,7 +127,6 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     candidates = detect_engine_candidates(project_workspace)
     supported = {pair for pair in list_supported_engine_pairs()}
 
-    # Keep only supported candidates; Phase 1 only validates pytest.
     relevant = [c for c in candidates if (c.ecosystem, c.engine_name) in supported]
     if not relevant:
         return EngineReadinessResult(
@@ -131,27 +136,39 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
             issues=("no supported (ecosystem, native engine) pair detected in workspace",),
         )
 
-    # Prefer the python+pytest candidate when present so Phase 1 short-circuits
-    # onto the only implemented adapter.
+    # Prefer the python+pytest candidate when both python and js workspaces
+    # are present (a hybrid repo) — Phase 1 / 2 invariant. If only jest is
+    # present, route to the jest probe.
     pytest_candidate = next(
         (c for c in relevant if c.ecosystem == "python" and c.engine_name == "pytest"),
         None,
     )
-    if pytest_candidate is None:
-        # A supported candidate was detected, but no adapter implementation
-        # exists in Phase 1 — surface as misconfigured so the CLI can flag
-        # the ecosystem to the user without pretending it is ready.
-        chosen = relevant[0]
-        return EngineReadinessResult(
-            state="engine-misconfigured",
-            engine_context=NativeEngineContext(
-                ecosystem=chosen.ecosystem, engine_name=chosen.engine_name
-            ),
-            evidence=chosen.evidence,
-            issues=(f"adapter for {chosen.engine_name!r} not implemented in Phase 1",),
-        )
+    if pytest_candidate is not None:
+        return await _assess_pytest_readiness(project_workspace, pytest_candidate)
 
-    return await _assess_pytest_readiness(project_workspace, pytest_candidate)
+    jest_candidate = next(
+        (
+            c
+            for c in relevant
+            if c.ecosystem == "javascript-typescript" and c.engine_name == "jest"
+        ),
+        None,
+    )
+    if jest_candidate is not None:
+        return await _assess_jest_readiness(project_workspace, jest_candidate)
+
+    # A supported candidate was detected, but no adapter implementation
+    # exists yet (java / go / rust / dotnet) — surface as misconfigured so
+    # the CLI can name the ecosystem without pretending it is ready.
+    chosen = relevant[0]
+    return EngineReadinessResult(
+        state="engine-misconfigured",
+        engine_context=NativeEngineContext(
+            ecosystem=chosen.ecosystem, engine_name=chosen.engine_name
+        ),
+        evidence=chosen.evidence,
+        issues=(f"adapter for {chosen.engine_name!r} not implemented yet",),
+    )
 
 
 async def _assess_pytest_readiness(
@@ -261,3 +278,123 @@ async def _probe_pytest_jsonreport(workspace: Path) -> bool:
         timeout=15.0,
     )
     return result.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# jest readiness (Phase 2.5)
+# ---------------------------------------------------------------------------
+
+
+async def _assess_jest_readiness(
+    project_workspace: Path,
+    candidate: EngineCandidate,
+) -> EngineReadinessResult:
+    """Decide jest's readiness state for a JS/TS workspace.
+
+    Sequence:
+    1. ``node`` (and ``npx``) on PATH? If absent → ``engine-missing``
+       (engine cannot run at all; engine_context dropped so the caller does
+       not name jest in the guidance — there is no jest yet).
+    2. Jest declared in ``package.json`` deps OR installed under
+       ``node_modules/.bin/jest``? If absent → ``engine-misconfigured``
+       with engine_context populated (we know it's jest the user wants).
+    3. Best-effort version read from
+       ``node_modules/jest/package.json`` — informational; never fails the
+       state.
+    """
+
+    if shutil.which("node") is None or shutil.which("npx") is None:
+        return EngineReadinessResult(
+            state="engine-missing",
+            engine_context=None,
+            evidence=candidate.evidence,
+            issues=(
+                "Node.js (`node`/`npx`) not found on PATH; install Node.js "
+                ">=18 and ensure both `node` and `npx` are on PATH",
+            ),
+        )
+
+    jest_declared = _jest_declared_in_package_json(project_workspace)
+    jest_installed = (
+        project_workspace / "node_modules" / ".bin" / "jest"
+    ).exists() or (
+        project_workspace / "node_modules" / ".bin" / "jest.cmd"
+    ).exists()
+
+    if not jest_declared and not jest_installed:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="javascript-typescript", engine_name="jest"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "jest not found in package.json `dependencies`/`devDependencies` "
+                "and not installed under `node_modules/.bin/jest`; install with: "
+                "npm install --save-dev jest",
+            ),
+        )
+    if not jest_installed:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="javascript-typescript", engine_name="jest"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "jest is declared in package.json but not installed; run: "
+                "npm install",
+            ),
+        )
+
+    engine_version = _read_jest_version_from_workspace(project_workspace)
+    return EngineReadinessResult(
+        state="ready",
+        engine_context=NativeEngineContext(
+            ecosystem="javascript-typescript",
+            engine_name="jest",
+            engine_version=engine_version,
+        ),
+        evidence=candidate.evidence,
+        issues=(),
+    )
+
+
+def _jest_declared_in_package_json(workspace: Path) -> bool:
+    """Cheap text-then-parse probe for "jest in {dev,}Dependencies"."""
+
+    package_json = workspace / "package.json"
+    if not package_json.is_file():
+        return False
+    try:
+        content = package_json.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    # Fast-path: if the literal "jest" substring is absent, save the JSON parse.
+    if "jest" not in content:
+        return False
+    try:
+        meta = json.loads(content)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(meta, dict):
+        return False
+    for section_key in ("dependencies", "devDependencies"):
+        section = meta.get(section_key)
+        if isinstance(section, dict) and "jest" in section:
+            return True
+    return False
+
+
+def _read_jest_version_from_workspace(workspace: Path) -> str | None:
+    """Read ``node_modules/jest/package.json``'s ``version`` field, or None."""
+
+    candidate = workspace / "node_modules" / "jest" / "package.json"
+    if not candidate.is_file():
+        return None
+    try:
+        meta = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    version = meta.get("version") if isinstance(meta, dict) else None
+    return str(version) if isinstance(version, str) else None

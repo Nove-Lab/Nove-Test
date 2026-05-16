@@ -1,9 +1,14 @@
 """Run engine public surface.
 
-Implements `design/interace-contract/run.md` §1. Phase 1 ships the pytest
-adapter only; the other supported (ecosystem, engine) pairs in
-`list_supported_engine_pairs` raise ``EngineNotSupportedError`` when
-selected for execution.
+Implements `design/interace-contract/run.md` §1. Phase 1 shipped the
+pytest adapter; Phase 2.5 added the jest adapter. The remaining
+(ecosystem, engine) pairs in `list_supported_engine_pairs` (java+junit,
+go+go-test, rust+cargo-test, dotnet+xunit) raise
+``EngineNotSupportedError`` when selected for execution.
+
+Adapter entry points (``run_pytest``, ``run_jest``) are deliberately
+not re-exported here — the public Run surface is engine-agnostic.
+Callers route through `execute` / `execute_with_engine_context`.
 """
 
 from novetest.run.engine import execute, execute_with_engine_context

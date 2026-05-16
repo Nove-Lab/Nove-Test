@@ -1,8 +1,10 @@
 """Supported (ecosystem, engine) pairs and selection from a Test Target.
 
-Phase 1 only implements the pytest adapter; the other five pairs appear in
+Phase 1 shipped pytest; Phase 2.5 added jest. The remaining four pairs
+(junit / go-test / cargo-test / xunit) appear in
 `list_supported_engine_pairs` so detection and CLI surfaces can name them
-even though `select_native_engine` will raise for non-pytest selections.
+even though `select_native_engine` raises for any selection without an
+implemented adapter.
 """
 
 from __future__ import annotations
@@ -53,10 +55,18 @@ def _ecosystem_for_workspace(workspace_path: object) -> str | None:
     return None
 
 
+_IMPLEMENTED_ECOSYSTEM_TO_ENGINE: dict[str, str] = {
+    "python": "pytest",
+    "javascript-typescript": "jest",
+}
+
+
 def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
     """Pick the Native Engine for a resolved Test Target.
 
-    Phase 1 only knows pytest; selecting any other supported ecosystem
+    Returns a `NativeEngineContext` for any ecosystem with a shipping
+    adapter (python+pytest, javascript-typescript+jest). Any other
+    detected-but-not-yet-implemented ecosystem (java / go / rust / dotnet)
     raises `EngineNotSupportedError`. Workspaces that match no supported
     ecosystem also raise — the caller is expected to gate on
     `assess_engine_readiness` first.
@@ -67,8 +77,9 @@ def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
         raise EngineNotSupportedError(
             f"no supported ecosystem detected for workspace {test_target.workspace_path!s}"
         )
-    if ecosystem != "python":
+    engine_name = _IMPLEMENTED_ECOSYSTEM_TO_ENGINE.get(ecosystem)
+    if engine_name is None:
         raise EngineNotSupportedError(
-            f"adapter for ecosystem {ecosystem!r} not implemented in Phase 1"
+            f"adapter for ecosystem {ecosystem!r} not implemented yet"
         )
-    return NativeEngineContext(ecosystem="python", engine_name="pytest")
+    return NativeEngineContext(ecosystem=ecosystem, engine_name=engine_name)

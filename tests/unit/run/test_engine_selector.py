@@ -39,8 +39,26 @@ def test_unknown_workspace_raises(tmp_path: Path) -> None:
         select_native_engine(target)
 
 
-def test_non_python_supported_workspace_raises(tmp_path: Path) -> None:
+def test_js_workspace_selects_jest(tmp_path: Path) -> None:
+    """Phase 2.5: jest is now an implemented adapter, so `package.json`
+    workspaces resolve to the jest engine context rather than raising.
+    """
+
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    target = TestTarget("", "workspace", tmp_path)
+    context = select_native_engine(target)
+    assert context.ecosystem == "javascript-typescript"
+    assert context.engine_name == "jest"
+
+
+def test_dotnet_workspace_raises_until_adapter_lands(tmp_path: Path) -> None:
+    """junit / go-test / cargo-test / xunit have no adapters yet — they must
+    still raise `EngineNotSupportedError`. xunit is chosen as the
+    representative because .NET uses a glob-based detection path that
+    exercises a different branch of `_ecosystem_for_workspace`.
+    """
+
+    (tmp_path / "Foo.csproj").write_text("<Project/>", encoding="utf-8")
     target = TestTarget("", "workspace", tmp_path)
     with pytest.raises(EngineNotSupportedError):
         select_native_engine(target)

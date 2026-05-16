@@ -1,0 +1,2 @@
+# Local one-time `npm install` lands jest's dep tree here; never check it in.
+node_modules/
