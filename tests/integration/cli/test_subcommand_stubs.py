@@ -13,8 +13,6 @@ import pytest
         (["compare"], "compare"),
         (["replay"], "replay"),
         (["localization"], "localization"),
-        (["coverage", "show"], "coverage.show"),
-        (["coverage", "diff"], "coverage.diff"),
         (["regression", "compare"], "regression.compare"),
         (["regression", "latest"], "regression.latest"),
     ],

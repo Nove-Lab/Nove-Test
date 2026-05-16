@@ -23,7 +23,12 @@ from novetest.cli.output import (
     not_implemented_envelope,
     resolve_output_mode,
 )
-from novetest.coverage import CoverageUnavailable
+from novetest.coverage import (
+    CoverageUnavailable,
+    compare_coverage_facts,
+    get_coverage_facts,
+)
+from novetest.coverage.compare import CoverageDelta
 from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
@@ -410,6 +415,125 @@ def memory_delete(run_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Coverage subcommand group
+# ---------------------------------------------------------------------------
+
+
+coverage_app = App(
+    name="coverage",
+    help="Coverage commands: show / diff Coverage Facts for stored runs.",
+)
+app.command(coverage_app)
+
+
+def _resolve_run_reference(
+    store: ProjectStore, command: str, run_id: str
+) -> RunReference:
+    """Look up a Memory Entry by run_id and return its Run Reference.
+
+    Mirrors the lookup pattern used by ``memory_show`` / ``memory_delete``
+    so coverage verbs surface the same ``not-found`` envelope (exit 2)
+    when callers pass a stale or fake run_id.
+    """
+    entries = list_run_history(store)
+    target = next(
+        (e for e in entries if e.run_record.run_reference.run_id == run_id),
+        None,
+    )
+    if target is None:
+        _emit_and_exit(
+            Envelope(
+                command=command,
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="not-found",
+                        message=f"No Memory Entry for run_id={run_id!r}",
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    return target.run_record.run_reference
+
+
+@coverage_app.command(name="show")
+def coverage_show(run_id: str) -> None:
+    """Show the persisted Coverage Fact set for ``run_id``.
+
+    Cache-read only — this verb never auto-derives. When the run exists
+    but no ``coverage_facts.json`` is on disk, the envelope reports
+    ``coverage_outcome.kind == "unavailable"`` with reason
+    ``missing-derived-facts`` (the run was executed without
+    ``novetest run --coverage``).
+    """
+    store = _require_store("coverage.show")
+    ref = _resolve_run_reference(store, "coverage.show", run_id)
+    outcome = get_coverage_facts(store, ref)
+    _emit_and_exit(
+        Envelope(
+            command="coverage.show",
+            ok=True,
+            data={"coverage_outcome": _coverage_outcome_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+@coverage_app.command(name="diff")
+def coverage_diff(baseline_run_id: str, target_run_id: str) -> None:
+    """Diff the persisted Coverage Fact sets of two runs.
+
+    Surfaces ``coverage_delta.kind == "delta"`` on success and
+    ``coverage_delta.kind == "unavailable"`` when either side lacks
+    derived facts (the unavailable outcome is propagated from
+    ``compare_coverage_facts``).
+    """
+    store = _require_store("coverage.diff")
+    baseline_ref = _resolve_run_reference(store, "coverage.diff", baseline_run_id)
+    target_ref = _resolve_run_reference(store, "coverage.diff", target_run_id)
+    outcome = compare_coverage_facts(store, baseline_ref, target_ref)
+    _emit_and_exit(
+        Envelope(
+            command="coverage.diff",
+            ok=True,
+            data={"coverage_delta": _coverage_delta_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+def _coverage_delta_payload(
+    outcome: CoverageDelta | CoverageUnavailable,
+) -> dict[str, Any]:
+    """Project a Coverage compare outcome onto the envelope wire shape.
+
+    Two ``kind`` values discriminate at parse time: ``delta`` carries the
+    full delta payload (baseline + target references, both summaries, file
+    adds/removes, per-file deltas), ``unavailable`` carries the propagated
+    reason + detail from whichever side lacked derived facts. The persisted
+    ``schema_version`` is intentionally stripped on the wire (envelope
+    versioning lives at the top-level ``schema`` field, not inside
+    individual data blocks — same convention the ``coverage_outcome``
+    projection follows for ``fact-set``).
+    """
+    if isinstance(outcome, CoverageDelta):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        return {"kind": "delta", **body}
+    return {
+        "kind": "unavailable",
+        "run_reference": (
+            outcome.run_reference.to_dict()
+            if outcome.run_reference is not None
+            else None
+        ),
+        "reason": outcome.reason,
+        "detail": outcome.detail,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Remaining stubs (not in Phase 1 Run+Memory scope)
 # ---------------------------------------------------------------------------
 
@@ -429,7 +553,6 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
 
 for _name in ("test", "inspect", "compare", "replay", "localization"):
     _register_flat_stub(_name)
-_register_group_stub("coverage", ("show", "diff"))
 _register_group_stub("regression", ("compare", "latest"))
 
 
