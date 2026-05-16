@@ -58,15 +58,17 @@ def _detect_target() -> str:
     else:
         pytest.skip(f"install.sh does not target {system!r}")
 
-    if machine in ("x86_64", "amd64"):
+    # macOS asks for a single universal2 binary regardless of host arch
+    # (Apple Silicon AND Intel both download the same artifact; macOS picks
+    # the right Mach-O slice at exec time). Linux still per-arch.
+    if os_id == "macos":
+        arch_id = "universal2"
+    elif machine in ("x86_64", "amd64"):
         arch_id = "x86_64"
     elif machine in ("aarch64", "arm64"):
         arch_id = "aarch64"
     else:
         pytest.skip(f"install.sh does not target arch {machine!r}")
-
-    if os_id == "macos" and arch_id == "aarch64":
-        arch_id = "arm64"
 
     return f"{os_id}-{arch_id}"
 

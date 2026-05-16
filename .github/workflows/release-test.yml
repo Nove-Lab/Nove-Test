@@ -58,10 +58,14 @@ jobs:
           - target: linux-aarch64
             runner: ubuntu-22.04-arm
             shell: bash
-          - target: macos-x86_64
-            runner: macos-13
-            shell: bash
-          - target: macos-arm64
+          # Single macOS cell ships a universal2 fat binary covering both
+          # Apple Silicon and Intel. We build on macos-latest (arm64, never
+          # queues) and lipo-fuse two per-arch PyApp wraps. The macos-13
+          # runner is intentionally NOT in this matrix — that pool is
+          # saturated for hours at a time and GitHub is deprecating it.
+          # See agent-comms/history/2026-05-16-phase0-closure-partial.md
+          # for the prior cycle's macos-13 queue diagnosis.
+          - target: macos-universal2
             runner: macos-latest
             shell: bash
 
@@ -81,6 +85,13 @@ jobs:
 
       - name: Install Rust toolchain (host)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # For macos-universal2 we cross-compile both Apple targets and
+          # lipo-fuse. macos-latest is arm64-host, so `aarch64-apple-darwin`
+          # is the default triple — we explicitly add it for symmetry and
+          # to add `x86_64-apple-darwin` for the cross slice. Empty for
+          # every other cell (single native target).
+          targets: ${{ matrix.target == 'macos-universal2' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Build wheel
         run: |
@@ -125,9 +136,28 @@ jobs:
           echo "Wrapping wheel: $wheel"
           export PYAPP_PROJECT_PATH="$wheel"
           cd pyapp-src
-          cargo build --release
           mkdir -p ../out
-          cp target/release/pyapp "../out/novetest-${{ matrix.target }}"
+          out_path="../out/novetest-${{ matrix.target }}"
+          if [ "${{ matrix.target }}" = "macos-universal2" ]; then
+            # PyApp v0.22.0 does not natively ship a universal2 distribution
+            # (python-build-standalone publishes per-arch tarballs only). We
+            # build two single-arch PyApp wraps via cargo cross-target and
+            # fuse them with `lipo -create`. Each Mach-O slice embeds its
+            # arch's python-build-standalone download URL at compile time;
+            # at runtime macOS picks the host-matching slice, which then
+            # downloads the right CPython on first invocation.
+            cargo build --release --target aarch64-apple-darwin
+            cargo build --release --target x86_64-apple-darwin
+            lipo -create \
+              target/aarch64-apple-darwin/release/pyapp \
+              target/x86_64-apple-darwin/release/pyapp \
+              -output "$out_path"
+            # Sanity check: must print "x86_64 arm64" (order may vary).
+            lipo -archs "$out_path"
+          else
+            cargo build --release
+            cp target/release/pyapp "$out_path"
+          fi
           ls -la ../out
 
       - name: Compute SHA-256 sidecar
