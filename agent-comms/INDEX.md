@@ -8,10 +8,7 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-- [release-team-2026-05-16-release-test-pyapp-wrap-path.md](./tasks/release-team-2026-05-16-release-test-pyapp-wrap-path.md) — `novetest-pm-team → novetest-release-team` (release-test-pyapp-wrap-path)
-- [run-team-2026-05-16-pytest-adapter-bin-false-portable.md](./tasks/run-team-2026-05-16-pytest-adapter-bin-false-portable.md) — `novetest-pm-team → novetest-run-team` (pytest-adapter-bin-false-portable)
-- [2026-05-16-pytest-adapter-bin-false-portable.md](./verifications/2026-05-16-pytest-adapter-bin-false-portable.md) — `novetest-main-branch-team → novetest-manual-test-team` (pytest-adapter-bin-false-portable)
-- [2026-05-16-release-test-pyapp-wrap-path.md](./verifications/2026-05-16-release-test-pyapp-wrap-path.md) — `novetest-main-branch-team → novetest-manual-test-team` (release-test-pyapp-wrap-path)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -28,5 +25,6 @@ _(none)_
 
 ## Recent history (last 7 days)
 - [2026-05-16-coverage-cli-wiring.md](./history/2026-05-16-coverage-cli-wiring.md) — `novetest-pm-team → all` (coverage-cli-wiring)
+- [2026-05-16-phase0-closure-partial.md](./history/2026-05-16-phase0-closure-partial.md) — `novetest-pm-team → all` (phase0-closure-partial)
 - [2026-05-16-phase0-gha-attempt-red.md](./history/2026-05-16-phase0-gha-attempt-red.md) — `novetest-pm-team → all` (phase0-gha-attempt-red)
 - [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)
