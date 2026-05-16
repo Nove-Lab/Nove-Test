@@ -10,6 +10,7 @@ _(none)_
 ## Pending
 - [orchestration-team-2026-05-16-coverage-cli-wiring.md](./tasks/orchestration-team-2026-05-16-coverage-cli-wiring.md) — `novetest-pm-team → novetest-orchestration-team` (coverage-cli-wiring)
 - [release-team-2026-05-16-gha-push-and-watch.md](./tasks/release-team-2026-05-16-gha-push-and-watch.md) — `novetest-pm-team → novetest-release-team` (gha-push-and-watch)
+- [2026-05-16-coverage-cli-wiring.md](./verifications/2026-05-16-coverage-cli-wiring.md) — `novetest-main-branch-team → novetest-manual-test-team` (coverage-cli-wiring)
 
 ## Blocked
 _(none)_
