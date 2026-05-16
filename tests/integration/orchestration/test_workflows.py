@@ -12,12 +12,14 @@ from pathlib import Path
 
 import pytest
 
+from novetest.coverage import get_coverage_facts
 from novetest.memory import (
     delete_run_evidence,
     list_run_history,
     locate_project_store,
     retrieve_run_evidence,
 )
+from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.workflows import (
     build_status_view,
     initialize_project_workspace,
@@ -184,3 +186,52 @@ async def test_locate_returns_none_when_no_ancestor_store(tmp_path: Path) -> Non
     workspace = tmp_path / "outside"
     workspace.mkdir()
     assert locate_project_store(workspace, env={}) is None
+
+
+async def test_run_with_coverage_against_pytest_coverage_fixture(
+    coverage_workspace: Path,
+) -> None:
+    """End-to-end: `--coverage` wiring derives per-test facts on disk.
+
+    Closes Phase 2 DoD #1 for the orchestration layer: against the
+    `pytest-coverage` fixture, a coverage-enabled run lands
+    `coverage_facts.json` at the contract-frozen path, flips Memory's
+    `has_coverage_facts` to True, surfaces `mapping_granularity: per-test`,
+    and records the fixture's deliberately-uncovered line in the per-file
+    `missing_statements` (line 16 of `pytest_coverage/classifier.py` — the
+    `return "negative"` branch documented as the fixture contract).
+    """
+
+    init = await initialize_project_workspace(coverage_workspace)
+    outcome = await run_target_in_store(
+        "tests/", init.store, timeout=120.0, collect_coverage=True
+    )
+
+    # The Memory Entry returned by the workflow is the *post-derive* snapshot,
+    # so `has_coverage_facts` reflects the freshly written facts file.
+    assert outcome.memory_entry.has_coverage_facts is True
+
+    run_id = outcome.memory_entry.run_record.run_reference.run_id
+    facts_path = (
+        init.store.path / "coverage" / "facts" / f"run_{run_id}" / "coverage_facts.json"
+    )
+    assert facts_path.is_file(), facts_path
+
+    # And the outcome carries the typed CoverageFactSet (per-test granularity).
+    assert isinstance(outcome.coverage_outcome, CoverageFactSet)
+    assert outcome.coverage_outcome.mapping_granularity == "per-test"
+
+    # Cache-read path returns the same facts as the workflow's in-memory value.
+    cached = get_coverage_facts(init.store, outcome.memory_entry.run_record.run_reference)
+    assert isinstance(cached, CoverageFactSet)
+    assert cached.mapping_granularity == "per-test"
+
+    # The fixture's contract: `classify(value < 0)` is uncovered, so line 16
+    # (the `return "negative"` body) must appear in missing_lines for the
+    # `pytest_coverage/classifier.py` file.
+    classifier = next(
+        (f for f in cached.files if f.file_path.endswith("classifier.py")),
+        None,
+    )
+    assert classifier is not None, [f.file_path for f in cached.files]
+    assert 16 in classifier.missing_lines, classifier.missing_lines

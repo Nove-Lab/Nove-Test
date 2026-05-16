@@ -43,6 +43,11 @@ def empty_workspace(tmp_path: Path) -> Path:
     return _materialize_fixture("empty-no-engine", tmp_path)
 
 
+@pytest.fixture
+def coverage_workspace(tmp_path: Path) -> Path:
+    return _materialize_fixture("pytest-coverage", tmp_path)
+
+
 @dataclass(slots=True, frozen=True)
 class CLIRun:
     returncode: int

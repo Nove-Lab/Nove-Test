@@ -27,6 +27,7 @@ async def execute(
     artifact_dir: Path,
     run_id: str | None = None,
     timeout: float | None = 600.0,
+    collect_coverage: bool = False,
 ) -> RunRecord:
     """Execute ``test_target`` and return a Run Record.
 
@@ -38,6 +39,11 @@ async def execute(
     3. Invoke the adapter (`run_pytest`).
     4. `normalize_native_result` — build the Run Record.
     5. `assign_run_reference` — stamp a fresh ULID-derived reference.
+
+    ``collect_coverage`` is plumbed through to the adapter so a coverage-
+    enabled run lands ``coverage_json`` / ``coverage_xml`` in
+    ``RunRecord.artifact_paths``. Defaults to False so non-coverage callers
+    see no behavior change.
     """
 
     readiness = await assess_engine_readiness(test_target.workspace_path)
@@ -50,6 +56,7 @@ async def execute(
         artifact_dir=artifact_dir,
         run_id=run_id,
         timeout=timeout,
+        collect_coverage=collect_coverage,
     )
 
 
@@ -60,6 +67,7 @@ async def execute_with_engine_context(
     artifact_dir: Path,
     run_id: str | None = None,
     timeout: float | None = 600.0,
+    collect_coverage: bool = False,
 ) -> RunRecord:
     """Same as `execute` but reuses a pre-recorded Native Engine context.
 
@@ -78,6 +86,7 @@ async def execute_with_engine_context(
         test_target,
         artifact_dir=artifact_dir,
         timeout=timeout,
+        collect_coverage=collect_coverage,
     )
     # Prefer the version the adapter actually observed.
     resolved_context = NativeEngineContext(

@@ -9,13 +9,15 @@ because the workflow's value is the wiring, not the individual steps.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from novetest.run import engine as engine_module
 from novetest.run.engine import execute, execute_with_engine_context
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.target_resolver import resolve_test_target
-from novetest.run.types import NativeEngineContext
+from novetest.run.types import NativeEngineContext, NativeResult
 
 
 async def test_execute_pytest_basic_returns_all_passed(
@@ -92,3 +94,50 @@ async def test_run_id_can_be_pinned(
         timeout=60.0,
     )
     assert record.run_reference.run_id == "01HZZZZZZZZZZZZZZZZZZZZZZZ"
+
+
+async def test_execute_threads_collect_coverage_kwarg_into_adapter(
+    basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`execute(collect_coverage=True)` must pass-through to ``run_pytest``.
+
+    Stubs ``run_pytest`` at the engine seam so we observe the kwarg without
+    actually invoking pytest (which would need ``pytest-cov`` plumbing
+    that's exercised by the integration suite, not this unit test).
+    """
+
+    seen_kwargs: dict[str, Any] = {}
+
+    async def fake_run_pytest(test_target: Any, **kwargs: Any) -> NativeResult:
+        seen_kwargs.update(kwargs)
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        report_path = native_dir / "pytest-report.json"
+        report_path.write_text("{}", encoding="utf-8")
+        return NativeResult(
+            engine_name="pytest",
+            payload={
+                "exitcode": 0,
+                "summary": {"passed": 0, "total": 0},
+                "tests": [],
+                "duration": 0.0,
+            },
+            artifact_paths={"pytest_json_report": report_path},
+            returncode=0,
+            started_at_ms=0,
+            completed_at_ms=0,
+            engine_version="stub",
+        )
+
+    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+    target = resolve_test_target("", basic_workspace)
+    await execute(
+        target,
+        artifact_dir=tmp_path,
+        timeout=10.0,
+        collect_coverage=True,
+    )
+    assert seen_kwargs.get("collect_coverage") is True

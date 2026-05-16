@@ -162,3 +162,41 @@ def test_status_in_initialized_empty_store_returns_zero_history(
     assert sub_reports["regression"] == "unavailable"
     assert sub_reports["localization"] == "unavailable"
     assert sub_reports["replay"] == "unavailable"
+
+
+def test_run_with_coverage_flag_populates_envelope(
+    coverage_workspace: Path, run_cli_in
+) -> None:
+    """Subprocess E2E: `novetest run --coverage tests/` against pytest-coverage.
+
+    Closes the user-facing half of Phase 2 DoD #1: the flag is accepted at
+    the Cyclopts surface, exit code is 0, and the envelope's
+    ``data.coverage_outcome`` is the ``fact-set`` discriminator with
+    ``mapping_granularity: per-test``.
+    """
+
+    run_cli_in(coverage_workspace, ["init"])
+    result = run_cli_in(coverage_workspace, ["run", "--coverage", "tests/"])
+    assert result.returncode == 0, result.stderr
+
+    envelope = result.envelope()
+    assert envelope["command"] == "run"
+    assert envelope["ok"] is True
+
+    data = envelope["data"]
+    assert isinstance(data, dict)
+
+    memory_entry = data["memory_entry"]
+    assert isinstance(memory_entry, dict)
+    assert memory_entry["has_coverage_facts"] is True
+
+    outcome = data["coverage_outcome"]
+    assert isinstance(outcome, dict)
+    assert outcome["kind"] == "fact-set"
+    assert outcome["mapping_granularity"] == "per-test"
+    summary = outcome["summary"]
+    assert isinstance(summary, dict)
+    assert isinstance(summary["percent_covered"], (int, float))
+    run_reference = outcome["run_reference"]
+    assert isinstance(run_reference, dict)
+    assert len(run_reference["run_id"]) == 26
