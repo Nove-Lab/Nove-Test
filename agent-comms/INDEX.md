@@ -8,7 +8,8 @@ Last regenerated: 2026-05-16
 _(none)_
 
 ## Pending
-_(none)_
+- [release-team-2026-05-16-release-test-pyapp-wrap-path.md](./tasks/release-team-2026-05-16-release-test-pyapp-wrap-path.md) — `novetest-pm-team → novetest-release-team` (release-test-pyapp-wrap-path)
+- [run-team-2026-05-16-pytest-adapter-bin-false-portable.md](./tasks/run-team-2026-05-16-pytest-adapter-bin-false-portable.md) — `novetest-pm-team → novetest-run-team` (pytest-adapter-bin-false-portable)
 
 ## Blocked
 _(none)_
