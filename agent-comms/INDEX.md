@@ -10,6 +10,7 @@ _(none)_
 ## Pending
 - [release-team-2026-05-16-release-test-pyapp-wrap-path.md](./tasks/release-team-2026-05-16-release-test-pyapp-wrap-path.md) — `novetest-pm-team → novetest-release-team` (release-test-pyapp-wrap-path)
 - [run-team-2026-05-16-pytest-adapter-bin-false-portable.md](./tasks/run-team-2026-05-16-pytest-adapter-bin-false-portable.md) — `novetest-pm-team → novetest-run-team` (pytest-adapter-bin-false-portable)
+- [2026-05-16-pytest-adapter-bin-false-portable.md](./verifications/2026-05-16-pytest-adapter-bin-false-portable.md) — `novetest-main-branch-team → novetest-manual-test-team` (pytest-adapter-bin-false-portable)
 
 ## Blocked
 _(none)_
