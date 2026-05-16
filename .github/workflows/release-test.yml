@@ -109,15 +109,19 @@ jobs:
       - name: Wrap wheel with PyApp
         env:
           # PyApp reads these env vars at cargo-build time.
-          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist
+          # PYAPP_PROJECT_PATH is exported in the shell body below (must be an
+          # absolute path to a single wheel file; not set here because the
+          # exact wheel filename is only known after `uv build`).
           PYAPP_PROJECT_NAME: novetest
           PYAPP_EXEC_SPEC: ${{ env.PYAPP_EXEC_SPEC }}
           PYAPP_PYTHON_VERSION: ${{ env.PYAPP_PYTHON_VERSION }}
         run: |
           set -eu
-          # Resolve the actual wheel filename so PyApp consumes a single
-          # explicit artifact rather than guessing.
-          wheel="$(ls dist/novetest-*-py3-none-any.whl | head -n1)"
+          # Resolve the wheel as an ABSOLUTE path. The subsequent `cd pyapp-src`
+          # below would invalidate any relative path before PyApp's build.rs
+          # reads PYAPP_PROJECT_PATH (PyApp v0.22.0 panics with
+          # "Project path is not a file: dist/novetest-...whl" otherwise).
+          wheel="$(ls "$GITHUB_WORKSPACE/dist/"novetest-*-py3-none-any.whl | head -n1)"
           echo "Wrapping wheel: $wheel"
           export PYAPP_PROJECT_PATH="$wheel"
           cd pyapp-src
