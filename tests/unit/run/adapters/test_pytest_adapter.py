@@ -9,6 +9,7 @@ isolation is verified by exercising the adapter directly here.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,11 +81,29 @@ async def test_conftest_import_error_raises_unparseable(tmp_path: Path) -> None:
 async def test_pytest_unavailable_raises_typed_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Point sys.executable at a binary that cannot run ``-m pytest``."""
+    """Point sys.executable at a binary that exits non-zero on every invocation.
+
+    The adapter spawns ``<sys.executable> -m pytest ...``. We need a real
+    executable that exists, spawns successfully, and exits non-zero
+    regardless of args — so the JSON report never lands and the adapter
+    wraps the failure in ``AdapterInvocationError``. We write a tiny
+    always-fail script under ``tmp_path`` rather than relying on
+    ``/bin/false`` (Linux-only path; macOS ships ``/usr/bin/false`` and
+    Windows has no such binary), so the test runs identically on every
+    CI matrix cell.
+    """
 
     import novetest.run.adapters.pytest_adapter as adapter
 
-    monkeypatch.setattr(adapter.sys, "executable", "/bin/false")
+    if sys.platform == "win32":
+        fake = tmp_path / "always_fail.bat"
+        fake.write_text("@echo off\r\nexit /b 1\r\n", encoding="utf-8")
+    else:
+        fake = tmp_path / "always_fail"
+        fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake.chmod(0o755)
+
+    monkeypatch.setattr(adapter.sys, "executable", str(fake))
     target = resolve_test_target("", tmp_path)
     with pytest.raises(AdapterInvocationError):
         await run_pytest(target, artifact_dir=tmp_path, timeout=30.0)
