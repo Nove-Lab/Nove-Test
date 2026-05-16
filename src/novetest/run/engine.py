@@ -12,13 +12,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from novetest.models import RunRecord
+from novetest.run.adapters.jest_adapter import run_jest
 from novetest.run.adapters.pytest_adapter import run_pytest
 from novetest.run.engine_selector import select_native_engine
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.normalizer import normalize_native_result
 from novetest.run.readiness import assess_engine_readiness
 from novetest.run.reference import assign_run_reference
-from novetest.run.types import NativeEngineContext, TestTarget
+from novetest.run.types import NativeEngineContext, NativeResult, TestTarget
 
 
 async def execute(
@@ -77,12 +78,8 @@ async def execute_with_engine_context(
     advisory to the caller, not to the workflow shape.
     """
 
-    if native_engine_context.engine_name != "pytest":
-        raise EngineNotSupportedError(
-            f"adapter for {native_engine_context.engine_name!r} not implemented in Phase 1"
-        )
-
-    native_result = await run_pytest(
+    native_result = await _invoke_adapter(
+        native_engine_context,
         test_target,
         artifact_dir=artifact_dir,
         timeout=timeout,
@@ -102,3 +99,33 @@ async def execute_with_engine_context(
         target_type=test_target.target_type,
     )
     return assign_run_reference(record, run_id=run_id)
+
+
+async def _invoke_adapter(
+    native_engine_context: NativeEngineContext,
+    test_target: TestTarget,
+    *,
+    artifact_dir: Path,
+    timeout: float | None,
+    collect_coverage: bool,
+) -> NativeResult:
+    """Dispatch to the per-engine adapter or raise `EngineNotSupportedError`."""
+
+    engine_name = native_engine_context.engine_name
+    if engine_name == "pytest":
+        return await run_pytest(
+            test_target,
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            collect_coverage=collect_coverage,
+        )
+    if engine_name == "jest":
+        return await run_jest(
+            test_target,
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            collect_coverage=collect_coverage,
+        )
+    raise EngineNotSupportedError(
+        f"adapter for {engine_name!r} not implemented yet"
+    )

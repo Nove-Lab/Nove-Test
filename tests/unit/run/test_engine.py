@@ -75,12 +75,72 @@ async def test_execute_with_engine_context_runs_pytest(
 async def test_execute_with_engine_context_rejects_unimplemented_engine(
     basic_workspace: Path, tmp_path: Path
 ) -> None:
+    """Phase 2.5 added jest, so this test now uses xunit as the
+    'still-unimplemented' example. junit / go-test / cargo-test would all
+    behave identically; xunit is chosen so the test does not become stale
+    if a follow-up slice adds another adapter.
+    """
+
     target = resolve_test_target("", basic_workspace)
-    context = NativeEngineContext(ecosystem="javascript-typescript", engine_name="jest")
+    context = NativeEngineContext(ecosystem="dotnet", engine_name="xunit")
     with pytest.raises(EngineNotSupportedError):
         await execute_with_engine_context(
             target, context, artifact_dir=tmp_path, timeout=10.0
         )
+
+
+async def test_execute_with_engine_context_dispatches_jest(
+    jest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`execute_with_engine_context(engine_name='jest')` must call ``run_jest``.
+
+    Stubs ``run_jest`` at the engine seam so we observe dispatch without
+    requiring Node.js. The same NativeResult-fake pattern as the pytest
+    `test_execute_threads_collect_coverage_kwarg_into_adapter` case.
+    """
+
+    called_with: dict[str, Any] = {}
+
+    async def fake_run_jest(test_target: Any, **kwargs: Any) -> NativeResult:
+        called_with["test_target"] = test_target
+        called_with.update(kwargs)
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        report_path = native_dir / "jest-results.json"
+        report_path.write_text("{}", encoding="utf-8")
+        return NativeResult(
+            engine_name="jest",
+            payload={
+                "success": True,
+                "numPassedTests": 0,
+                "numFailedTests": 0,
+                "numPendingTests": 0,
+                "numTodoTests": 0,
+                "numTotalTests": 0,
+                "testResults": [],
+            },
+            artifact_paths={"jest_json_report": report_path},
+            returncode=0,
+            started_at_ms=0,
+            completed_at_ms=0,
+            engine_version="29.7.0",
+        )
+
+    monkeypatch.setattr(engine_module, "run_jest", fake_run_jest)
+    target = resolve_test_target("__tests__/", jest_basic_workspace)
+    context = NativeEngineContext(
+        ecosystem="javascript-typescript", engine_name="jest"
+    )
+    record = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert called_with.get("collect_coverage") is False
+    assert record.engine_name == "jest"
+    assert record.ecosystem == "javascript-typescript"
+    assert record.engine_version == "29.7.0"
 
 
 async def test_run_id_can_be_pinned(
