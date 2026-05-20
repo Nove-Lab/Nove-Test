@@ -41,6 +41,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node.js powers the jest Native Engine adapter. Without it the jest
+      # integration tests (`test_jest_basic.py` + the jest-coverage slice)
+      # skip on every runner. Pin an LTS >= 18 — the jest adapter's readiness
+      # hint. Applied to all matrix cells: the adapter's `--watchman=false`
+      # exists for Windows predictability, so cross-OS jest is worth running.
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Install each jest fixture's `node_modules` so the integration tests'
+      # `_require_node_and_local_jest()` guard finds a local jest install.
+      # Iterate over every fixture carrying a `package.json` instead of
+      # hardcoding names — a parallel slice adds `jest-basic-coverage/`.
+      # `shell: bash` keeps the loop portable on `windows-latest`, where
+      # `run:` steps default to pwsh. Runs before `pytest` below.
+      - name: Install jest fixture dependencies
+        shell: bash
+        run: |
+          for d in tests/fixtures/projects/*/; do
+            if [ -f "${d}package.json" ]; then
+              echo "npm install: ${d}"
+              (cd "${d}" && npm install --no-audit --no-fund)
+            fi
+          done
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
