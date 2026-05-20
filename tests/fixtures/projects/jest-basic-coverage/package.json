@@ -1,0 +1,13 @@
+{
+  "name": "jest-basic-coverage",
+  "version": "0.0.0",
+  "description": "Nove Test fixture: minimal jest project for exercising Istanbul coverage emission.",
+  "private": true,
+  "license": "Unlicense",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

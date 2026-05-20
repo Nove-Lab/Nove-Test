@@ -35,3 +35,8 @@ def coverage_workspace() -> Path:
 @pytest.fixture
 def jest_basic_workspace() -> Path:
     return FIXTURE_PROJECTS_ROOT / "jest-basic"
+
+
+@pytest.fixture
+def jest_basic_coverage_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "jest-basic-coverage"

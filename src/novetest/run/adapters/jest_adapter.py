@@ -14,10 +14,12 @@ Foundations parity with pytest_adapter:
   under ``<artifact_dir>/native/``. The orchestration layer rewrites
   those absolute paths to Project-Store-relative strings before
   persisting the Run Record.
-- ``collect_coverage`` is **accepted but unwired** in this slice. The
-  Coverage team's Istanbul-JSON parser slice has not landed; until it
-  does, requesting coverage from the jest adapter is a no-op (no flags
-  added, no Istanbul artifact emitted). Documented in the kwarg.
+- ``collect_coverage=True`` adds ``--coverage --coverageReporters=json``
+  plus ``--coverageDirectory=<...>/native/coverage`` and registers the
+  resulting Istanbul ``coverage-final.json`` under the ``coverage_json``
+  artifact key — the SAME key the pytest adapter uses, so the Coverage
+  engine looks it up uniformly and dispatches format-handling on
+  ``engine_name``.
 
 Unlike pytest, jest has **no plugin-autoload concept**: there is no
 ``JEST_DISABLE_PLUGIN_AUTOLOAD`` equivalent. Workspace-local
@@ -41,6 +43,9 @@ from novetest.utils.asyncio_subprocess import run_subprocess
 JEST_REPORT_FILENAME = "jest-results.json"
 STDOUT_LOG_FILENAME = "stdout.log"
 STDERR_LOG_FILENAME = "stderr.log"
+COVERAGE_DIR_NAME = "coverage"
+# jest's `json` coverage reporter always names its output `coverage-final.json`.
+COVERAGE_FINAL_FILENAME = "coverage-final.json"
 
 
 async def run_jest(
@@ -56,20 +61,22 @@ async def run_jest(
     ``.novetest/run/artifacts/run_<ulid>/`` where ``native/`` is created;
     in tests, pass a ``tmp_path``-rooted directory.
 
-    ``collect_coverage`` is accepted for API parity with the pytest
-    adapter but **is a no-op in this slice**. Once the Coverage team's
-    Istanbul-JSON parser lands, this kwarg will gate
-    ``--coverage --coverageReporters=json --coverageReporters=lcov`` per
-    `design/implementation-plan/engine-adapters.md` §2.
+    When ``collect_coverage`` is True, jest is invoked with
+    ``--coverage --coverageReporters=json`` and
+    ``--coverageDirectory=<artifact_dir>/native/coverage`` so Istanbul's
+    ``coverage-final.json`` lands under the per-run artifact directory
+    (never the workspace's default ``<rootDir>/coverage``). That file is
+    registered in ``artifact_paths`` under ``coverage_json``. Defaults to
+    False so non-coverage callers see byte-identical behavior.
     """
-
-    del collect_coverage  # intentionally unwired; see docstring
 
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)
     report_path = native_dir / JEST_REPORT_FILENAME
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
+    coverage_dir = native_dir / COVERAGE_DIR_NAME
+    coverage_json_path = coverage_dir / COVERAGE_FINAL_FILENAME
 
     # `npx jest` resolves to the workspace-local jest install when
     # `node_modules/.bin/jest` is present (which is what readiness gates on).
@@ -86,6 +93,18 @@ async def run_jest(
         "--reporters=default",
         "--watchman=false",
     ]
+    if collect_coverage:
+        # `json` is the only reporter that produces `coverage-final.json`
+        # (Istanbul's raw format). `--coverageDirectory` redirects the
+        # report out of the workspace's default `<rootDir>/coverage` into
+        # the per-run artifact dir so the SuT tree is never written to.
+        argv.extend(
+            [
+                "--coverage",
+                "--coverageReporters=json",
+                f"--coverageDirectory={coverage_dir}",
+            ]
+        )
     if test_target.target_expression:
         argv.append(test_target.target_expression)
 
@@ -154,16 +173,31 @@ async def run_jest(
             kind="unparseable-output",
         )
 
+    if collect_coverage and not coverage_json_path.exists():
+        stderr_text = result.stderr.decode("utf-8", errors="replace")
+        raise AdapterInvocationError(
+            f"jest --coverage did not write {coverage_json_path}; "
+            f"stderr tail: {stderr_text[-400:]}",
+            kind="unparseable-output",
+        )
+
     engine_version = _read_jest_version(test_target.workspace_path)
+
+    artifact_paths: dict[str, Path] = {
+        "jest_json_report": report_path,
+        "stdout": stdout_path,
+        "stderr": stderr_path,
+    }
+    if collect_coverage:
+        # Absolute Path at the adapter layer; Memory rewrites it to a
+        # Project-Store-relative string. Only registered when coverage was
+        # requested AND the file actually landed (asserted just above).
+        artifact_paths["coverage_json"] = coverage_json_path
 
     return NativeResult(
         engine_name="jest",
         payload=payload,
-        artifact_paths={
-            "jest_json_report": report_path,
-            "stdout": stdout_path,
-            "stderr": stderr_path,
-        },
+        artifact_paths=artifact_paths,
         returncode=result.returncode,
         started_at_ms=started_ms,
         completed_at_ms=completed_ms,
@@ -224,6 +258,8 @@ def _read_jest_version(workspace: Path) -> str | None:
 
 
 __all__ = [
+    "COVERAGE_DIR_NAME",
+    "COVERAGE_FINAL_FILENAME",
     "JEST_REPORT_FILENAME",
     "STDERR_LOG_FILENAME",
     "STDOUT_LOG_FILENAME",
