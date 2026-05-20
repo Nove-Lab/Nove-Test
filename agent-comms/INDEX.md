@@ -12,6 +12,7 @@ _(none)_
 - [memory-team-2026-05-20-entry-id-contract-note.md](./tasks/memory-team-2026-05-20-entry-id-contract-note.md) — `novetest-pm-team → novetest-memory-team` (entry-id-contract-note)
 - [orchestration-team-2026-05-20-inspect-aggregated-view.md](./tasks/orchestration-team-2026-05-20-inspect-aggregated-view.md) — `novetest-pm-team → novetest-orchestration-team` (inspect-aggregated-view)
 - [release-team-2026-05-20-ci-node-cell.md](./tasks/release-team-2026-05-20-ci-node-cell.md) — `novetest-pm-team → novetest-release-team` (ci-node-cell)
+- [release-team-2026-05-21-restore-windows-jest-ci.md](./tasks/release-team-2026-05-21-restore-windows-jest-ci.md) — `novetest-pm-team → novetest-release-team` (restore-windows-jest-ci)
 - [run-team-2026-05-20-jest-coverage-wiring.md](./tasks/run-team-2026-05-20-jest-coverage-wiring.md) — `novetest-pm-team → novetest-run-team` (jest-coverage-wiring)
 - [run-team-2026-05-21-jest-adapter-windows-npx.md](./tasks/run-team-2026-05-21-jest-adapter-windows-npx.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-windows-npx)
 - [2026-05-20-ci-node-cell.md](./verifications/2026-05-20-ci-node-cell.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-cell)
