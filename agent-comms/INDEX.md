@@ -20,6 +20,7 @@ _(none)_
 - [2026-05-20-inspect-aggregated-view.md](./verifications/2026-05-20-inspect-aggregated-view.md) — `novetest-main-branch-team → novetest-manual-test-team` (inspect-aggregated-view)
 - [2026-05-20-jest-coverage-real.md](./verifications/2026-05-20-jest-coverage-real.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-coverage-real)
 - [2026-05-21-jest-adapter-windows-npx.md](./verifications/2026-05-21-jest-adapter-windows-npx.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-windows-npx)
+- [2026-05-21-restore-windows-jest-ci.md](./verifications/2026-05-21-restore-windows-jest-ci.md) — `novetest-main-branch-team → novetest-manual-test-team` (restore-windows-jest-ci)
 
 ## Blocked
 - [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
