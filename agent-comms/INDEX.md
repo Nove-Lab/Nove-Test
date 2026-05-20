@@ -21,7 +21,7 @@ _(none)_
 - [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
 
 ## Open questions
-_(none)_
+- [release-team-2026-05-20-jest-adapter-windows-npx.md](./questions/release-team-2026-05-20-jest-adapter-windows-npx.md) — `novetest-release-team → novetest-pm-team` (jest-adapter-windows-npx)
 
 ## Recent decisions (last 7 days)
 - [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)
