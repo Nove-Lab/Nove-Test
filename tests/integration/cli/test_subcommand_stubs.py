@@ -4,12 +4,12 @@ import pytest
 
 
 # Commands that remain as Phase 1 stubs (every other Phase 1 surface — init,
-# run, status, memory list/show/delete — is implemented and has its own
-# integration coverage under tests/integration/orchestration/).
+# run, status, memory list/show/delete — plus the Phase 2 `coverage` and
+# `inspect` verbs are implemented and have their own integration coverage
+# under tests/integration/orchestration/).
 @pytest.mark.parametrize(
     "argv,expected_command",
     [
-        (["inspect"], "inspect"),
         (["compare"], "compare"),
         (["replay"], "replay"),
         (["localization"], "localization"),

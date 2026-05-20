@@ -43,6 +43,7 @@ from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
 from novetest.orchestration.workflows import (
+    build_inspect_view,
     build_status_view,
     initialize_project_workspace,
     run_target_in_store,
@@ -534,6 +535,46 @@ def _coverage_delta_payload(
 
 
 # ---------------------------------------------------------------------------
+# Aggregated single-run view
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="inspect")
+def inspect_cmd(run_id: str) -> None:
+    """Show the aggregated single-run view for ``run_id``.
+
+    Composes the Run Record summary with the persisted Coverage Facts (the
+    same ``coverage_outcome`` block ``coverage show`` emits). The
+    Regression / Localization / Replay sections are present-but-
+    ``unavailable`` markers until their engines land in Phase 3/4/5.
+    ``inspect`` executes nothing — it is a pure read over stored evidence.
+
+    A stale or fake ``run_id`` surfaces a structured ``not-found`` error
+    (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
+    """
+    store = _require_store("inspect")
+    view = build_inspect_view(store, run_id)
+    if view is None:
+        _emit_and_exit(
+            Envelope(
+                command="inspect",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="not-found",
+                        message=f"No Memory Entry for run_id={run_id!r}",
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    _emit_and_exit(
+        Envelope(command="inspect", ok=True, data=view.to_dict()),
+        EXIT_OK,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Remaining stubs (not in Phase 1 Run+Memory scope)
 # ---------------------------------------------------------------------------
 
@@ -551,7 +592,7 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-for _name in ("test", "inspect", "compare", "replay", "localization"):
+for _name in ("test", "compare", "replay", "localization"):
     _register_flat_stub(_name)
 _register_group_stub("regression", ("compare", "latest"))
 
