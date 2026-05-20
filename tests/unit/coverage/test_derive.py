@@ -201,6 +201,131 @@ def test_derive_is_idempotent_overwrites_persisted_facts(
     assert first.files == second.files
 
 
+def _seed_jest_run(
+    store: Any,
+    *,
+    run_reference: RunReference,
+    payload: dict[str, Any],
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """Persist a jest RunRecord with an Istanbul `coverage-final.json` payload."""
+    rel = f"run/artifacts/run_{run_reference.run_id}/native/coverage/coverage-final.json"
+    target = store.path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    store_run_evidence(
+        store,
+        make_run_record(
+            run_reference=run_reference,
+            artifact_paths={"coverage_json": rel},
+            engine_name="jest",
+            ecosystem="javascript-typescript",
+        ),
+    )
+
+
+def test_derive_routes_jest_engine_through_istanbul_parser(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """A `jest` Run Record's Istanbul payload yields a real CoverageFactSet.
+
+    Confirms `derive_coverage_facts` dispatches on `engine_name` and that
+    Istanbul's absolute paths are relativized against the workspace root
+    (`store.path.parent`).
+    """
+    store = get_project_store_state(initialized_store)
+    workspace = store.path.parent
+    payload = {
+        str(workspace / "src" / "calc.js"): {
+            "path": str(workspace / "src" / "calc.js"),
+            "statementMap": {
+                "0": {
+                    "start": {"line": 1, "column": 0},
+                    "end": {"line": 1, "column": 10},
+                },
+                "1": {
+                    "start": {"line": 4, "column": 2},
+                    "end": {"line": 4, "column": 18},
+                },
+            },
+            "s": {"0": 2, "1": 0},
+        }
+    }
+    _seed_jest_run(
+        store,
+        run_reference=sample_run_reference,
+        payload=payload,
+        make_run_record=make_run_record,
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+
+    assert isinstance(result, CoverageFactSet)
+    assert result.engine_name == "jest"
+    assert result.ecosystem == "javascript-typescript"
+    assert result.mapping_granularity == "aggregate"
+    assert [f.file_path for f in result.files] == ["src/calc.js"]
+    assert result.files[0].executed_lines == (1,)
+    assert result.files[0].missing_lines == (4,)
+    assert result.summary.num_statements == 2
+    assert result.summary.covered_statements == 1
+
+
+def test_derive_jest_persists_facts_at_load_bearing_path(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """The jest path writes the same load-bearing `coverage_facts.json`."""
+    store = get_project_store_state(initialized_store)
+    workspace = store.path.parent
+    payload = {
+        str(workspace / "src" / "a.js"): {
+            "path": str(workspace / "src" / "a.js"),
+            "statementMap": {
+                "0": {
+                    "start": {"line": 1, "column": 0},
+                    "end": {"line": 1, "column": 5},
+                }
+            },
+            "s": {"0": 1},
+        }
+    }
+    _seed_jest_run(
+        store,
+        run_reference=sample_run_reference,
+        payload=payload,
+        make_run_record=make_run_record,
+    )
+
+    derive_coverage_facts(store, sample_run_reference)
+
+    assert coverage_facts_path(store, sample_run_reference.run_id).is_file()
+
+
+def test_derive_jest_malformed_istanbul_entry_returns_unavailable(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """An Istanbul entry missing `statementMap` surfaces as corrupt."""
+    store = get_project_store_state(initialized_store)
+    workspace = store.path.parent
+    payload = {str(workspace / "src" / "a.js"): {"s": {}}}
+    _seed_jest_run(
+        store,
+        run_reference=sample_run_reference,
+        payload=payload,
+        make_run_record=make_run_record,
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_NATIVE_PAYLOAD_CORRUPT
+
+
 def test_derive_handles_top_level_json_array_as_corrupt(
     initialized_store: Path,
     sample_run_reference: RunReference,
