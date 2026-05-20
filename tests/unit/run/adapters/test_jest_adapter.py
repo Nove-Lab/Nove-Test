@@ -1,8 +1,10 @@
 """Unit tests for the jest Native Engine adapter.
 
 The adapter spawns ``npx jest`` as a subprocess. To avoid requiring Node.js
-in the CI matrix (jest is not yet on any cell), every test here stubs the
-subprocess seam via ``monkeypatch`` on ``novetest.run.adapters.jest_adapter.run_subprocess``.
+in the CI matrix, every test here stubs the subprocess seam via
+``monkeypatch`` on ``novetest.run.adapters.jest_adapter.run_subprocess``,
+and the ``_stub_npx_on_path`` autouse fixture stubs ``shutil.which`` so the
+adapter's up-front `npx` resolution succeeds on a Node-less box.
 
 The integration test under ``tests/integration/run/`` exercises the real
 binary and skips when Node.js is absent.
@@ -11,6 +13,7 @@ binary and skips when Node.js is absent.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +23,28 @@ from novetest.run.adapters.jest_adapter import (
     JEST_REPORT_FILENAME,
     STDERR_LOG_FILENAME,
     STDOUT_LOG_FILENAME,
+    _npx_launcher,
     run_jest,
 )
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.target_resolver import resolve_test_target
 from novetest.utils.asyncio_subprocess import SubprocessResult
+
+
+_FAKE_NPX = "/usr/bin/npx"
+
+
+@pytest.fixture(autouse=True)
+def _stub_npx_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every adapter test run as if `npx` is resolvable on PATH.
+
+    `run_jest` calls `shutil.which("npx")` before spawning; on a Node-less
+    box that returns ``None`` and the adapter raises `missing-binary`
+    before the stubbed subprocess is ever reached. Default every test to a
+    resolvable `npx`; the missing-binary test overrides this.
+    """
+
+    monkeypatch.setattr(shutil, "which", lambda name: _FAKE_NPX)
 
 
 def _sample_jest_payload(success: bool = True, num_failed: int = 0) -> dict[str, Any]:
@@ -228,7 +248,9 @@ async def test_argv_includes_target_expression(
     target = resolve_test_target("__tests__/math.test.js", jest_basic_workspace)
     await run_jest(target, artifact_dir=tmp_path, timeout=60.0)
 
-    assert captured_argv[0] == "npx"
+    # On POSIX the launcher is the `shutil.which`-resolved absolute path
+    # (stubbed to `_FAKE_NPX` by the autouse fixture).
+    assert captured_argv[0] == _FAKE_NPX
     assert captured_argv[1] == "jest"
     assert "--ci" in captured_argv
     assert "--json" in captured_argv
@@ -276,12 +298,31 @@ async def test_empty_target_expression_runs_full_suite(
     assert captured_argv[-1] == "--watchman=false"
 
 
-async def test_missing_npx_binary_raises_typed_error(
+async def test_unresolvable_npx_raises_typed_error(
     jest_basic_workspace: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FileNotFoundError on spawn maps to ``missing-binary``."""
+    """When `shutil.which("npx")` returns None, the adapter raises a typed
+    ``missing-binary`` error up front — before any subprocess spawn."""
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    target = resolve_test_target("", jest_basic_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_jest(target, artifact_dir=tmp_path, timeout=10.0)
+    assert exc_info.value.kind == "missing-binary"
+    assert exc_info.value.install_hint is not None
+    assert "Node.js" in exc_info.value.install_hint
+
+
+async def test_launcher_exec_failure_falls_back_to_missing_binary(
+    jest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `FileNotFoundError` from the spawn itself (TOCTOU race, or a
+    missing `cmd.exe` on Windows) still maps to ``missing-binary``."""
 
     import novetest.run.adapters.jest_adapter as adapter
 
@@ -299,6 +340,26 @@ async def test_missing_npx_binary_raises_typed_error(
     assert exc_info.value.kind == "missing-binary"
     assert exc_info.value.install_hint is not None
     assert "Node.js" in exc_info.value.install_hint
+
+
+def test_npx_launcher_posix_uses_resolved_path() -> None:
+    """On POSIX the resolved absolute `npx` path is exec'd directly."""
+
+    assert _npx_launcher("/usr/local/bin/npx", windows=False) == ["/usr/local/bin/npx"]
+
+
+def test_npx_launcher_windows_wraps_in_cmd() -> None:
+    """On Windows `npx` is a `.cmd` batch shim that `CreateProcess` cannot
+    run directly, so the launcher routes through `cmd.exe /c`. The bare
+    name `npx` (not the resolved `.cmd` path) is handed to `cmd` so its
+    `PATHEXT` resolution applies and `cmd /c`'s leading-quote-stripping
+    rule is sidestepped.
+    """
+
+    launcher = _npx_launcher(
+        r"C:\Program Files\nodejs\npx.cmd", windows=True
+    )
+    assert launcher == ["cmd", "/c", "npx"]
 
 
 async def test_jest_not_installed_in_workspace_maps_to_missing_plugin(

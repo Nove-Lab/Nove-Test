@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -78,13 +79,28 @@ async def run_jest(
     coverage_dir = native_dir / COVERAGE_DIR_NAME
     coverage_json_path = coverage_dir / COVERAGE_FINAL_FILENAME
 
+    # Resolve `npx` up front. `shutil.which` honours Windows `PATHEXT`, so
+    # it returns `npx.cmd` there — the SAME resolution the engine-readiness
+    # probe (`readiness._assess_jest_readiness`) uses, so the readiness
+    # guard and this exec can never disagree. An absent `npx` is reported
+    # as a typed error here rather than letting a downstream
+    # `FileNotFoundError` surface a less specific message.
+    npx_path = shutil.which("npx")
+    if npx_path is None:
+        raise AdapterInvocationError(
+            "`npx` not found on PATH; install Node.js >=18 and ensure "
+            "`node`/`npx` are on PATH",
+            kind="missing-binary",
+            install_hint="install Node.js >=18 and ensure `node`/`npx` are on PATH",
+        )
+
     # `npx jest` resolves to the workspace-local jest install when
     # `node_modules/.bin/jest` is present (which is what readiness gates on).
     # `--ci` disables watch + interactive UI; `--testLocationInResults`
     # is mandatory for mapping nodeids → file:line per engine-adapters.md §2;
     # `--watchman=false` makes Windows behavior predictable.
     argv: list[str] = [
-        "npx",
+        *_npx_launcher(npx_path, windows=os.name == "nt"),
         "jest",
         "--ci",
         "--json",
@@ -118,14 +134,13 @@ async def run_jest(
             timeout=timeout,
         )
     except FileNotFoundError as exc:
-        # `npx` is not on PATH (Node.js not installed). Surface the
-        # actionable hint without bothering the user with a Python
-        # traceback. Mirrors pytest_adapter's "missing-engine" semantics
-        # but uses "missing-binary" because the missing thing is the
-        # *binary on PATH*, not a Python module.
+        # `npx` was resolved above, so this is a narrow fallback: a TOCTOU
+        # race (npx removed between resolution and exec) or, on Windows, a
+        # missing `cmd.exe`. Still surface a typed error rather than a raw
+        # Python traceback.
         raise AdapterInvocationError(
-            "`npx` not found on PATH; install Node.js >=18 and ensure "
-            "`node`/`npx` are on PATH",
+            "the jest launcher could not be executed; ensure Node.js >=18 "
+            "is installed and `node`/`npx` are on PATH",
             kind="missing-binary",
             install_hint="install Node.js >=18 and ensure `node`/`npx` are on PATH",
         ) from exc
@@ -203,6 +218,33 @@ async def run_jest(
         completed_at_ms=completed_ms,
         engine_version=engine_version,
     )
+
+
+def _npx_launcher(npx_path: str, *, windows: bool) -> list[str]:
+    """Build the launcher prefix that invokes jest through ``npx``.
+
+    POSIX: ``npx`` (resolved to its absolute path by ``shutil.which``) is
+    exec'd directly — it is a normal script with a shebang.
+
+    Windows: ``npx`` is ``npx.cmd``, a *batch* shim. Windows
+    ``CreateProcess`` — which ``asyncio.create_subprocess_exec`` calls —
+    cannot execute ``.cmd``/``.bat`` files; it only runs real PE binaries
+    (and appends only ``.exe`` when resolving a bare name, which is exactly
+    why a bare ``npx`` fails there). So the shim must run through the
+    command interpreter: ``cmd.exe /c npx ...``.
+
+    The bare name ``npx`` (not ``npx_path``) is handed to ``cmd`` on
+    purpose: ``cmd`` applies ``PATHEXT`` to locate ``npx.cmd`` — the exact
+    resolution ``shutil.which`` already confirmed — and a *bare* first
+    token sidesteps ``cmd /c``'s leading-quote-stripping rule, which would
+    otherwise corrupt the command line when later arguments (e.g. a
+    ``--outputFile=`` path) contain spaces and get quoted. ``cmd`` itself
+    resolves because ``CreateProcess`` does append ``.exe`` to a bare name.
+    """
+
+    if windows:
+        return ["cmd", "/c", "npx"]
+    return [npx_path]
 
 
 def _build_child_env() -> dict[str, str]:
