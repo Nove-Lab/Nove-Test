@@ -53,4 +53,5 @@
 - Project-scoped state - Memory Entries, Run History, Coverage / Regression / Localization / Replay artifacts, Recommendations, Status caches - lives inside `.novetest/`. Users are not expected to read or edit those files directly (NFR-MEM-004); the Memory and Orchestration command surfaces are the supported access path.
 - Tombstone behavior (REQ-MEM-005, NFR-MEM-003) is exposed via the `delete_*` interfaces; downstream Evidence Citation consumers can still resolve a deleted Run Reference to a tombstoned Memory Entry.
 - Memory does not derive Coverage Fact, Regression Fact, Localization Finding, or Replay Result; those engines call `retrieve_run_evidence` and `find_*` interfaces here as their source.
+- In the v1 Project Store, a Memory Entry's `entryId` and its `runRecord.runReference.runId` are equal. Both identifiers are kept on the wire (e.g. in the `store_run_evidence` output above) to preserve the domain-model distinction between Memory Entry identity and Run Reference identity; consumers MUST NOT assume this equality holds in future Project Store versions.
 - All retrieval interfaces honor the durability guarantee from NFR-MEM-001.
