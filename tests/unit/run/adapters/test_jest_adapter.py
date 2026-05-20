@@ -248,15 +248,17 @@ async def test_argv_includes_target_expression(
     target = resolve_test_target("__tests__/math.test.js", jest_basic_workspace)
     await run_jest(target, artifact_dir=tmp_path, timeout=60.0)
 
-    # On POSIX the launcher is the `shutil.which`-resolved absolute path
-    # (stubbed to `_FAKE_NPX` by the autouse fixture).
-    assert captured_argv[0] == _FAKE_NPX
-    assert captured_argv[1] == "jest"
+    # The launcher prefix is OS-specific (POSIX: resolved `npx` path;
+    # Windows: `cmd /c npx`) and is covered separately by the
+    # `_npx_launcher` tests. This test asserts only the OS-invariant
+    # concern it exists for: jest is invoked with the canonical flags and
+    # the target expression is appended as the final positional.
+    assert "jest" in captured_argv
     assert "--ci" in captured_argv
     assert "--json" in captured_argv
     assert "--testLocationInResults" in captured_argv
     assert "--watchman=false" in captured_argv
-    assert "__tests__/math.test.js" in captured_argv
+    assert captured_argv[-1] == "__tests__/math.test.js"
 
 
 async def test_empty_target_expression_runs_full_suite(
