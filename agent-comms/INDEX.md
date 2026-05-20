@@ -8,28 +8,13 @@ Last regenerated: 2026-05-21
 _(none)_
 
 ## Pending
-- [coverage-team-2026-05-20-jest-istanbul-parser.md](./tasks/coverage-team-2026-05-20-jest-istanbul-parser.md) — `novetest-pm-team → novetest-coverage-team` (jest-istanbul-parser)
-- [memory-team-2026-05-20-entry-id-contract-note.md](./tasks/memory-team-2026-05-20-entry-id-contract-note.md) — `novetest-pm-team → novetest-memory-team` (entry-id-contract-note)
-- [orchestration-team-2026-05-20-inspect-aggregated-view.md](./tasks/orchestration-team-2026-05-20-inspect-aggregated-view.md) — `novetest-pm-team → novetest-orchestration-team` (inspect-aggregated-view)
-- [release-team-2026-05-20-ci-node-cell.md](./tasks/release-team-2026-05-20-ci-node-cell.md) — `novetest-pm-team → novetest-release-team` (ci-node-cell)
-- [release-team-2026-05-21-restore-windows-jest-ci.md](./tasks/release-team-2026-05-21-restore-windows-jest-ci.md) — `novetest-pm-team → novetest-release-team` (restore-windows-jest-ci)
-- [run-team-2026-05-20-jest-coverage-wiring.md](./tasks/run-team-2026-05-20-jest-coverage-wiring.md) — `novetest-pm-team → novetest-run-team` (jest-coverage-wiring)
-- [run-team-2026-05-21-jest-adapter-unit-test-windows.md](./tasks/run-team-2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-unit-test-windows)
-- [run-team-2026-05-21-jest-adapter-windows-npx.md](./tasks/run-team-2026-05-21-jest-adapter-windows-npx.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-windows-npx)
-- [2026-05-20-ci-node-cell.md](./verifications/2026-05-20-ci-node-cell.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-cell)
-- [2026-05-20-ci-node-win-fallback.md](./verifications/2026-05-20-ci-node-win-fallback.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-win-fallback)
-- [2026-05-20-inspect-aggregated-view.md](./verifications/2026-05-20-inspect-aggregated-view.md) — `novetest-main-branch-team → novetest-manual-test-team` (inspect-aggregated-view)
-- [2026-05-20-jest-coverage-real.md](./verifications/2026-05-20-jest-coverage-real.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-coverage-real)
-- [2026-05-21-jest-adapter-unit-test-windows.md](./verifications/2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-unit-test-windows)
-- [2026-05-21-jest-adapter-windows-npx.md](./verifications/2026-05-21-jest-adapter-windows-npx.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-windows-npx)
-- [2026-05-21-restore-windows-jest-ci.md](./verifications/2026-05-21-restore-windows-jest-ci.md) — `novetest-main-branch-team → novetest-manual-test-team` (restore-windows-jest-ci)
-
-## Blocked
 - [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
 
+## Blocked
+_(none)_
+
 ## Open questions
-- [release-team-2026-05-20-jest-adapter-windows-npx.md](./questions/release-team-2026-05-20-jest-adapter-windows-npx.md) — `novetest-release-team → novetest-pm-team` (jest-adapter-windows-npx)
-- [release-team-2026-05-21-jest-adapter-unit-test-windows.md](./questions/release-team-2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-release-team → novetest-pm-team` (jest-adapter-unit-test-windows)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)
@@ -45,3 +30,4 @@ _(none)_
 - [2026-05-16-phase0-complete-and-phase2-2.5-entry.md](./history/2026-05-16-phase0-complete-and-phase2-2.5-entry.md) — `novetest-pm-team → all` (phase0-complete-and-phase2-2.5-entry)
 - [2026-05-16-phase0-gha-attempt-red.md](./history/2026-05-16-phase0-gha-attempt-red.md) — `novetest-pm-team → all` (phase0-gha-attempt-red)
 - [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)
+- [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)

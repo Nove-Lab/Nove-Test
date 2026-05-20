@@ -2,21 +2,19 @@
 from: novetest-pm-team
 to: novetest-coverage-team
 type: task
-status: blocked
+status: pending
 created: 2026-05-20
 slug: coverage-compare-perf
-blocked-by: [tasks/coverage-team-2026-05-20-jest-istanbul-parser.md]
 related:
   - decisions/2026-05-15-coverage-facts-json-layout.md
 ---
 
 # Task: NFR-COV-002 performance benchmark — `coverage diff` at 50k locations
 
-> **QUEUED — DO NOT DISPATCH YET.** Coverage team is occupied this cycle
-> with `jest-istanbul-parser`. This task is parked here as the prepared
-> scoping draft for the *next* Coverage slice. PM re-confirms before the
-> CEO dispatches it. Scoped from a `performance-engineer` specialist
-> review on 2026-05-20.
+> **QUEUED — ready to dispatch.** The `jest-istanbul-parser` slice this
+> task was blocked on merged 2026-05-20 (`e01df3c`). This is the next
+> Coverage slice — Phase 2 DoD #4, the last open Phase 2 bullet. Scoped
+> from a `performance-engineer` specialist review on 2026-05-20.
 
 ## Scope / Mission
 
