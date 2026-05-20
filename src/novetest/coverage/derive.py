@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 
+from novetest.coverage.istanbul_parser import parse_istanbul_json
 from novetest.coverage.parser import CoverageJsonParseError, parse_coverage_json
 from novetest.coverage.persistence import write_coverage_facts
 from novetest.coverage.results import (
@@ -104,13 +105,26 @@ def derive_coverage_facts(
             run_reference=record.run_reference,
         )
 
+    # Engine dispatch: jest emits Istanbul `coverage-final.json`, a
+    # different shape from coverage.py's JSON. Both parsers raise
+    # `CoverageJsonParseError` on a shape mismatch so the unavailable
+    # outcome below stays uniform.
     try:
-        fact_set = parse_coverage_json(
-            payload,
-            run_reference=record.run_reference,
-            engine_name=record.engine_name,
-            ecosystem=record.ecosystem,
-        )
+        if record.engine_name == "jest":
+            fact_set = parse_istanbul_json(
+                payload,
+                run_reference=record.run_reference,
+                engine_name=record.engine_name,
+                ecosystem=record.ecosystem,
+                workspace_root=store.path.parent,
+            )
+        else:
+            fact_set = parse_coverage_json(
+                payload,
+                run_reference=record.run_reference,
+                engine_name=record.engine_name,
+                ecosystem=record.ecosystem,
+            )
     except CoverageJsonParseError as exc:
         return CoverageUnavailable(
             reason=REASON_NATIVE_PAYLOAD_CORRUPT,
