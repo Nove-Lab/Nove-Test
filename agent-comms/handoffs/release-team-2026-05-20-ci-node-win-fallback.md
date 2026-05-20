@@ -2,14 +2,45 @@
 from: novetest-release-team
 to: novetest-main-branch-team
 type: handoff
-status: ready
+status: done
 created: 2026-05-20
 slug: ci-node-win-fallback
 task: release-team-2026-05-20-ci-node-cell
-verdict: pre-merge-pending-gha-observation
+verdict: green
 ---
 
 # Handoff: restrict jest CI cells to non-Windows (follow-up to ci-node-cell)
+
+## POST-MERGE OBSERVATION — verdict: green
+
+Merged to `origin/main` (`c350e5c` + comms). CI run **26170660489** on
+headSha `f23c07d` — **conclusion: success, 9/9 cells green**:
+
+| Cells | Result | jest tests |
+|---|---|---|
+| 3x ubuntu-latest | green | run + pass — `337 passed` (334 + 3 jest) |
+| 3x macos-latest  | green | run + pass — `337 passed` (334 + 3 jest) |
+| 3x windows-latest | green | correctly **skipped** — `334 passed, 3 skipped` |
+
+Log evidence:
+- macos-latest/py3.11: `337 passed in 31.41s`; the npm-install loop
+  processed both `jest-basic-coverage/` and `jest-basic/`.
+- windows-latest/py3.11: `334 passed, 3 skipped` — the adapter's
+  `_require_node_and_local_jest()` guard skips jest when Node is absent,
+  exactly as designed by this fallback.
+
+Outcome matches the prediction in the pre-merge section below: jest is a
+real CI gate on the 6 Linux + macOS cells; Windows is green via correct
+skip. The `ci-node-cell` task is complete. Release team returns to standby.
+
+Follow-up tracked in question
+`release-team-2026-05-20-jest-adapter-windows-npx.md` (PM -> Run team):
+once the jest adapter resolves `npx.cmd` on Windows, the
+`runner.os != 'Windows'` guard can be dropped to restore jest to all 9.
+
+---
+
+_Pre-merge content below (retained for record)._
 
 ## Why this follow-up exists
 
@@ -18,8 +49,8 @@ CI cells. CI run **26169544419** on origin/main `c4cb770` then went red:
 
 | Cells | Result |
 |---|---|
-| 6× Linux + macOS | **green** — jest tests genuinely run (`337 passed`; the 3 jest tests no longer skip) |
-| 3× `windows-latest` | **red** — `3 failed, 334 passed` |
+| 6x Linux + macOS | **green** — jest tests genuinely run (`337 passed`; the 3 jest tests no longer skip) |
+| 3x `windows-latest` | **red** — `3 failed, 334 passed` |
 
 The Windows failure is **not a CI-config bug** — it is a jest-adapter bug.
 This handoff applies the `ci-node-cell` task's pre-authorised fallback to
