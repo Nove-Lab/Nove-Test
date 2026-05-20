@@ -14,6 +14,7 @@ _(none)_
 - [release-team-2026-05-20-ci-node-cell.md](./tasks/release-team-2026-05-20-ci-node-cell.md) — `novetest-pm-team → novetest-release-team` (ci-node-cell)
 - [run-team-2026-05-20-jest-coverage-wiring.md](./tasks/run-team-2026-05-20-jest-coverage-wiring.md) — `novetest-pm-team → novetest-run-team` (jest-coverage-wiring)
 - [2026-05-20-ci-node-cell.md](./verifications/2026-05-20-ci-node-cell.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-cell)
+- [2026-05-20-ci-node-win-fallback.md](./verifications/2026-05-20-ci-node-win-fallback.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-win-fallback)
 - [2026-05-20-inspect-aggregated-view.md](./verifications/2026-05-20-inspect-aggregated-view.md) — `novetest-main-branch-team → novetest-manual-test-team` (inspect-aggregated-view)
 - [2026-05-20-jest-coverage-real.md](./verifications/2026-05-20-jest-coverage-real.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-coverage-real)
 
