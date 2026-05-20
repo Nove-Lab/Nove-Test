@@ -15,7 +15,7 @@ _(none)_
 - [run-team-2026-05-20-jest-coverage-wiring.md](./tasks/run-team-2026-05-20-jest-coverage-wiring.md) — `novetest-pm-team → novetest-run-team` (jest-coverage-wiring)
 
 ## Blocked
-_(none)_
+- [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
 
 ## Open questions
 _(none)_
