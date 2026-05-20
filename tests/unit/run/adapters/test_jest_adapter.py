@@ -77,10 +77,33 @@ def _sample_jest_payload(success: bool = True, num_failed: int = 0) -> dict[str,
     }
 
 
+def _sample_istanbul_payload() -> dict[str, Any]:
+    """A minimal Istanbul ``coverage-final.json`` body.
+
+    Keyed by absolute file path, each entry carrying the canonical
+    `statementMap` / `fnMap` / `branchMap` / `s` / `f` / `b` shape. The
+    adapter never inspects this content — it only registers the raw file
+    — so a single-file stub is enough to prove the artifact wiring.
+    """
+
+    return {
+        "/abs/path/src/classifier.js": {
+            "path": "/abs/path/src/classifier.js",
+            "statementMap": {"0": {"start": {"line": 7, "column": 2}}},
+            "fnMap": {},
+            "branchMap": {},
+            "s": {"0": 1},
+            "f": {},
+            "b": {},
+        }
+    }
+
+
 def _make_stub_subprocess(
     *,
     returncode: int,
     write_report: bool,
+    write_coverage: bool = False,
     report_payload: dict[str, Any] | None = None,
     stderr_bytes: bytes = b"",
     stdout_bytes: bytes = b"",
@@ -92,7 +115,9 @@ def _make_stub_subprocess(
     The stub inspects argv for ``--outputFile=`` and writes the requested
     JSON payload there if ``write_report`` is True — that's how the real
     jest CLI lands its report on disk for the adapter to read after the
-    process exits.
+    process exits. When ``write_coverage`` is True it likewise inspects
+    ``--coverageDirectory=`` and drops a ``coverage-final.json`` there,
+    emulating jest's ``json`` coverage reporter.
     """
 
     async def stub(
@@ -115,6 +140,17 @@ def _make_stub_subprocess(
             report_path.write_text(
                 json.dumps(report_payload if report_payload is not None else _sample_jest_payload()),
                 encoding="utf-8",
+            )
+        if write_coverage:
+            cov_dir_arg = next(
+                (a for a in argv if isinstance(a, str) and a.startswith("--coverageDirectory=")),
+                None,
+            )
+            assert cov_dir_arg is not None, "stub jest invocation missing --coverageDirectory"
+            cov_dir = Path(cov_dir_arg.split("=", 1)[1])
+            cov_dir.mkdir(parents=True, exist_ok=True)
+            (cov_dir / "coverage-final.json").write_text(
+                json.dumps(_sample_istanbul_payload()), encoding="utf-8"
             )
         return SubprocessResult(
             returncode=returncode,
@@ -378,18 +414,13 @@ async def test_report_with_invalid_json_maps_to_unparseable(
     assert exc_info.value.kind == "unparseable-output"
 
 
-async def test_collect_coverage_kwarg_is_silently_no_op_this_slice(
+async def test_collect_coverage_false_adds_no_coverage_flags(
     jest_basic_workspace: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per the Phase 2.5 task: ``collect_coverage`` is accepted but unwired.
-
-    No ``--coverage`` flag should appear in argv; no Istanbul artifact path
-    should appear in ``artifact_paths``. Once the Coverage team's Istanbul
-    parser slice lands, this test gets inverted into a proper coverage
-    assertion.
-    """
+    """The default (coverage off) path stays byte-identical: no jest
+    ``--coverage`` flags in argv, no ``coverage_json`` artifact key."""
 
     import novetest.run.adapters.jest_adapter as adapter
 
@@ -416,16 +447,106 @@ async def test_collect_coverage_kwarg_is_silently_no_op_this_slice(
     monkeypatch.setattr(adapter, "run_subprocess", stub)
 
     target = resolve_test_target("", jest_basic_workspace)
+    result = await run_jest(target, artifact_dir=tmp_path, timeout=60.0)
+
+    assert not any(arg.startswith("--coverage") for arg in captured_argv)
+    assert "coverage_json" not in result.artifact_paths
+
+
+async def test_collect_coverage_adds_flags_and_registers_artifact(
+    jest_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``collect_coverage=True`` adds the jest coverage flags and registers
+    the Istanbul ``coverage-final.json`` under the ``coverage_json`` key.
+
+    ``coverage_json`` is the SAME key the pytest adapter uses — pinned
+    cross-team contract so the Coverage engine looks it up uniformly and
+    dispatches format-handling on ``engine_name``.
+    """
+
+    import novetest.run.adapters.jest_adapter as adapter
+
+    captured_argv: list[str] = []
+
+    async def stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        captured_argv.extend(argv)
+        output_arg = next(
+            (a for a in argv if isinstance(a, str) and a.startswith("--outputFile=")),
+            None,
+        )
+        assert output_arg is not None
+        report_path = Path(output_arg.split("=", 1)[1])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(_sample_jest_payload()), encoding="utf-8")
+        cov_dir_arg = next(
+            (a for a in argv if isinstance(a, str) and a.startswith("--coverageDirectory=")),
+            None,
+        )
+        assert cov_dir_arg is not None
+        cov_dir = Path(cov_dir_arg.split("=", 1)[1])
+        cov_dir.mkdir(parents=True, exist_ok=True)
+        (cov_dir / "coverage-final.json").write_text(
+            json.dumps(_sample_istanbul_payload()), encoding="utf-8"
+        )
+        return SubprocessResult(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+    monkeypatch.setattr(adapter, "run_subprocess", stub)
+
+    target = resolve_test_target("__tests__/", jest_basic_coverage_workspace)
     result = await run_jest(
-        target,
-        artifact_dir=tmp_path,
-        timeout=60.0,
-        collect_coverage=True,
+        target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
     )
 
-    assert not any("--coverage" in arg for arg in captured_argv)
-    assert "coverage_json" not in result.artifact_paths
-    assert "coverage_lcov" not in result.artifact_paths
+    assert "--coverage" in captured_argv
+    assert "--coverageReporters=json" in captured_argv
+    # Only the `json` reporter — never lcov / cobertura (pinned contract).
+    assert not any(
+        a.startswith("--coverageReporters=") and a != "--coverageReporters=json"
+        for a in captured_argv
+    )
+    cov_dir_arg = next(a for a in captured_argv if a.startswith("--coverageDirectory="))
+    cov_dir = Path(cov_dir_arg.split("=", 1)[1])
+    assert cov_dir.name == "coverage"
+    assert cov_dir.parent.name == "native"
+
+    coverage_path = result.artifact_paths["coverage_json"]
+    assert coverage_path.name == "coverage-final.json"
+    assert coverage_path.parent.name == "coverage"
+    assert coverage_path.is_file()
+
+
+async def test_collect_coverage_missing_report_maps_to_unparseable(
+    jest_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If jest runs but Istanbul produces no ``coverage-final.json`` (e.g.
+    a misconfigured ``coverageReporters``), the adapter surfaces a typed
+    ``unparseable-output`` error rather than registering a missing file.
+    """
+
+    import novetest.run.adapters.jest_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(returncode=0, write_report=True, write_coverage=False),
+    )
+
+    target = resolve_test_target("__tests__/", jest_basic_coverage_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_jest(
+            target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
+        )
+    assert exc_info.value.kind == "unparseable-output"
 
 
 async def test_engine_version_read_from_local_node_modules(
