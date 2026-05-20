@@ -44,21 +44,15 @@ jobs:
       # Node.js powers the jest Native Engine adapter. Without it the jest
       # integration tests (`test_jest_basic.py` + the jest-coverage slice)
       # skip on every runner. Pin an LTS >= 18 — the jest adapter's readiness
-      # hint.
+      # hint. Applied to all 9 matrix cells: jest is a real CI gate cross-OS.
       #
-      # Linux + macOS only (`runner.os != 'Windows'`): the jest adapter's
-      # subprocess exec passes the bare name `npx`, which Windows CreateProcess
-      # does not resolve to the actual `npx.cmd` (PATHEXT is not applied to the
-      # exec target). The adapter's readiness guard uses `shutil.which`, which
-      # DOES honour PATHEXT — so on Windows the guard passes but the exec then
-      # fails with `AdapterInvocationError: npx not found`. Run-CI 26169544419
-      # confirmed this on all three windows-latest cells. Until the jest
-      # adapter handles `npx.cmd` (Run-team territory — see question
-      # release-team-2026-05-20-jest-adapter-windows-npx), Windows omits Node
-      # so the adapter's skip guard correctly skips jest there again. jest
-      # still runs as a real gate on the six Linux + macOS cells.
+      # History: an earlier slice (ci-node-win-fallback) temporarily carried
+      # `if: runner.os != 'Windows'` here because the jest adapter execed the
+      # bare name `npx`, which Windows CreateProcess cannot resolve to the
+      # `npx.cmd` shim. That adapter defect is fixed (commit 0e9ab71 — Windows
+      # now launches jest via `cmd /c npx`), so the Windows guard is lifted
+      # and jest runs on `windows-latest` again.
       - name: Install Node.js
-        if: runner.os != 'Windows'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -67,10 +61,9 @@ jobs:
       # `_require_node_and_local_jest()` guard finds a local jest install.
       # Iterate over every fixture carrying a `package.json` instead of
       # hardcoding names — a parallel slice adds `jest-basic-coverage/`.
-      # `shell: bash` keeps the loop portable. Windows-skipped to match the
-      # `Install Node.js` step above. Runs before `pytest` below.
+      # `shell: bash` keeps the loop portable on `windows-latest` (Git Bash),
+      # where `run:` steps default to pwsh. Runs before `pytest` below.
       - name: Install jest fixture dependencies
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           for d in tests/fixtures/projects/*/; do
