@@ -14,6 +14,7 @@ _(none)_
 - [release-team-2026-05-20-ci-node-cell.md](./tasks/release-team-2026-05-20-ci-node-cell.md) — `novetest-pm-team → novetest-release-team` (ci-node-cell)
 - [release-team-2026-05-21-restore-windows-jest-ci.md](./tasks/release-team-2026-05-21-restore-windows-jest-ci.md) — `novetest-pm-team → novetest-release-team` (restore-windows-jest-ci)
 - [run-team-2026-05-20-jest-coverage-wiring.md](./tasks/run-team-2026-05-20-jest-coverage-wiring.md) — `novetest-pm-team → novetest-run-team` (jest-coverage-wiring)
+- [run-team-2026-05-21-jest-adapter-unit-test-windows.md](./tasks/run-team-2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-unit-test-windows)
 - [run-team-2026-05-21-jest-adapter-windows-npx.md](./tasks/run-team-2026-05-21-jest-adapter-windows-npx.md) — `novetest-pm-team → novetest-run-team` (jest-adapter-windows-npx)
 - [2026-05-20-ci-node-cell.md](./verifications/2026-05-20-ci-node-cell.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-cell)
 - [2026-05-20-ci-node-win-fallback.md](./verifications/2026-05-20-ci-node-win-fallback.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-win-fallback)
@@ -27,6 +28,7 @@ _(none)_
 
 ## Open questions
 - [release-team-2026-05-20-jest-adapter-windows-npx.md](./questions/release-team-2026-05-20-jest-adapter-windows-npx.md) — `novetest-release-team → novetest-pm-team` (jest-adapter-windows-npx)
+- [release-team-2026-05-21-jest-adapter-unit-test-windows.md](./questions/release-team-2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-release-team → novetest-pm-team` (jest-adapter-unit-test-windows)
 
 ## Recent decisions (last 7 days)
 - [2026-05-14-install-script-hosting-url.md](./decisions/2026-05-14-install-script-hosting-url.md) — `novetest-pm-team → all` (install-script-hosting-url)

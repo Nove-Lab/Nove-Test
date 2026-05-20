@@ -2,14 +2,88 @@
 from: novetest-release-team
 to: novetest-main-branch-team
 type: handoff
-status: ready
+status: done
 created: 2026-05-21
 slug: restore-windows-jest-ci
 task: release-team-2026-05-21-restore-windows-jest-ci
-verdict: pre-merge-pending-gha-observation
+verdict: restore-succeeded-ci-red-on-run-team-unit-test
 ---
 
 # Handoff: restore jest to all 9 CI cells (lift the Windows guard)
+
+## POST-MERGE OBSERVATION — verdict: restore succeeded; CI red on a separate Run-team unit-test bug
+
+Merged to `origin/main` (`bd7612d` + comms). CI run **26172964986** on
+headSha `3f30aae`:
+
+| Cells | Conclusion | Detail |
+|---|---|---|
+| 3x ubuntu-latest | success | `337 passed` |
+| 3x macos-latest  | success | `337 passed` |
+| 3x windows-latest | **failure** | `1 failed, 339 passed` |
+
+### The restore itself SUCCEEDED — this is the key result
+
+Windows pytest summary moved from `334 passed, 3 skipped` (under the old
+guard) to **`1 failed, 339 passed` — no skips**. The 3 jest integration
+tests now **run and pass on `windows-latest`** via the `cmd /c npx`
+adapter path. The Run npx fix (`0e9ab71`) is verified end-to-end on a
+real Windows runner. jest is a genuine CI gate on all 9 cells; that part
+of the task is fully achieved.
+
+### The lone red — a stale Run-team unit test, NOT this slice and NOT a CI-config bug
+
+```
+FAILED tests/unit/run/adapters/test_jest_adapter.py::test_argv_includes_target_expression
+  - AssertionError: assert 'cmd' == '/usr/bin/npx'
+```
+
+The Run npx fix made `run_jest` build argv as `["cmd", "/c", "npx", ...]`
+on Windows, but the unit test `test_argv_includes_target_expression`
+still asserts `argv[0] == '/usr/bin/npx'` unconditionally (POSIX-only).
+The fix updated the adapter but not its companion unit test. This unit
+test is OS-agnostic in execution — it would have failed on `windows-latest`
+even with the old guard still in place (the guard only gated jest
+*integration* tests; the *unit* test never needed Node). Confirmed:
+the prior run `26172567747` on `75ba64f` (guard still present) already
+showed this exact `1 failed` on all 3 Windows cells.
+
+`tests/unit/run/adapters/test_jest_adapter.py` is Run-team territory —
+Release team cannot touch `tests/**`. Raised to PM in question
+`release-team-2026-05-21-jest-adapter-unit-test-windows.md` for routing
+to Run team.
+
+### Release-team decision: guard NOT re-added
+
+Per the task contract, Release did NOT unilaterally re-add the
+`runner.os != 'Windows'` guard. Re-adding it would mask a now-passing
+jest integration suite on Windows just to hide an unrelated unit-test
+defect — a regression in coverage. The restore slice stays as merged.
+Once Run team makes the unit test OS-aware, CI goes 9/9 green with no
+further Release action.
+
+### Secondary observation (flagged to Run team, non-blocking)
+
+The Windows job log carries a non-fatal warning —
+`UnicodeDecodeError: 'charmap' codec can't decode byte 0x90` in a
+subprocess reader thread. jest still passed; included in the question
+file as a suggestion for Run team to pin `encoding="utf-8"` on the
+adapter's Windows stream reading.
+
+### Release-owned follow-up noted (not actioned — out of this task's scope)
+
+The CI log shows `astral-sh/setup-uv@v3` emitting
+`Unexpected input(s) 'python-version'` — the action moved that input to
+`version`/other keys. It is currently only a warning (uv still resolves
+the interpreter) and predates all three of this cycle's Release slices.
+Not fixed here (this task's scope was strictly the guard removal); noted
+as a small future Release housekeeping item, alongside the GHA
+`Node.js 20 actions are deprecated` notice (forced to Node 24 on
+2026-06-02).
+
+---
+
+_Pre-merge content below (retained for record)._
 
 ## Summary
 
@@ -31,7 +105,7 @@ that `ci-node-win-fallback` added, so jest runs as a real CI gate on all
 - `.github/workflows/ci.yml` — dropped `if: runner.os != 'Windows'` from
   the `Install Node.js` and `Install jest fixture dependencies` steps;
   rewrote the comment block to describe the restored cross-OS state with
-  the Windows-skip recorded as lifted history (+9 / −16). No other step
+  the Windows-skip recorded as lifted history (+9 / -16). No other step
   touched.
 
 ## What changed and what did not
@@ -52,22 +126,6 @@ that `ci-node-win-fallback` added, so jest runs as a real CI gate on all
 - `.github/workflows/ci.yml` confirmed valid YAML.
 - Confirmed exactly one `if: runner.os != 'Windows'` remains in the file —
   the `pytest (release smoke)` step — and that it is intentionally kept.
-
-## Not yet verified (needs GHA observation post-merge)
-
-CI fires only on push/PR to `main`. Per team convention this is a
-pre-merge handoff; Release will supersede it `status: done` with the
-observed run URL once Main Branch merges and CI runs.
-
-**Expected: 9/9 green, jest tests reported as run + pass on all 9 cells.**
-The 3 `windows-latest` cells should move from `334 passed, 3 skipped` to
-`337 passed`. This CI run is also the definitive end-to-end verification
-of the Run npx fix (`0e9ab71`) on a real `windows-latest` runner — it has
-not been exercised there before because the guard skipped it.
-
-If `windows-latest` jest still fails, Release will NOT re-add the guard
-unilaterally — it will raise a `questions/` file, since that would mean
-the `cmd /c npx` fix is incomplete and Run team must re-engage.
 
 ## DoD bullets believed closed
 
