@@ -20,6 +20,7 @@ _(none)_
 - [2026-05-20-ci-node-win-fallback.md](./verifications/2026-05-20-ci-node-win-fallback.md) — `novetest-main-branch-team → novetest-manual-test-team` (ci-node-win-fallback)
 - [2026-05-20-inspect-aggregated-view.md](./verifications/2026-05-20-inspect-aggregated-view.md) — `novetest-main-branch-team → novetest-manual-test-team` (inspect-aggregated-view)
 - [2026-05-20-jest-coverage-real.md](./verifications/2026-05-20-jest-coverage-real.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-coverage-real)
+- [2026-05-21-jest-adapter-unit-test-windows.md](./verifications/2026-05-21-jest-adapter-unit-test-windows.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-unit-test-windows)
 - [2026-05-21-jest-adapter-windows-npx.md](./verifications/2026-05-21-jest-adapter-windows-npx.md) — `novetest-main-branch-team → novetest-manual-test-team` (jest-adapter-windows-npx)
 - [2026-05-21-restore-windows-jest-ci.md](./verifications/2026-05-21-restore-windows-jest-ci.md) — `novetest-main-branch-team → novetest-manual-test-team` (restore-windows-jest-ci)
 
