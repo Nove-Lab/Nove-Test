@@ -44,9 +44,21 @@ jobs:
       # Node.js powers the jest Native Engine adapter. Without it the jest
       # integration tests (`test_jest_basic.py` + the jest-coverage slice)
       # skip on every runner. Pin an LTS >= 18 — the jest adapter's readiness
-      # hint. Applied to all matrix cells: the adapter's `--watchman=false`
-      # exists for Windows predictability, so cross-OS jest is worth running.
+      # hint.
+      #
+      # Linux + macOS only (`runner.os != 'Windows'`): the jest adapter's
+      # subprocess exec passes the bare name `npx`, which Windows CreateProcess
+      # does not resolve to the actual `npx.cmd` (PATHEXT is not applied to the
+      # exec target). The adapter's readiness guard uses `shutil.which`, which
+      # DOES honour PATHEXT — so on Windows the guard passes but the exec then
+      # fails with `AdapterInvocationError: npx not found`. Run-CI 26169544419
+      # confirmed this on all three windows-latest cells. Until the jest
+      # adapter handles `npx.cmd` (Run-team territory — see question
+      # release-team-2026-05-20-jest-adapter-windows-npx), Windows omits Node
+      # so the adapter's skip guard correctly skips jest there again. jest
+      # still runs as a real gate on the six Linux + macOS cells.
       - name: Install Node.js
+        if: runner.os != 'Windows'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -55,9 +67,10 @@ jobs:
       # `_require_node_and_local_jest()` guard finds a local jest install.
       # Iterate over every fixture carrying a `package.json` instead of
       # hardcoding names — a parallel slice adds `jest-basic-coverage/`.
-      # `shell: bash` keeps the loop portable on `windows-latest`, where
-      # `run:` steps default to pwsh. Runs before `pytest` below.
+      # `shell: bash` keeps the loop portable. Windows-skipped to match the
+      # `Install Node.js` step above. Runs before `pytest` below.
       - name: Install jest fixture dependencies
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           for d in tests/fixtures/projects/*/; do
