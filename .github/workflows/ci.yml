@@ -39,7 +39,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Node.js powers the jest Native Engine adapter. Without it the jest
       # integration tests (`test_jest_basic.py` + the jest-coverage slice)
@@ -53,7 +53,7 @@ jobs:
       # now launches jest via `cmd /c npx`), so the Windows guard is lifted
       # and jest runs on `windows-latest` again.
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
 
@@ -73,8 +73,14 @@ jobs:
             fi
           done
 
+      # setup-uv@v7 runs on the Node 24 GHA runtime. The `python-version`
+      # input is also why the major bump was required: it was added in
+      # setup-uv v4 — `@v3` did not recognize it, so passing it emitted an
+      # "Unexpected input(s) 'python-version'" warning on every cell. On
+      # v7 the input is honoured (it sets `UV_PYTHON`), so the 3x3 Python
+      # matrix is kept intact with no separate `actions/setup-python` step.
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
           # Cache uv's resolver + wheel downloads keyed by uv.lock so CI is fast
