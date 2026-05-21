@@ -128,7 +128,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 - [x] `novetest run --coverage` against pytest-coverage emits per-test coverage with `mapping_granularity: per-test`.
 - [x] `novetest coverage diff` returns structured deltas with stable Code Location identity. *(closed 2026-05-16 by `50c9170` — `coverage show`/`coverage diff` CLI verbs, Manual Test field-tested; the tick was missed in that cycle's cleanup and is corrected 2026-05-21 — see history/2026-05-21-phase2-3-inspect-and-jest-coverage.md.)*
 - [x] `inspect` returns the Coverage section populated. *(closed 2026-05-21 by `8d1db6f` — `novetest inspect` aggregated view emitting the frozen `coverage_outcome` block; Manual Test verdict: passed.)*
-- [ ] Performance NFR-COV-002 met on a fixture with 50k covered locations.
+- [x] Performance NFR-COV-002 met on a fixture with 50k covered locations. *(closed 2026-05-21 by `5489c7e` — `tests/perf/coverage/test_perf_compare.py` benchmarks the real `compare_coverage_facts` at exactly 50,000 covered locations/side; Manual Test observed median 0.024s vs the 5.0s NFR ceiling. Phase 2 is now 4/4 — complete.)*
 
 **Risks:**
 
