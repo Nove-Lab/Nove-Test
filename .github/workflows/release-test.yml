@@ -74,10 +74,12 @@ jobs:
         shell: ${{ matrix.shell }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
+      # setup-uv@v7 runs on the Node 24 GHA runtime; `@v3` did not, and
+      # also predates the `python-version` input (added in v4) used below.
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ env.PYAPP_PYTHON_VERSION }}
           enable-cache: true
@@ -181,7 +183,7 @@ jobs:
           ./out/novetest-${{ matrix.target }} --help --output json | head -c 400
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: novetest-${{ matrix.target }}
           path: |
@@ -198,10 +200,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download built binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: novetest-linux-x86_64
           path: srv
@@ -258,7 +260,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -271,7 +273,7 @@ jobs:
           ls -la release
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           generate_release_notes: true
