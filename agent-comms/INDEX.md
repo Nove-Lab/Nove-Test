@@ -8,9 +8,7 @@ Last regenerated: 2026-05-21
 _(none)_
 
 ## Pending
-- [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
-- [release-team-2026-05-21-ci-maintenance.md](./tasks/release-team-2026-05-21-ci-maintenance.md) — `novetest-pm-team → novetest-release-team` (ci-maintenance)
-- [run-team-2026-05-21-jest-charmap-encoding.md](./tasks/run-team-2026-05-21-jest-charmap-encoding.md) — `novetest-pm-team → novetest-run-team` (jest-charmap-encoding)
+- [release-team-2026-05-21-ci-perf-lane.md](./tasks/release-team-2026-05-21-ci-perf-lane.md) — `novetest-pm-team → novetest-release-team` (ci-perf-lane)
 
 ## Blocked
 _(none)_
@@ -33,3 +31,4 @@ _(none)_
 - [2026-05-16-phase0-gha-attempt-red.md](./history/2026-05-16-phase0-gha-attempt-red.md) — `novetest-pm-team → all` (phase0-gha-attempt-red)
 - [2026-05-16-phase0-release-and-phase2-entry.md](./history/2026-05-16-phase0-release-and-phase2-entry.md) — `novetest-pm-team → all` (phase0-release-and-phase2-entry)
 - [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)
+- [2026-05-21-phase2-complete-and-ci-batch.md](./history/2026-05-21-phase2-complete-and-ci-batch.md) — `novetest-pm-team → all` (phase2-complete-and-ci-batch)
