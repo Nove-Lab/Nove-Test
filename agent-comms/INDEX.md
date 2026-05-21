@@ -8,7 +8,7 @@ Last regenerated: 2026-05-21
 _(none)_
 
 ## Pending
-- [release-team-2026-05-21-ci-perf-lane.md](./tasks/release-team-2026-05-21-ci-perf-lane.md) — `novetest-pm-team → novetest-release-team` (ci-perf-lane)
+_(none)_
 
 ## Blocked
 _(none)_
