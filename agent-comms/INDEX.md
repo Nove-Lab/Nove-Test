@@ -9,6 +9,8 @@ _(none)_
 
 ## Pending
 - [coverage-team-2026-05-20-coverage-compare-perf.md](./tasks/coverage-team-2026-05-20-coverage-compare-perf.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-perf)
+- [release-team-2026-05-21-ci-maintenance.md](./tasks/release-team-2026-05-21-ci-maintenance.md) — `novetest-pm-team → novetest-release-team` (ci-maintenance)
+- [run-team-2026-05-21-jest-charmap-encoding.md](./tasks/run-team-2026-05-21-jest-charmap-encoding.md) — `novetest-pm-team → novetest-run-team` (jest-charmap-encoding)
 
 ## Blocked
 _(none)_
