@@ -53,6 +53,13 @@ def run_cli(isolated_cwd: Path):
             env=env,
             capture_output=True,
             text=True,
+            # The child is forced to UTF-8 (`PYTHONIOENCODING` above), but
+            # `text=True` decodes the captured pipes with the *parent*'s
+            # locale codec, which is cp1252 on a Windows runner. A non-ASCII
+            # byte (e.g. the box-drawing glyphs in a Cyclopts `--help` panel)
+            # then raises `UnicodeDecodeError` inside `subprocess`'s reader
+            # thread. Pin the decode to UTF-8 to match what the child writes.
+            encoding="utf-8",
         )
         return CLIRun(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
 
