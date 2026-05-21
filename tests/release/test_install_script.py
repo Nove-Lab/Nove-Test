@@ -177,6 +177,7 @@ def _run_install_script(
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",  # decode pipes as UTF-8, not the host's locale codec
         timeout=30,
     )
 

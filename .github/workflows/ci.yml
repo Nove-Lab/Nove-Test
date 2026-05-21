@@ -110,3 +110,43 @@ jobs:
       - name: pytest (release smoke)
         if: runner.os != 'Windows'
         run: uv run pytest -q tests/release
+
+  # Non-blocking performance lane — coverage benchmark NFR-COV-002
+  # (`compare_coverage_facts` at 50k covered locations). The benchmark lives
+  # under `tests/perf/`, which is OUTSIDE `[tool.pytest.ini_options].testpaths`
+  # in pyproject.toml — so the `test` job's `uv run pytest -q` never collects
+  # it. This lane opts in explicitly with the `tests/perf` path argument.
+  #
+  # NON-BLOCKING by two independent guarantees:
+  #   1. It is a separate `job` (not a `test`-matrix cell) and brand new, so
+  #      it is not on branch protection's required-status-check set.
+  #   2. `continue-on-error: true` keeps a failed run from failing the
+  #      workflow run — the 5s NFR budget is measured on shared GitHub
+  #      runners with ±30-40% wall-clock variance, so a slow run must never
+  #      gate a PR merge.
+  #
+  # Single cell: ubuntu-latest / Python 3.13. The benchmark is pure-Python
+  # (it generates `CoverageFactSet`s programmatically), so no Node.js / jest
+  # fixture install is needed — those steps are deliberately omitted. Action
+  # majors match the `test` job (`checkout@v6`, `setup-uv@v7`).
+  perf:
+    name: perf (coverage NFR-COV-002, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Sync dependencies
+        run: uv sync --dev --frozen
+
+      # `tests/perf` is passed explicitly — it is not in `testpaths`, so this
+      # is the only place the perf benchmark runs.
+      - name: pytest (perf benchmark)
+        run: uv run pytest tests/perf
