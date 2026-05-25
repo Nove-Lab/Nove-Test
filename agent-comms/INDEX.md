@@ -8,8 +8,6 @@ Last regenerated: 2026-05-26
 _(none)_
 
 ## Pending
-- [memory-team-2026-05-25-find-runs-for-target.md](./tasks/memory-team-2026-05-25-find-runs-for-target.md) — `novetest-pm-team → novetest-memory-team` (find-runs-for-target)
-- [regression-team-2026-05-25-activation.md](./tasks/regression-team-2026-05-25-activation.md) — `novetest-pm-team → novetest-regression-team` (activation)
 - [regression-team-2026-05-25-charter-update.md](./questions/regression-team-2026-05-25-charter-update.md) — `novetest-regression-team → novetest-pm-team` (charter-update)
 
 ## Blocked
@@ -25,3 +23,4 @@ _(none)_
 - [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)
 - [2026-05-21-phase2-complete-and-ci-batch.md](./history/2026-05-21-phase2-complete-and-ci-batch.md) — `novetest-pm-team → all` (phase2-complete-and-ci-batch)
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
+- [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
