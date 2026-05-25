@@ -10,12 +10,13 @@ _(none)_
 ## Pending
 - [memory-team-2026-05-25-find-runs-for-target.md](./tasks/memory-team-2026-05-25-find-runs-for-target.md) — `novetest-pm-team → novetest-memory-team` (find-runs-for-target)
 - [regression-team-2026-05-25-activation.md](./tasks/regression-team-2026-05-25-activation.md) — `novetest-pm-team → novetest-regression-team` (activation)
+- [regression-team-2026-05-25-charter-update.md](./questions/regression-team-2026-05-25-charter-update.md) — `novetest-regression-team → novetest-pm-team` (charter-update)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-_(none)_
+- [regression-team-2026-05-25-charter-update.md](./questions/regression-team-2026-05-25-charter-update.md) — `novetest-regression-team → novetest-pm-team` (charter-update)
 
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
