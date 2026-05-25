@@ -13,10 +13,10 @@ remain readable to ``retrieve_run_evidence``.
 
 Phase-1 scope: this module implements ``store_run_evidence``,
 ``retrieve_run_evidence``, ``list_run_history``, ``delete_run_evidence``, and
-``get_memory_entry_availability``. ``find_runs_for_target`` and
-``find_latest_analyzable_run`` are deferred to the Regression (Phase 3) and
-Localization (Phase 4) slices; they are not listed in Phase 1 "Interfaces in
-scope".
+``get_memory_entry_availability``. ``find_runs_for_target`` lands here as the
+Phase 3 prerequisite (consumed by Regression's baseline resolution and
+availability check). ``find_latest_analyzable_run`` is deferred to the
+Localization (Phase 4) slice.
 """
 
 from __future__ import annotations
@@ -104,6 +104,42 @@ def list_run_history(store: ProjectStore) -> list[MemoryEntry]:
     """Return Memory Entries newest-first across both live and tombstoned runs."""
     entries: list[MemoryEntry] = []
     for resolved in _iter_all_records(store):
+        stored_at = _path_mtime_ms(resolved.run_dir / RECORD_FILENAME)
+        entries.append(
+            _build_memory_entry(
+                store,
+                record=resolved.record,
+                stored_at=stored_at,
+                tombstoned_at=resolved.tombstoned_at,
+            )
+        )
+    entries.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
+    return entries
+
+
+def find_runs_for_target(
+    store: ProjectStore,
+    target_expression: str,
+    *,
+    include_tombstoned: bool = False,
+) -> list[MemoryEntry]:
+    """Return Memory Entries whose ``RunRecord.target_expression`` matches.
+
+    Newest-first by ``RunReference.created_at`` descending. Tombstoned runs
+    are excluded by default; callers wanting full history (audit / debugging)
+    opt in via ``include_tombstoned=True``. Returns an empty list when no run
+    matches (not an error).
+
+    Filtering is on ``target_expression`` alone — Phase 3 "comparability"
+    semantics (target_type, engine compatibility, etc.) belong to the
+    Regression layer, not Memory.
+    """
+    entries: list[MemoryEntry] = []
+    for resolved in _iter_all_records(store):
+        if resolved.record.target_expression != target_expression:
+            continue
+        if resolved.tombstoned and not include_tombstoned:
+            continue
         stored_at = _path_mtime_ms(resolved.run_dir / RECORD_FILENAME)
         entries.append(
             _build_memory_entry(

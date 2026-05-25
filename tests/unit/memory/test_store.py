@@ -14,6 +14,7 @@ from novetest.memory.store import (
     RunEvidenceAlreadyExistsError,
     RunEvidenceNotFoundError,
     delete_run_evidence,
+    find_runs_for_target,
     get_memory_entry_availability,
     list_run_history,
     retrieve_run_evidence,
@@ -251,3 +252,127 @@ def test_availability_unknown_run_raises(store: ProjectStore) -> None:
     ghost = RunReference(run_id="01NOPE", created_at=TS_2024_01_02)
     with pytest.raises(RunEvidenceNotFoundError):
         get_memory_entry_availability(store, ghost)
+
+
+# --- find_runs_for_target ----------------------------------------------------
+
+
+def test_find_runs_for_target_empty_store_returns_empty_list(
+    store: ProjectStore,
+) -> None:
+    result = find_runs_for_target(store, "tests/test_foo.py")
+    assert result == []
+
+
+def test_find_runs_for_target_no_match_returns_empty_list(
+    store: ProjectStore,
+) -> None:
+    store_run_evidence(store, _record(run_id="01A", target_expression="tests/test_a.py"))
+    store_run_evidence(store, _record(run_id="01B", target_expression="tests/test_b.py"))
+    assert find_runs_for_target(store, "tests/test_missing.py") == []
+
+
+def test_find_runs_for_target_single_match(store: ProjectStore) -> None:
+    target = "tests/test_only.py"
+    store_run_evidence(store, _record(run_id="01ONLY", target_expression=target))
+
+    result = find_runs_for_target(store, target)
+
+    assert len(result) == 1
+    assert result[0].entry_id == "01ONLY"
+    assert result[0].run_record.target_expression == target
+
+
+def test_find_runs_for_target_returns_newest_first(store: ProjectStore) -> None:
+    target = "tests/test_shared.py"
+    # Insert in non-chronological order to prove the sort is by created_at,
+    # not insertion order.
+    store_run_evidence(
+        store,
+        _record(run_id="01MID", created_at=TS_2024_01_02 + 1_000, target_expression=target),
+    )
+    store_run_evidence(
+        store,
+        _record(run_id="01OLD", created_at=TS_2024_01_02, target_expression=target),
+    )
+    store_run_evidence(
+        store,
+        _record(run_id="01NEW", created_at=TS_2026_05_13, target_expression=target),
+    )
+
+    result = find_runs_for_target(store, target)
+
+    assert [e.entry_id for e in result] == ["01NEW", "01MID", "01OLD"]
+
+
+def test_find_runs_for_target_filters_out_non_matching(store: ProjectStore) -> None:
+    target = "tests/test_shared.py"
+    store_run_evidence(store, _record(run_id="01HIT1", target_expression=target))
+    store_run_evidence(store, _record(run_id="01MISS", target_expression="tests/other.py"))
+    store_run_evidence(
+        store,
+        _record(run_id="01HIT2", created_at=TS_2026_05_13, target_expression=target),
+    )
+
+    result = find_runs_for_target(store, target)
+
+    assert {e.entry_id for e in result} == {"01HIT1", "01HIT2"}
+    assert all(e.run_record.target_expression == target for e in result)
+
+
+def test_find_runs_for_target_excludes_tombstoned_by_default(
+    store: ProjectStore,
+) -> None:
+    target = "tests/test_shared.py"
+    live = _record(run_id="01LIVE", target_expression=target)
+    gone = _record(run_id="01GONE", created_at=TS_2026_05_13, target_expression=target)
+    store_run_evidence(store, live)
+    store_run_evidence(store, gone)
+    delete_run_evidence(store, gone.run_reference)
+
+    result = find_runs_for_target(store, target)
+
+    assert [e.entry_id for e in result] == ["01LIVE"]
+
+
+def test_find_runs_for_target_includes_tombstoned_when_opted_in(
+    store: ProjectStore,
+) -> None:
+    target = "tests/test_shared.py"
+    live = _record(run_id="01LIVE", target_expression=target)
+    gone = _record(run_id="01GONE", created_at=TS_2026_05_13, target_expression=target)
+    store_run_evidence(store, live)
+    store_run_evidence(store, gone)
+    delete_run_evidence(store, gone.run_reference)
+
+    result = find_runs_for_target(store, target, include_tombstoned=True)
+
+    assert [e.entry_id for e in result] == ["01GONE", "01LIVE"]
+    tombstoned = next(e for e in result if e.entry_id == "01GONE")
+    assert tombstoned.tombstoned_at is not None
+    assert tombstoned.run_record.status == "tombstoned"
+
+
+def test_find_runs_for_target_returns_both_when_target_types_differ(
+    store: ProjectStore,
+) -> None:
+    """Filter is on ``target_expression`` alone: differing ``target_type`` does
+    not partition results. Regression's comparability check, not Memory, is
+    responsible for narrowing down by target_type.
+    """
+    from dataclasses import replace
+
+    target = "tests/shared"
+    file_record = _record(run_id="01FILE", target_expression=target)
+    pkg_record = replace(
+        _record(run_id="01PKG", created_at=TS_2026_05_13, target_expression=target),
+        target_type="package",
+    )
+    store_run_evidence(store, file_record)
+    store_run_evidence(store, pkg_record)
+
+    result = find_runs_for_target(store, target)
+
+    assert {e.entry_id for e in result} == {"01FILE", "01PKG"}
+    target_types = {e.run_record.target_type for e in result}
+    assert target_types == {"file", "package"}
