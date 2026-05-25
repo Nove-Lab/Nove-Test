@@ -42,6 +42,7 @@ This does NOT change the dispatch model: **PM never dispatches the `novetest-*-t
 
 ## Pre-flight reading (mandatory, in order)
 
+0. **`git fetch && git status`** — confirm "Your branch is up to date with 'origin/main'" before doing anything else. If the branch is *behind* or *diverged*, **STOP** and surface a question; do not read `INDEX.md` (which reflects only the local checkout) and do not plan a cycle off stale state. This is the load-bearing lesson of the 2026-05-25 duplicate-merge incident (see `agent-comms/history/2026-05-25-duplicate-merge-cycle.md`).
 1. `CLAUDE.md`
 2. `agent-comms/INDEX.md`
 3. `agent-comms/decisions/` (newest first)
