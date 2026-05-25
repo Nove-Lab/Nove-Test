@@ -22,3 +22,4 @@ _(none)_
 ## Recent history (last 7 days)
 - [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)
 - [2026-05-21-phase2-complete-and-ci-batch.md](./history/2026-05-21-phase2-complete-and-ci-batch.md) — `novetest-pm-team → all` (phase2-complete-and-ci-batch)
+- [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
