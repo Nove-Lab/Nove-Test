@@ -8,7 +8,8 @@ Last regenerated: 2026-05-25
 _(none)_
 
 ## Pending
-_(none)_
+- [memory-team-2026-05-25-find-runs-for-target.md](./tasks/memory-team-2026-05-25-find-runs-for-target.md) — `novetest-pm-team → novetest-memory-team` (find-runs-for-target)
+- [regression-team-2026-05-25-activation.md](./tasks/regression-team-2026-05-25-activation.md) — `novetest-pm-team → novetest-regression-team` (activation)
 
 ## Blocked
 _(none)_
