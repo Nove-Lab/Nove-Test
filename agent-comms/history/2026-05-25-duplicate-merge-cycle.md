@@ -59,21 +59,22 @@ On a single desktop running multiple Claude sessions, parallel PM
 sessions are a real possibility. The pre-flight `git fetch` is the
 defensive layer.
 
-### 3. "No loss" preservation via branch refs, not merge
+### 3. "Work on main" is the loss criterion — not branch preservation
 
-Literal "merge both" was incoherent — both slices conflict at the
-content level (same paths for Coverage; mutually-exclusive YAML values
-for GHA). But preservation does not require merge: `git worktree
-remove` without `git branch -D` keeps the worktree's commits alive as
-dormant refs forever, at zero cost. Future cherry-picks are one
-`git checkout` away.
+Initial PM instinct was to preserve both worktree branches as dormant
+refs "just in case". CEO clarified this was overreach: the only thing
+that needs to be on `main` is the *work itself*, which already is —
+origin's `5489c7e` (Coverage perf) and `57cdf0d` (GHA Node-24 bump)
+shipped equivalent implementations on 2026-05-21. Both worktree
+branches were ultimately **deleted outright**; no archive tags, no
+dormant refs.
 
-Preserved branches:
-
-| Branch | Head | Origin counterpart | Cherry-pick candidate |
-|---|---|---|---|
-| `coverage-compare-perf` | `d0a7f7d` | `5489c7e` (already on main) | None identified — origin's is materially faster (0.024s vs 0.094s median). |
-| `worktree-gha-deprecations` | `94e7411` | `57cdf0d` (already on main) | **`@v8.1.0` immutable-pin for `astral-sh/setup-uv`** — supply-chain hardening (astral-sh stopped publishing floating tags from v8.0.0). Deferred to a future Release housekeeping slice; cherry-pick from this branch when picked up. |
+Lesson: "no loss" means "the necessary work is reachable on the
+production branch", not "every ref ever created is retained forever".
+When an equivalent shipped on origin, the duplicate is just duplicate
+— discard cleanly and move on. Reflog retention (≈90 days locally)
+covers any short-term cherry-pick window without needing intentional
+ref retention.
 
 ### 4. PM-direct reconcile principle (new)
 
@@ -95,12 +96,13 @@ justifies the abstraction.
 
 ## Open follow-ups (low priority)
 
-1. **`@v8.1.0` immutable-pin port** — port from
-   `worktree-gha-deprecations @ 94e7411` into both
-   `.github/workflows/ci.yml` and `release-test.yml`. Surgical, 2-line
-   change + comment. NOT urgent — origin's `@v7` is functional and the
-   2026-06-02 Node-24 deadline is met. Belongs to a future Release
-   housekeeping slice.
+1. **`@v8.1.0` immutable-pin bump for `astral-sh/setup-uv`** — replace
+   the current `@v7` floating tag in `.github/workflows/ci.yml` and
+   `release-test.yml` with the immutable `@v8.1.0` release tag.
+   Supply-chain hardening: astral-sh stopped publishing floating
+   major/minor tags from v8.0.0. NOT urgent — `@v7` is functional and
+   the 2026-06-02 Node-24 deadline is met. Future Release housekeeping
+   slice; ~2-line edit, reference astral-sh release notes.
 2. **Phase 3 entry preparation** — Phase 2 is complete on origin (4/4
    DoD). The next sub-product cycle is Regression. PM's prior
    commitment ("background prep during the cycle") is moot since the
