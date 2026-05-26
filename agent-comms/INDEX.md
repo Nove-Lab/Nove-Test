@@ -8,7 +8,7 @@ Last regenerated: 2026-05-27
 _(none)_
 
 ## Pending
-- [regression-team-2026-05-26-baseline-resolution.md](./tasks/regression-team-2026-05-26-baseline-resolution.md) — `novetest-pm-team → novetest-regression-team` (baseline-resolution)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -26,3 +26,4 @@ _(none)_
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
 - [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
 - [2026-05-26-phase3-regression-engine-and-memory-probe.md](./history/2026-05-26-phase3-regression-engine-and-memory-probe.md) — `novetest-pm-team → all` (phase3-regression-engine-and-memory-probe)
+- [2026-05-27-phase3-regression-engine-complete.md](./history/2026-05-27-phase3-regression-engine-complete.md) — `novetest-pm-team → all` (phase3-regression-engine-complete)
