@@ -1,12 +1,13 @@
-"""Implementation of ``get_regression_facts``.
+"""Implementations of ``get_regression_facts`` and ``check_regression_availability``.
 
 Workflow (from ``design/workflows/regression.md``):
 
     get_regression_facts(run_reference_1, run_reference_2)  -> -
+    check_regression_availability(run_reference)            -> memory/find_runs_for_target
 
-We treat ``get`` as a pure cache read: the canonical pair directory either
-exists with a parseable payload, or it doesn't. We do NOT resolve Memory
-entries here — the caller (`compare_runs`) does that and surfaces
+``get_regression_facts`` is a pure cache read: the canonical pair directory
+either exists with a parseable payload, or it doesn't. We do NOT resolve
+Memory entries here — the caller (`compare_runs`) does that and surfaces
 ``REASON_RUN_NOT_FOUND`` / ``REASON_RUN_TOMBSTONED`` for its own reasons
 (tombstoning is fail-hard regardless of cache existence, per decision §C.1).
 
@@ -15,6 +16,11 @@ payload embeds a ``coverage_change`` block whose ``schema_version`` falls
 below the current ``CoverageDelta`` schema, we return
 ``RegressionUnavailable(reason=REASON_MISSING_DERIVED_FACTS,
 detail="coverage-schema-stale")``. The caller re-derives.
+
+``check_regression_availability`` returns a plain ``bool`` (not a
+discriminator) — the only failure mode is "no comparable prior", which is
+exactly what ``False`` means. Used by Orchestration eligibility evaluation
+(Phase 6) and Localization (Phase 4).
 """
 
 from __future__ import annotations
@@ -23,6 +29,11 @@ from typing import Any
 
 from novetest.coverage.compare import SCHEMA_VERSION as COVERAGE_DELTA_SCHEMA_VERSION
 from novetest.memory.project_store import ProjectStore
+from novetest.memory.store import (
+    RunEvidenceNotFoundError,
+    find_runs_for_target,
+    retrieve_run_evidence,
+)
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_reference import RunReference
 from novetest.regression.persistence import read_regression_facts_raw
@@ -82,6 +93,45 @@ def get_regression_facts(
         )
 
     return RegressionFactSet.from_dict(raw)
+
+
+def check_regression_availability(
+    store: ProjectStore,
+    run_reference: RunReference,
+) -> bool:
+    """Return True iff a comparable prior (non-tombstoned) run exists.
+
+    "Comparable" here = "shares the same resolved ``target_expression``" —
+    the same partition rule ``find_runs_for_target`` uses. Engine /
+    target-type compatibility checks are deliberately deferred to
+    ``compare_runs``; this helper only answers the eligibility question
+    ("is there *any* prior the caller could compare against?").
+
+    Behaviour:
+    - Unknown ``run_reference`` (no live or tombstoned record) → ``False``.
+      Missing-tolerant by design: eligibility evaluation treats absence as
+      "not available", never as an error.
+    - Tombstoned input ``run_reference`` → still computes availability against
+      its historical ``target_expression``. A tombstone of the input does
+      not erase the question; we measure whether a comparable prior exists,
+      not whether the input itself is live.
+    - The input run is filtered out of the candidate set by ``run_id``, so
+      a target with only one run (the input) yields ``False``.
+    """
+    try:
+        entry = retrieve_run_evidence(store, run_reference)
+    except RunEvidenceNotFoundError:
+        return False
+    siblings = find_runs_for_target(
+        store,
+        entry.run_record.target_expression,
+        include_tombstoned=False,
+    )
+    comparable = [
+        e for e in siblings
+        if e.run_record.run_reference.run_id != run_reference.run_id
+    ]
+    return len(comparable) >= 1
 
 
 def _coverage_change_is_stale(coverage_change: Any) -> bool:

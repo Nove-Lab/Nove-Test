@@ -30,7 +30,12 @@ from typing import Any
 from novetest.coverage.compare import CoverageDelta, compare_coverage_facts
 from novetest.coverage.results import CoverageUnavailable
 from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory.store import (
+    RunEvidenceNotFoundError,
+    find_runs_for_target,
+    list_run_history,
+    retrieve_run_evidence,
+)
 from novetest.models.memory_entry import MemoryEntry
 from novetest.models.regression_fact_set import (
     OutputDiffRecord,
@@ -45,6 +50,7 @@ from novetest.regression.persistence import write_regression_facts
 from novetest.regression.results import (
     REASON_ENGINE_MISMATCH,
     REASON_MISSING_DERIVED_FACTS,
+    REASON_NO_COMPARABLE_BASELINE,
     REASON_RUN_NOT_FOUND,
     REASON_RUN_TOMBSTONED,
     REASON_TARGET_MISMATCH,
@@ -586,3 +592,73 @@ def _engine_version_drift(baseline: RunRecord, target: RunRecord) -> bool:
     if baseline.engine_version is None or target.engine_version is None:
         return False
     return baseline.engine_version != target.engine_version
+
+
+# --- baseline resolution -----------------------------------------------------
+
+
+def resolve_latest_baseline(
+    store: ProjectStore,
+    target_expression: str,
+) -> tuple[RunReference, RunReference] | RegressionUnavailable:
+    """Resolve the ``(baseline, target)`` pair for the two most recent comparable runs.
+
+    Tombstoned runs are excluded by default (Memory's ``find_runs_for_target``
+    convention). When fewer than two comparable runs exist for the given
+    ``target_expression``, returns
+    ``RegressionUnavailable(reason=REASON_NO_COMPARABLE_BASELINE,
+    detail=target_expression)``.
+
+    Memory guarantees newest-first ordering by ``created_at`` descending
+    (``src/novetest/memory/store.py:152``). The result is therefore
+    ``(entries[1], entries[0]) = (baseline, target) = (older, newer)``,
+    which threads directly into ``compare_runs(store, baseline, target)``.
+
+    Comparability is **not** narrowed here by ``engine_name`` or
+    ``target_type``: ``compare_runs`` owns those checks (engine-name mismatch
+    → ``REASON_ENGINE_MISMATCH``, target-type drift → warning). This helper
+    trusts Memory's ``target_expression`` filter and stays a pure pair
+    selector.
+    """
+    entries = find_runs_for_target(
+        store, target_expression, include_tombstoned=False
+    )
+    if len(entries) < 2:
+        return RegressionUnavailable(
+            reason=REASON_NO_COMPARABLE_BASELINE,
+            detail=target_expression,
+        )
+    target_ref = entries[0].run_record.run_reference
+    baseline_ref = entries[1].run_record.run_reference
+    return baseline_ref, target_ref
+
+
+def derive_latest_regression(
+    store: ProjectStore,
+) -> RegressionFactSet | RegressionUnavailable:
+    """Compose ``resolve_latest_baseline`` + ``compare_runs`` against current history.
+
+    The "active target" is taken from the most recent **non-tombstoned**
+    Run Record in ``list_run_history``. An empty store, or one whose runs
+    are all tombstoned, returns
+    ``RegressionUnavailable(reason=REASON_NO_COMPARABLE_BASELINE,
+    detail="no-runs")``.
+
+    Any ``RegressionUnavailable`` surfaced by ``resolve_latest_baseline``
+    (typically a single-run target) is propagated as-is — its ``detail``
+    carries the active ``target_expression``, which is the more useful
+    operator hint than re-wrapping it to ``"no-runs"``.
+    """
+    history = list_run_history(store)
+    live = [entry for entry in history if entry.tombstoned_at is None]
+    if not live:
+        return RegressionUnavailable(
+            reason=REASON_NO_COMPARABLE_BASELINE,
+            detail="no-runs",
+        )
+    active_target = live[0].run_record.target_expression
+    pair = resolve_latest_baseline(store, active_target)
+    if isinstance(pair, RegressionUnavailable):
+        return pair
+    baseline_ref, target_ref = pair
+    return compare_runs(store, baseline_ref, target_ref)
