@@ -25,3 +25,4 @@ _(none)_
 - [2026-05-21-phase2-complete-and-ci-batch.md](./history/2026-05-21-phase2-complete-and-ci-batch.md) — `novetest-pm-team → all` (phase2-complete-and-ci-batch)
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
 - [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
+- [2026-05-26-phase3-regression-engine-and-memory-probe.md](./history/2026-05-26-phase3-regression-engine-and-memory-probe.md) — `novetest-pm-team → all` (phase3-regression-engine-and-memory-probe)
