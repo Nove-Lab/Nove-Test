@@ -376,3 +376,159 @@ def test_find_runs_for_target_returns_both_when_target_types_differ(
     assert {e.entry_id for e in result} == {"01FILE", "01PKG"}
     target_types = {e.run_record.target_type for e in result}
     assert target_types == {"file", "package"}
+
+
+# --- has_regression_facts ----------------------------------------------------
+#
+# The `_availability_flags` probe scans `<store>/regression/pairs/` for any
+# directory whose name contains `run_<run_id>` (either baseline or target
+# position) AND holds a `regression_facts.json`. Decision
+# `2026-05-26-regression-facts-json-layout.md` §1 pins the layout; §C.5 names
+# this probe as Memory's responsibility (engine team owns file shape, Memory
+# owns the existence probe). These tests cover the cold/empty/missing-file
+# guards plus baseline/target/multi-pair/tombstoned flips so the contract is
+# nailed down at the Memory boundary before any CLI verb consumes it.
+
+
+def _write_stub_regression_facts(pair_dir: Path) -> None:
+    """Write a minimal pair file. The probe checks existence only, never parses."""
+    pair_dir.mkdir(parents=True)
+    (pair_dir / "regression_facts.json").write_text(
+        '{"schema_version": 1}', encoding="utf-8"
+    )
+
+
+def test_has_regression_facts_cold_store_returns_false(store: ProjectStore) -> None:
+    """No `<store>/regression/pairs/` dir exists at all → flag stays False, no exception."""
+    record = _record(run_id="01COLD")
+    store_run_evidence(store, record)
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is False
+    # Sanity: the probed `pairs/` subdir was never created (project store init
+    # materializes `regression/` empty, but `regression/pairs/` only appears
+    # once Regression writes its first pair).
+    assert not (store.path / "regression" / "pairs").exists()
+
+
+def test_has_regression_facts_empty_pairs_dir_returns_false(
+    store: ProjectStore,
+) -> None:
+    """`<store>/regression/pairs/` exists but is empty → flag is False."""
+    record = _record(run_id="01EMPTY")
+    store_run_evidence(store, record)
+    (store.path / "regression" / "pairs").mkdir(parents=True)
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is False
+
+
+def test_has_regression_facts_when_run_is_baseline(store: ProjectStore) -> None:
+    """Run appears in the baseline (left) position of a pair → flag flips True."""
+    record = _record(run_id="01BASE")
+    store_run_evidence(store, record)
+    pair_dir = (
+        store.path / "regression" / "pairs" / f"{RUN_DIR_PREFIX}01BASE__run_01TGT"
+    )
+    _write_stub_regression_facts(pair_dir)
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is True
+
+
+def test_has_regression_facts_when_run_is_target(store: ProjectStore) -> None:
+    """Run appears in the target (right) position of a pair → flag flips True.
+
+    Confirms the probe is positionally agnostic — `compare_runs(a, b)` and
+    `compare_runs(b, a)` are distinct files (decision §1), but Memory's
+    availability flag does not care which side the run sat on.
+    """
+    record = _record(run_id="01TGT")
+    store_run_evidence(store, record)
+    pair_dir = (
+        store.path / "regression" / "pairs" / f"run_01BASE__{RUN_DIR_PREFIX}01TGT"
+    )
+    _write_stub_regression_facts(pair_dir)
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is True
+
+
+def test_has_regression_facts_run_in_multiple_pairs_is_idempotent(
+    store: ProjectStore,
+) -> None:
+    """Run participates in several pairs (both as baseline and as target) → still True."""
+    record = _record(run_id="01HUB")
+    store_run_evidence(store, record)
+    pairs_root = store.path / "regression" / "pairs"
+    _write_stub_regression_facts(pairs_root / f"{RUN_DIR_PREFIX}01HUB__run_01OTHER1")
+    _write_stub_regression_facts(pairs_root / f"run_01OTHER2__{RUN_DIR_PREFIX}01HUB")
+    _write_stub_regression_facts(pairs_root / f"{RUN_DIR_PREFIX}01HUB__run_01OTHER3")
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is True
+
+
+def test_has_regression_facts_pair_dir_without_json_returns_false(
+    store: ProjectStore,
+) -> None:
+    """Pair dir exists but `regression_facts.json` is missing → flag is False.
+
+    Deliberate "file is the truth, directory is the index" guard: a crashed
+    mid-write or hand-deleted facts file MUST NOT light up the availability
+    flag. Memory reflects the canonical artifact, not the scaffold around it.
+    """
+    record = _record(run_id="01SCAFFOLD")
+    store_run_evidence(store, record)
+    pair_dir = (
+        store.path / "regression" / "pairs" / f"{RUN_DIR_PREFIX}01SCAFFOLD__run_01X"
+    )
+    pair_dir.mkdir(parents=True)
+    # Intentionally NO regression_facts.json.
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is False
+
+
+def test_has_regression_facts_run_not_in_any_pair_returns_false(
+    store: ProjectStore,
+) -> None:
+    """Pairs exist on disk for OTHER runs but none mention this run → flag is False."""
+    record = _record(run_id="01SOLO")
+    store_run_evidence(store, record)
+    pairs_root = store.path / "regression" / "pairs"
+    _write_stub_regression_facts(pairs_root / "run_01A__run_01B")
+    _write_stub_regression_facts(pairs_root / "run_01C__run_01D")
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is False
+
+
+def test_has_regression_facts_for_tombstoned_run_with_matching_pair(
+    store: ProjectStore,
+) -> None:
+    """Tombstoned run with a stale pair file on disk → flag is True.
+
+    Per decision §C.1, tombstoned runs may retain pair files for audit; the
+    Regression engine handles the fail-hard at `compare_runs` time. Memory's
+    job is to reflect what's on disk — availability ≠ usability.
+    """
+    record = _record(run_id="01GHOST")
+    store_run_evidence(store, record)
+    pair_dir = (
+        store.path / "regression" / "pairs" / f"{RUN_DIR_PREFIX}01GHOST__run_01PEER"
+    )
+    _write_stub_regression_facts(pair_dir)
+    delete_run_evidence(store, record.run_reference)
+
+    avail = get_memory_entry_availability(store, record.run_reference)
+
+    assert avail["has_regression_facts"] is True
+    assert avail["tombstoned"] is True
