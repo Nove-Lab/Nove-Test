@@ -8,7 +8,7 @@ Last regenerated: 2026-05-26
 _(none)_
 
 ## Pending
-_(none)_
+- [regression-team-2026-05-26-baseline-resolution.md](./tasks/regression-team-2026-05-26-baseline-resolution.md) — `novetest-pm-team → novetest-regression-team` (baseline-resolution)
 
 ## Blocked
 _(none)_
