@@ -8,16 +8,17 @@ Last regenerated: 2026-05-26
 _(none)_
 
 ## Pending
-- [regression-team-2026-05-25-charter-update.md](./questions/regression-team-2026-05-25-charter-update.md) — `novetest-regression-team → novetest-pm-team` (charter-update)
+_(none)_
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [regression-team-2026-05-25-charter-update.md](./questions/regression-team-2026-05-25-charter-update.md) — `novetest-regression-team → novetest-pm-team` (charter-update)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
+- [2026-05-26-regression-facts-json-layout.md](./decisions/2026-05-26-regression-facts-json-layout.md) — `novetest-pm-team → all` (regression-facts-json-layout)
 
 ## Recent history (last 7 days)
 - [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)
