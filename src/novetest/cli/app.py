@@ -48,6 +48,12 @@ from novetest.orchestration.workflows import (
     initialize_project_workspace,
     run_target_in_store,
 )
+from novetest.regression import (
+    RegressionFactSet,
+    RegressionUnavailable,
+    compare_runs,
+    derive_latest_regression,
+)
 from novetest.run import AdapterInvocationError, EngineNotReadyError
 
 
@@ -535,6 +541,146 @@ def _coverage_delta_payload(
 
 
 # ---------------------------------------------------------------------------
+# Regression subcommand group + top-level `compare` verb
+# ---------------------------------------------------------------------------
+
+
+regression_app = App(
+    name="regression",
+    help="Regression commands: compare two runs / resolve the latest pair.",
+)
+app.command(regression_app)
+
+
+@regression_app.command(name="compare")
+def regression_compare(baseline_run_id: str, target_run_id: str) -> None:
+    """Compare two specific Run Records and emit Regression Facts.
+
+    Calls ``compare_runs(store, baseline_ref, target_ref)`` — the cache-
+    aware entry point. On cache miss it derives and persists; on cache
+    hit it reads. Tombstoned inputs surface ``REASON_RUN_TOMBSTONED`` per
+    decision §C.1 even when a stale cached file exists on disk.
+
+    A stale or fake ``run_id`` short-circuits BEFORE ``compare_runs`` is
+    invoked: ``_resolve_run_reference`` emits a structured ``not-found``
+    envelope and exits 2, mirroring ``coverage diff``. All other
+    unavailable outcomes (engine-mismatch, target-mismatch, tombstoned,
+    etc.) surface as ``regression_outcome.kind == "unavailable"`` with
+    ``ok: true``, exit 0 — the transport succeeded, the unavailability
+    is data.
+    """
+
+    store = _require_store("regression.compare")
+    baseline_ref = _resolve_run_reference(store, "regression.compare", baseline_run_id)
+    target_ref = _resolve_run_reference(store, "regression.compare", target_run_id)
+    outcome = compare_runs(store, baseline_ref, target_ref)
+    _emit_and_exit(
+        Envelope(
+            command="regression.compare",
+            ok=True,
+            data={"regression_outcome": _regression_outcome_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+@regression_app.command(name="latest")
+def regression_latest() -> None:
+    """Resolve the latest comparable pair for the active target and emit Regression Facts.
+
+    Composes the engine's ``derive_latest_regression(store)`` end-to-end:
+    latest live run → its ``target_expression`` → most recent prior live
+    run on the same target → ``compare_runs`` of the pair. An empty store,
+    or one whose runs are all tombstoned, surfaces
+    ``regression_outcome.kind == "unavailable"`` with reason
+    ``no-comparable-baseline``.
+    """
+
+    store = _require_store("regression.latest")
+    outcome = derive_latest_regression(store)
+    _emit_and_exit(
+        Envelope(
+            command="regression.latest",
+            ok=True,
+            data={"regression_outcome": _regression_outcome_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+@app.command(name="compare")
+def compare_cmd(baseline_run_id: str, target_run_id: str) -> None:
+    """Composed Regression + Coverage view for a specific pair.
+
+    Emits both ``regression_outcome`` (from ``compare_runs``) and
+    ``coverage_delta`` (from ``compare_coverage_facts``) in the same
+    envelope. When either side lacks coverage facts, ``coverage_delta``
+    surfaces ``kind: "unavailable"`` with the propagated reason — the
+    same projection ``coverage diff`` emits. Distinct from
+    ``regression compare`` (which emits ``regression_outcome`` only).
+    """
+
+    store = _require_store("compare")
+    baseline_ref = _resolve_run_reference(store, "compare", baseline_run_id)
+    target_ref = _resolve_run_reference(store, "compare", target_run_id)
+    regression_outcome = compare_runs(store, baseline_ref, target_ref)
+    coverage_outcome = compare_coverage_facts(store, baseline_ref, target_ref)
+    _emit_and_exit(
+        Envelope(
+            command="compare",
+            ok=True,
+            data={
+                "regression_outcome": _regression_outcome_payload(regression_outcome),
+                "coverage_delta": _coverage_delta_payload(coverage_outcome),
+            },
+        ),
+        EXIT_OK,
+    )
+
+
+def _regression_outcome_payload(
+    outcome: RegressionFactSet | RegressionUnavailable,
+) -> dict[str, Any]:
+    """Project a Regression outcome onto the envelope wire shape.
+
+    Working draft for this slice — the shape is **not** frozen yet. Per
+    ``decisions/2026-05-26-regression-facts-json-layout.md`` §C.2 cadence
+    PM freezes the wire shape AFTER Manual Test fields it; until then
+    consumers should pattern-match on ``kind`` only (the same advice the
+    two Coverage envelope shapes followed before their decisions landed).
+
+    Two ``kind`` values discriminate at parse time: ``fact-set`` carries
+    the full persisted body (verbatim ``RegressionFactSet.to_dict()`` with
+    ``schema_version`` stripped — envelope versioning lives at the top-
+    level ``schema`` field, not inside individual data blocks), and
+    ``unavailable`` carries both ``baseline_run_reference`` and
+    ``target_run_reference`` as **independently nullable** fields so the
+    consumer can tell which side was missing (richer than Coverage's
+    single-``run_reference`` Unavailable shape).
+    """
+
+    if isinstance(outcome, RegressionFactSet):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        return {"kind": "fact-set", **body}
+    return {
+        "kind": "unavailable",
+        "baseline_run_reference": (
+            outcome.baseline_run_reference.to_dict()
+            if outcome.baseline_run_reference is not None
+            else None
+        ),
+        "target_run_reference": (
+            outcome.target_run_reference.to_dict()
+            if outcome.target_run_reference is not None
+            else None
+        ),
+        "reason": outcome.reason,
+        "detail": outcome.detail,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Aggregated single-run view
 # ---------------------------------------------------------------------------
 
@@ -544,10 +690,13 @@ def inspect_cmd(run_id: str) -> None:
     """Show the aggregated single-run view for ``run_id``.
 
     Composes the Run Record summary with the persisted Coverage Facts (the
-    same ``coverage_outcome`` block ``coverage show`` emits). The
-    Regression / Localization / Replay sections are present-but-
-    ``unavailable`` markers until their engines land in Phase 3/4/5.
-    ``inspect`` executes nothing — it is a pure read over stored evidence.
+    same ``coverage_outcome`` block ``coverage show`` emits) AND a
+    Regression section computed against the most-recent live prior run on
+    the same target — flipping the ``sub_reports["regression"]`` marker
+    from ``"unavailable"`` to ``"available"`` when a baseline resolves.
+    Localization / Replay remain present-but-``unavailable`` until their
+    engines land in Phase 4/5. ``inspect`` executes nothing — it is a
+    pure read over stored evidence.
 
     A stale or fake ``run_id`` surfaces a structured ``not-found`` error
     (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
@@ -592,9 +741,10 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-for _name in ("test", "compare", "replay", "localization"):
+for _name in ("test", "replay", "localization"):
     _register_flat_stub(_name)
-_register_group_stub("regression", ("compare", "latest"))
+# ``compare`` promoted to a real verb above.
+# ``regression`` promoted to a real sub-app above.
 
 
 # ---------------------------------------------------------------------------

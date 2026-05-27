@@ -82,8 +82,20 @@ def _patch_memory(
     *,
     history: list[MemoryEntry],
     retrieved: MemoryEntry | RunEvidenceNotFoundError | None = None,
+    siblings: list[MemoryEntry] | None = None,
 ) -> None:
-    """Stub `list_run_history` + `retrieve_run_evidence` at the inspect seam."""
+    """Stub `list_run_history`, `retrieve_run_evidence`, and
+    `find_runs_for_target` at the inspect seam.
+
+    ``siblings`` controls the Regression-section composition: by default
+    it mirrors ``history`` (covering the single-run "no comparable
+    baseline" case), since this fixture's existing tests focus on the
+    Coverage section and the container shape. Tests that exercise the
+    Regression-section flip should pin ``siblings`` explicitly.
+    ``compare_runs`` is also stubbed to a "must not be called" guard so a
+    misconfigured test fails loudly instead of silently scanning a non-
+    existent filesystem.
+    """
 
     monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: history)
 
@@ -94,6 +106,21 @@ def _patch_memory(
         return retrieved
 
     monkeypatch.setattr(inspect_module, "retrieve_run_evidence", fake_retrieve)
+
+    resolved_siblings = history if siblings is None else siblings
+    monkeypatch.setattr(
+        inspect_module,
+        "find_runs_for_target",
+        lambda _store, _target, *, include_tombstoned=False: resolved_siblings,
+    )
+
+    def must_not_be_called(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError(
+            "compare_runs called from inspect; pin `siblings=` to drive "
+            "the Regression-section path explicitly"
+        )
+
+    monkeypatch.setattr(inspect_module, "compare_runs", must_not_be_called)
 
 
 # ---------------------------------------------------------------------------
