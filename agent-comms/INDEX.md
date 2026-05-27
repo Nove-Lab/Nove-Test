@@ -9,6 +9,7 @@ _(none)_
 
 ## Pending
 - [orchestration-team-2026-05-27-regression-cli.md](./tasks/orchestration-team-2026-05-27-regression-cli.md) — `novetest-pm-team → novetest-orchestration-team` (regression-cli)
+- [2026-05-27-orchestration-regression-cli.md](./verifications/2026-05-27-orchestration-regression-cli.md) — `novetest-main-branch-team → novetest-manual-test-team` (orchestration-regression-cli)
 
 ## Blocked
 _(none)_
