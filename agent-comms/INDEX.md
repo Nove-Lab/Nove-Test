@@ -8,8 +8,7 @@ Last regenerated: 2026-05-28
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-05-27-regression-cli.md](./tasks/orchestration-team-2026-05-27-regression-cli.md) — `novetest-pm-team → novetest-orchestration-team` (regression-cli)
-- [2026-05-27-orchestration-regression-cli.md](./verifications/2026-05-27-orchestration-regression-cli.md) — `novetest-main-branch-team → novetest-manual-test-team` (orchestration-regression-cli)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -20,6 +19,7 @@ _(none)_
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
 - [2026-05-26-regression-facts-json-layout.md](./decisions/2026-05-26-regression-facts-json-layout.md) — `novetest-pm-team → all` (regression-facts-json-layout)
+- [2026-05-28-regression-outcome-envelope-shape.md](./decisions/2026-05-28-regression-outcome-envelope-shape.md) — `novetest-pm-team → all` (regression-outcome-envelope-shape)
 
 ## Recent history (last 7 days)
 - [2026-05-21-phase2-3-inspect-and-jest-coverage.md](./history/2026-05-21-phase2-3-inspect-and-jest-coverage.md) — `novetest-pm-team → all` (phase2-3-inspect-and-jest-coverage)
@@ -28,3 +28,4 @@ _(none)_
 - [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
 - [2026-05-26-phase3-regression-engine-and-memory-probe.md](./history/2026-05-26-phase3-regression-engine-and-memory-probe.md) — `novetest-pm-team → all` (phase3-regression-engine-and-memory-probe)
 - [2026-05-27-phase3-regression-engine-complete.md](./history/2026-05-27-phase3-regression-engine-complete.md) — `novetest-pm-team → all` (phase3-regression-engine-complete)
+- [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
