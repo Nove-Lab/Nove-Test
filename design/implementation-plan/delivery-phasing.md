@@ -153,9 +153,9 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Definition-of-done:**
 
-- [ ] `novetest regression latest` resolves the latest pair for the resolved Test Target and returns Regression Facts (with Coverage changes when available).
-- [ ] `novetest compare` returns the composed Regression + Coverage delta.
-- [ ] `inspect` populates Regression section using the resolved baseline.
+- [x] `novetest regression latest` resolves the latest pair for the resolved Test Target and returns Regression Facts (with Coverage changes when available).
+- [x] `novetest compare` returns the composed Regression + Coverage delta.
+- [x] `inspect` populates Regression section using the resolved baseline.
 
 **Risks:**
 
