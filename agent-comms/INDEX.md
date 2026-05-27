@@ -8,7 +8,7 @@ Last regenerated: 2026-05-27
 _(none)_
 
 ## Pending
-_(none)_
+- [orchestration-team-2026-05-27-regression-cli.md](./tasks/orchestration-team-2026-05-27-regression-cli.md) — `novetest-pm-team → novetest-orchestration-team` (regression-cli)
 
 ## Blocked
 _(none)_
