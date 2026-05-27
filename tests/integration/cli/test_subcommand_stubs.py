@@ -3,18 +3,16 @@ from __future__ import annotations
 import pytest
 
 
-# Commands that remain as Phase 1 stubs (every other Phase 1 surface — init,
-# run, status, memory list/show/delete — plus the Phase 2 `coverage` and
-# `inspect` verbs are implemented and have their own integration coverage
-# under tests/integration/orchestration/).
+# Commands that remain as stubs at Phase 3. Phase 1: init / run / status /
+# memory list / show / delete are real. Phase 2: coverage show / diff and
+# inspect are real. Phase 3 (this slice): compare, regression compare,
+# regression latest are real. The remaining `replay` and `localization`
+# stubs activate in Phase 4 / 5.
 @pytest.mark.parametrize(
     "argv,expected_command",
     [
-        (["compare"], "compare"),
         (["replay"], "replay"),
         (["localization"], "localization"),
-        (["regression", "compare"], "regression.compare"),
-        (["regression", "latest"], "regression.latest"),
     ],
 )
 def test_subcommand_stub_emits_not_implemented(run_cli, argv: list[str], expected_command: str) -> None:
