@@ -13,6 +13,12 @@ from novetest.models.coverage_fact_set import (
     CoverageSummary,
     FileCoverage,
 )
+from novetest.models.localization_finding import (
+    CodeLocation,
+    EvidenceCitation,
+    LocalizationEntry,
+    LocalizationFinding,
+)
 from novetest.models.memory_entry import MemoryEntry
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
@@ -20,9 +26,13 @@ from novetest.models.test_result import TestResult
 
 
 __all__ = [
+    "CodeLocation",
     "CoverageFactSet",
     "CoverageSummary",
+    "EvidenceCitation",
     "FileCoverage",
+    "LocalizationEntry",
+    "LocalizationFinding",
     "MemoryEntry",
     "RunRecord",
     "RunReference",
