@@ -2,9 +2,10 @@
 
 Public surface (`normalize_native_result`) is engine-agnostic; the function
 dispatches on ``native_engine_context.engine_name`` to a per-engine
-``_normalize_<engine>`` function. Phase 1 shipped pytest; Phase 2.5 adds
-jest. The dispatcher table is the minimum abstraction the second adapter
-warrants — a registry pattern is deferred until a third lands.
+``_normalize_<engine>`` function. Phase 1 shipped pytest; Phase 2.5 added
+jest; Phase 3 (adapter backlog slice #1) adds go-test. The dispatcher
+table stays — a registry pattern is deferred until the surface motivates
+it (probably at adapter #5).
 """
 
 from __future__ import annotations
@@ -37,6 +38,10 @@ def normalize_native_result(
         status, summary, test_results = _normalize_pytest_payload(native_result.payload)
     elif engine_name == "jest":
         status, summary, test_results = _normalize_jest_payload(native_result.payload)
+    elif engine_name == "go-test":
+        status, summary, test_results = _normalize_gotest_payload(
+            native_result.payload, returncode=native_result.returncode
+        )
     else:
         raise AdapterInvocationError(
             f"normalize_native_result has no handler for engine={engine_name!r}",
@@ -290,6 +295,144 @@ def _aggregate_jest_status(
 def _int_field(payload: Mapping[str, Any], key: str) -> int:
     value = payload.get(key)
     return int(value) if isinstance(value, int) else 0
+
+
+# ---------------------------------------------------------------------------
+# go-test payload normalization (`go test -json` NDJSON event stream)
+# ---------------------------------------------------------------------------
+
+
+_GOTEST_ACTION_TO_OUTCOME: dict[str, str] = {
+    "pass": "passed",
+    "fail": "failed",
+    "skip": "skipped",
+}
+
+
+def _normalize_gotest_payload(
+    payload: Mapping[str, Any],
+    *,
+    returncode: int,
+) -> tuple[str, dict[str, int], tuple[TestResult, ...]]:
+    """Normalize the gotest adapter's payload into Run Record components.
+
+    Payload shape (set by `gotest_adapter.run_gotest`):
+
+    ``{"events": [<event dict>...],
+       "packages": [<package name>...],
+       "failure_logs": {"<Package>::<Test>": "<rel path>", ...}}``
+
+    Each event dict mirrors ``go doc cmd/test2json``'s shape
+    (``Time``, ``Action``, ``Package``, ``Test``, ``Output``, ``Elapsed``).
+    A TestResult is emitted for every terminal action (``pass``/``fail``/``skip``)
+    with a non-empty ``Test`` field — including parent tests of subtests
+    (Go's runner emits a terminal action for them too; downstream
+    consumers that want only leaves can filter on the ``/`` in ``node_id``).
+
+    Unknown terminal actions (none expected today, but the
+    defensive-parsing decision of 2026-05-25 requires graceful handling)
+    map to outcome ``"unknown"`` rather than raising. Visible-not-silent.
+    """
+
+    events_raw = payload.get("events")
+    if not isinstance(events_raw, list):
+        raise AdapterInvocationError(
+            "go-test payload missing 'events' array",
+            kind="unparseable-output",
+        )
+
+    failure_logs_raw = payload.get("failure_logs")
+    failure_logs: Mapping[str, str] = (
+        {str(k): str(v) for k, v in failure_logs_raw.items() if isinstance(v, str)}
+        if isinstance(failure_logs_raw, Mapping)
+        else {}
+    )
+
+    test_results: list[TestResult] = []
+    summary: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
+
+    for event in events_raw:
+        if not isinstance(event, Mapping):
+            continue
+        action = event.get("Action")
+        if not isinstance(action, str):
+            continue
+        if action not in _GOTEST_ACTION_TO_OUTCOME and action != "fail":
+            # Skip per-event filter cheaply; the meaningful set is the
+            # three terminal-test actions plus the visible-not-silent
+            # fallback for any future addition.
+            if action in ("run", "pause", "cont", "output", "bench"):
+                continue
+        package = event.get("Package")
+        test = event.get("Test")
+        if not isinstance(package, str) or not package:
+            continue
+        if not isinstance(test, str) or not test:
+            # Package-level terminal actions (e.g. final `fail` for the
+            # whole package) carry no `Test` field — those are not test
+            # results, only aggregate signals.
+            continue
+
+        # Map the action to an outcome string. Unknown actions land as
+        # `"unknown"` per the supported-engine-matrix decision.
+        outcome = _GOTEST_ACTION_TO_OUTCOME.get(action, "unknown")
+        if outcome == "passed":
+            summary["passed"] += 1
+        elif outcome == "failed":
+            summary["failed"] += 1
+        elif outcome == "skipped":
+            summary["skipped"] += 1
+        # Unknown actions are counted toward `total` via the sum below
+        # but are not in any of the three named buckets — intentional, so
+        # the imbalance is observable.
+
+        duration_ms: int | None = None
+        elapsed = event.get("Elapsed")
+        if isinstance(elapsed, (int, float)):
+            duration_ms = int(round(float(elapsed) * 1000))
+
+        node_id = f"{package}::{test}"
+        failure_reference = failure_logs.get(node_id) if outcome == "failed" else None
+
+        test_results.append(
+            TestResult(
+                node_id=node_id,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                failure_reference=failure_reference,
+            )
+        )
+
+    summary["total"] = len(test_results)
+
+    status = _aggregate_gotest_status(
+        returncode=returncode,
+        test_results=tuple(test_results),
+    )
+    return status, summary, tuple(test_results)
+
+
+def _aggregate_gotest_status(
+    *,
+    returncode: int,
+    test_results: tuple[TestResult, ...],
+) -> str:
+    """Decide passed / failed / errored from `go test -json` signals.
+
+    Rules (in order):
+    - Any failing test → ``"failed"``.
+    - No failing tests, returncode == 0 → ``"passed"``.
+    - No failing tests, returncode != 0 → ``"errored"`` (the build / test
+      harness itself broke after at least one test ran; the adapter's
+      build-failure short-circuit handles the "no tests ran at all" case).
+    """
+
+    failures = sum(1 for tr in test_results if tr.outcome == "failed")
+    if failures:
+        return "failed"
+    if returncode == 0:
+        return "passed"
+    return "errored"
 
 
 __all__ = ["normalize_native_result"]
