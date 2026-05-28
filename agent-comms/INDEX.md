@@ -20,6 +20,7 @@ _(none)_
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
 - [2026-05-26-regression-facts-json-layout.md](./decisions/2026-05-26-regression-facts-json-layout.md) — `novetest-pm-team → all` (regression-facts-json-layout)
+- [2026-05-28-localization-finding-shape.md](./decisions/2026-05-28-localization-finding-shape.md) — `novetest-pm-team → all` (localization-finding-shape)
 - [2026-05-28-regression-outcome-envelope-shape.md](./decisions/2026-05-28-regression-outcome-envelope-shape.md) — `novetest-pm-team → all` (regression-outcome-envelope-shape)
 
 ## Recent history (last 7 days)
