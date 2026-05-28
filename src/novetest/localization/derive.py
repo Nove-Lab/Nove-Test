@@ -49,6 +49,7 @@ from novetest.localization.results import (
     REASON_RUN_NOT_ANALYZABLE,
     LocalizationUnavailable,
 )
+from novetest.localization.retrieval import check_localization_availability
 from novetest.localization.sbfl.dstar import dstar2
 from novetest.localization.sbfl.ochiai import ochiai
 from novetest.localization.sbfl.op2 import op2
@@ -56,7 +57,11 @@ from novetest.localization.sbfl.spectra import Spectra, build_spectra
 from novetest.localization.sbfl.tarantula import tarantula
 from novetest.localization.symbol_resolver import resolve_python_symbol
 from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory.store import (
+    RunEvidenceNotFoundError,
+    list_run_history,
+    retrieve_run_evidence,
+)
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.localization_finding import (
     CodeLocation,
@@ -596,8 +601,95 @@ def _build_evidence_citations(
     return tuple(citations)
 
 
+# ---------------------------------------------------------------------------
+# Latest-run resolution (mirrors Regression's resolve_latest_baseline +
+# derive_latest_regression composition pattern in compare.py)
+# ---------------------------------------------------------------------------
+
+
+def resolve_latest_analyzable_run(
+    store: ProjectStore,
+) -> RunReference | LocalizationUnavailable:
+    """Return the most-recent ``RunReference`` for which Localization is derivable.
+
+    "Analyzable" = ``check_localization_availability(store, ref)`` returns
+    ``True`` — the cheap precondition probe in ``retrieval.py`` (per-test
+    coverage path: not-tombstoned ∧ has-failed-tests ∧ has-coverage ∧
+    ``mapping_granularity == "per-test"``).
+
+    Walks ``list_run_history`` newest-first (Memory's guarantee) and
+    returns the first matching ``RunReference``. The probe is cheap —
+    each candidate costs one ``retrieve_run_evidence`` + a coverage
+    cache stat — so a linear scan is acceptable at v1. If a future
+    profiling slice shows hot-loop cost, an indexed `find_*` helper on
+    the Memory side is the obvious next step (mirrors Regression's
+    ``find_runs_for_target`` precedent).
+
+    Returns ``LocalizationUnavailable`` (with ``run_reference=None``)
+    when no analyzable run exists:
+
+    - Empty store → ``REASON_NO_RUN_EVIDENCE`` with
+      ``detail="no runs in store"``.
+    - Store has runs but none are analyzable →
+      ``REASON_RUN_NOT_ANALYZABLE`` with
+      ``detail="no analyzable runs in store (N candidates checked)"``
+      where ``N`` is the count actually probed (so operators can
+      distinguish "0 runs total" from "10 runs, none qualify").
+
+    Pure read; never invokes ``derive_localization_findings`` and never
+    writes to disk.
+    """
+    history = list_run_history(store)
+    if not history:
+        return LocalizationUnavailable(
+            run_reference=None,
+            reason=REASON_NO_RUN_EVIDENCE,
+            detail="no runs in store",
+        )
+    probed = 0
+    for entry in history:
+        probed += 1
+        run_reference = entry.run_record.run_reference
+        if check_localization_availability(store, run_reference):
+            return run_reference
+    return LocalizationUnavailable(
+        run_reference=None,
+        reason=REASON_RUN_NOT_ANALYZABLE,
+        detail=f"no analyzable runs in store ({probed} candidates checked)",
+    )
+
+
+def derive_latest_localization(
+    store: ProjectStore,
+    *,
+    formula: str = DEFAULT_FORMULA,
+    top_n: int = DEFAULT_TOP_N,
+) -> LocalizationFinding | LocalizationUnavailable:
+    """Compose ``resolve_latest_analyzable_run`` + ``derive_localization_findings``.
+
+    Pure composition — no additional logic beyond plumbing. If
+    ``resolve_latest_analyzable_run`` returns ``LocalizationUnavailable``,
+    that result is propagated as-is (the caller sees the same reason /
+    detail). Otherwise the resolved ``RunReference`` is handed straight
+    to ``derive_localization_findings`` along with the caller's
+    ``formula`` / ``top_n`` selectors.
+
+    Defaults match ``derive_localization_findings`` exactly so the two
+    are interchangeable from a kwargs surface POV (``formula="ochiai"``,
+    ``top_n=10``).
+    """
+    resolved = resolve_latest_analyzable_run(store)
+    if isinstance(resolved, LocalizationUnavailable):
+        return resolved
+    return derive_localization_findings(
+        store, resolved, top_n=top_n, formula=formula
+    )
+
+
 __all__: list[str] = [
     "DEFAULT_FORMULA",
     "DEFAULT_TOP_N",
+    "derive_latest_localization",
     "derive_localization_findings",
+    "resolve_latest_analyzable_run",
 ]

@@ -5,10 +5,12 @@ Mirrors ``src/novetest/regression/retrieval.py`` in shape:
 - ``get_localization_findings``     — pure cache read (no derivation).
 - ``check_localization_availability`` — cheap precondition probe; bool result.
 
-The CLI and ``derive_latest_localization`` /
-``resolve_latest_analyzable_run`` are deliberately deferred to follow-up
-slices, matching the Regression engine's "ship engine surface in N
-cycles, ship CLI after PM freezes the wire shape" cadence.
+The latest-resolution composition helpers
+(``resolve_latest_analyzable_run`` + ``derive_latest_localization``) live
+in ``novetest.localization.derive`` so they sit next to
+``derive_localization_findings`` — mirrors Regression's pattern of
+keeping ``resolve_latest_baseline`` + ``derive_latest_regression`` next
+to ``compare_runs`` in ``compare.py``.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from novetest.coverage.retrieval import get_coverage_facts
 from novetest.coverage.results import CoverageUnavailable
 from novetest.localization.persistence import read_localization_findings_raw
 from novetest.localization.results import (
-    REASON_RUN_NOT_ANALYZABLE,
+    REASON_MISSING_DERIVED_FACTS,
     LocalizationUnavailable,
 )
 from novetest.memory.project_store import ProjectStore
@@ -40,19 +42,19 @@ def get_localization_findings(
 
     Returns:
     - ``LocalizationFinding`` when ``localization_findings.json`` exists.
-    - ``LocalizationUnavailable(reason="run_not_analyzable",
+    - ``LocalizationUnavailable(reason="missing_derived_facts",
       detail="findings not yet derived")`` when the cache file is
-      absent. The reason code overloads ``run_not_analyzable`` for the
-      "cache-not-populated" path (consumer must call
-      ``derive_localization_findings`` to trigger derivation) because
-      no separate ``missing_derived_facts`` reason is defined for
-      Localization — adding one would require a decision update.
+      absent. The caller should invoke ``derive_localization_findings``
+      to trigger derivation. (Per the decision §X split, this is the
+      recoverable cache-empty case — distinct from
+      ``run_not_analyzable``, which is reserved for structurally non-
+      derivable runs such as tombstoned records.)
     """
     raw = read_localization_findings_raw(store, run_reference.run_id)
     if raw is None:
         return LocalizationUnavailable(
             run_reference=run_reference,
-            reason=REASON_RUN_NOT_ANALYZABLE,
+            reason=REASON_MISSING_DERIVED_FACTS,
             detail="findings not yet derived",
         )
     return LocalizationFinding.from_dict(raw)
