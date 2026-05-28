@@ -8,8 +8,7 @@ Last regenerated: 2026-05-28
 _(none)_
 
 ## Pending
-- [localization-team-2026-05-28-phase4-entry.md](./tasks/localization-team-2026-05-28-phase4-entry.md) — `novetest-pm-team → novetest-localization-team` (phase4-entry)
-- [run-team-2026-05-28-gotest-adapter.md](./tasks/run-team-2026-05-28-gotest-adapter.md) — `novetest-pm-team → novetest-run-team` (gotest-adapter)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -30,4 +29,5 @@ _(none)_
 - [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
 - [2026-05-26-phase3-regression-engine-and-memory-probe.md](./history/2026-05-26-phase3-regression-engine-and-memory-probe.md) — `novetest-pm-team → all` (phase3-regression-engine-and-memory-probe)
 - [2026-05-27-phase3-regression-engine-complete.md](./history/2026-05-27-phase3-regression-engine-complete.md) — `novetest-pm-team → all` (phase3-regression-engine-complete)
+- [2026-05-28-gotest-adapter-and-localization-phase4-entry.md](./history/2026-05-28-gotest-adapter-and-localization-phase4-entry.md) — `novetest-pm-team → all` (gotest-adapter-and-localization-phase4-entry)
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
