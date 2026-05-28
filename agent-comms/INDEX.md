@@ -8,7 +8,7 @@ Last regenerated: 2026-05-28
 _(none)_
 
 ## Pending
-- [localization-team-2026-05-28-engine-completion.md](./tasks/localization-team-2026-05-28-engine-completion.md) — `novetest-pm-team → novetest-localization-team` (engine-completion)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -19,6 +19,7 @@ _(none)_
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
 - [2026-05-26-regression-facts-json-layout.md](./decisions/2026-05-26-regression-facts-json-layout.md) — `novetest-pm-team → all` (regression-facts-json-layout)
+- [2026-05-28-localization-finding-shape-v2.md](./decisions/2026-05-28-localization-finding-shape-v2.md) — `novetest-pm-team → all` (localization-finding-shape-v2)
 - [2026-05-28-localization-finding-shape.md](./decisions/2026-05-28-localization-finding-shape.md) — `novetest-pm-team → all` (localization-finding-shape)
 - [2026-05-28-regression-outcome-envelope-shape.md](./decisions/2026-05-28-regression-outcome-envelope-shape.md) — `novetest-pm-team → all` (regression-outcome-envelope-shape)
 
@@ -30,4 +31,5 @@ _(none)_
 - [2026-05-26-phase3-regression-engine-and-memory-probe.md](./history/2026-05-26-phase3-regression-engine-and-memory-probe.md) — `novetest-pm-team → all` (phase3-regression-engine-and-memory-probe)
 - [2026-05-27-phase3-regression-engine-complete.md](./history/2026-05-27-phase3-regression-engine-complete.md) — `novetest-pm-team → all` (phase3-regression-engine-complete)
 - [2026-05-28-gotest-adapter-and-localization-phase4-entry.md](./history/2026-05-28-gotest-adapter-and-localization-phase4-entry.md) — `novetest-pm-team → all` (gotest-adapter-and-localization-phase4-entry)
+- [2026-05-28-localization-engine-complete.md](./history/2026-05-28-localization-engine-complete.md) — `novetest-pm-team → all` (localization-engine-complete)
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)

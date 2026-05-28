@@ -15,6 +15,8 @@ related:
 
 # Decision: Localization Finding schema v1
 
+> **SUPERSEDED 2026-05-28 by [v2](./2026-05-28-localization-finding-shape-v2.md)** — §6 `LocalizationUnavailable.to_dict()` "known gap" closed; §X `REASON_MISSING_DERIVED_FACTS` split implemented (commit `8ec124a`). All v1 clauses NOT explicitly changed by v2 carry forward. v1 retained as historical record.
+
 CEO-approved on 2026-05-28. Pins the v1 persistence and wire shape of
 `LocalizationFinding` and its companion types (`LocalizationEntry`,
 `CodeLocation`, `EvidenceCitation`, `LocalizationUnavailable`),
