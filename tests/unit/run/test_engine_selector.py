@@ -52,8 +52,8 @@ def test_js_workspace_selects_jest(tmp_path: Path) -> None:
 
 
 def test_dotnet_workspace_raises_until_adapter_lands(tmp_path: Path) -> None:
-    """junit / go-test / cargo-test / xunit have no adapters yet — they must
-    still raise `EngineNotSupportedError`. xunit is chosen as the
+    """junit / cargo-test / xunit have no adapters yet — they must still
+    raise `EngineNotSupportedError`. xunit is chosen as the
     representative because .NET uses a glob-based detection path that
     exercises a different branch of `_ecosystem_for_workspace`.
     """
@@ -62,3 +62,15 @@ def test_dotnet_workspace_raises_until_adapter_lands(tmp_path: Path) -> None:
     target = TestTarget("", "workspace", tmp_path)
     with pytest.raises(EngineNotSupportedError):
         select_native_engine(target)
+
+
+def test_go_workspace_selects_gotest(tmp_path: Path) -> None:
+    """Phase 3: go-test is now an implemented adapter, so `go.mod`
+    workspaces resolve to the go-test engine context rather than raising.
+    """
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    target = TestTarget("", "workspace", tmp_path)
+    context = select_native_engine(target)
+    assert context.ecosystem == "go"
+    assert context.engine_name == "go-test"

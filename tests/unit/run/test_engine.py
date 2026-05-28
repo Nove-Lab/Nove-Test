@@ -201,3 +201,51 @@ async def test_execute_threads_collect_coverage_kwarg_into_adapter(
         collect_coverage=True,
     )
     assert seen_kwargs.get("collect_coverage") is True
+
+
+async def test_execute_with_engine_context_dispatches_gotest(
+    gotest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`execute_with_engine_context(engine_name='go-test')` must call ``run_gotest``.
+
+    Stubs ``run_gotest`` at the engine seam so we observe dispatch without
+    requiring Go to be installed. Same fake-NativeResult pattern as the
+    jest dispatch test.
+    """
+
+    called_with: dict[str, Any] = {}
+
+    async def fake_run_gotest(test_target: Any, **kwargs: Any) -> NativeResult:
+        called_with["test_target"] = test_target
+        called_with.update(kwargs)
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        events_path = native_dir / "events.jsonl"
+        events_path.write_text("", encoding="utf-8")
+        return NativeResult(
+            engine_name="go-test",
+            payload={"events": [], "packages": [], "failure_logs": {}},
+            artifact_paths={
+                "gotest_events_jsonl": events_path,
+                "stdout": native_dir / "stdout.log",
+                "stderr": native_dir / "stderr.log",
+            },
+            returncode=0,
+            started_at_ms=0,
+            completed_at_ms=0,
+            engine_version="1.23.4",
+        )
+
+    monkeypatch.setattr(engine_module, "run_gotest", fake_run_gotest)
+    target = resolve_test_target("", gotest_basic_workspace)
+    context = NativeEngineContext(ecosystem="go", engine_name="go-test")
+    record = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert called_with.get("collect_coverage") is False
+    assert record.engine_name == "go-test"
+    assert record.ecosystem == "go"
+    assert record.engine_version == "1.23.4"

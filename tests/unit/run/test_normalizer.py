@@ -379,3 +379,224 @@ def test_jest_pending_test_maps_to_skipped_outcome(tmp_path: Path) -> None:
     )
     assert {tr.outcome for tr in record.test_results} == {"skipped"}
     assert record.status == "passed"
+
+
+# ---------------------------------------------------------------------------
+# go-test payload normalization (Phase 3 adapter backlog #1)
+# ---------------------------------------------------------------------------
+
+
+def _gotest_native_result(
+    payload: dict[str, object],
+    tmp_path: Path,
+    *,
+    returncode: int = 0,
+) -> NativeResult:
+    return NativeResult(
+        engine_name="go-test",
+        payload=payload,
+        artifact_paths={
+            "gotest_events_jsonl": tmp_path / "events.jsonl",
+            "stdout": tmp_path / "stdout.log",
+            "stderr": tmp_path / "stderr.log",
+        },
+        returncode=returncode,
+        started_at_ms=1_700_000_000_000,
+        completed_at_ms=1_700_000_000_500,
+        engine_version="1.23.4",
+    )
+
+
+GOTEST_PASSING_PAYLOAD: dict[str, object] = {
+    "events": [
+        {"Action": "run", "Package": "example.com/foo", "Test": "TestAdd"},
+        {
+            "Action": "output", "Package": "example.com/foo",
+            "Test": "TestAdd", "Output": "--- PASS: TestAdd (0.00s)\n",
+        },
+        {"Action": "pass", "Package": "example.com/foo", "Test": "TestAdd", "Elapsed": 0.003},
+        {"Action": "run", "Package": "example.com/foo", "Test": "TestSub"},
+        {"Action": "pass", "Package": "example.com/foo", "Test": "TestSub", "Elapsed": 0.001},
+        # Package-level terminal action — no `Test` field; must NOT produce a row.
+        {"Action": "pass", "Package": "example.com/foo", "Elapsed": 0.004},
+    ],
+    "packages": ["example.com/foo"],
+    "failure_logs": {},
+}
+
+
+GOTEST_FAILING_PAYLOAD: dict[str, object] = {
+    "events": [
+        {"Action": "run", "Package": "example.com/foo", "Test": "TestPass"},
+        {"Action": "pass", "Package": "example.com/foo", "Test": "TestPass", "Elapsed": 0.001},
+        {"Action": "run", "Package": "example.com/foo", "Test": "TestFail"},
+        {
+            "Action": "output", "Package": "example.com/foo",
+            "Test": "TestFail", "Output": "    foo_test.go:10: assertion failed\n",
+        },
+        {"Action": "fail", "Package": "example.com/foo", "Test": "TestFail", "Elapsed": 0.002},
+        {"Action": "fail", "Package": "example.com/foo", "Elapsed": 0.003},
+    ],
+    "packages": ["example.com/foo"],
+    "failure_logs": {
+        "example.com/foo::TestFail": "native/failures/example.com_foo__TestFail.log",
+    },
+}
+
+
+def test_gotest_passing_payload_yields_passed_status(tmp_path: Path) -> None:
+    record = normalize_native_result(
+        _gotest_native_result(GOTEST_PASSING_PAYLOAD, tmp_path),
+        NativeEngineContext("go", "go-test", "1.23.4"),
+        target_expression="./...",
+        target_type="workspace",
+    )
+    assert record.status == "passed"
+    assert record.engine_name == "go-test"
+    assert record.ecosystem == "go"
+    assert record.engine_version == "1.23.4"
+    assert record.summary_counts["passed"] == 2
+    assert record.summary_counts["failed"] == 0
+    assert record.summary_counts["total"] == 2
+    assert len(record.test_results) == 2
+    # node_id format: <Package>::<Test>
+    assert {tr.node_id for tr in record.test_results} == {
+        "example.com/foo::TestAdd",
+        "example.com/foo::TestSub",
+    }
+    # Elapsed (seconds, float) → duration_ms (int).
+    durations = {tr.node_id: tr.duration_ms for tr in record.test_results}
+    assert durations["example.com/foo::TestAdd"] == 3
+    assert durations["example.com/foo::TestSub"] == 1
+
+
+def test_gotest_failing_payload_yields_failed_status_and_failure_reference(
+    tmp_path: Path,
+) -> None:
+    record = normalize_native_result(
+        _gotest_native_result(GOTEST_FAILING_PAYLOAD, tmp_path, returncode=1),
+        NativeEngineContext("go", "go-test"),
+        target_expression="./...",
+        target_type="workspace",
+    )
+    assert record.status == "failed"
+    failed = [tr for tr in record.test_results if tr.outcome == "failed"]
+    assert len(failed) == 1
+    assert failed[0].node_id == "example.com/foo::TestFail"
+    assert failed[0].failure_reference == "native/failures/example.com_foo__TestFail.log"
+
+
+def test_gotest_subtests_produce_parent_and_child_test_results(tmp_path: Path) -> None:
+    """A parent test with subtests produces TestResult rows for both the
+    parent AND each subtest — Go really does emit terminal actions for
+    each. Downstream consumers can filter on `/` in node_id if they want
+    only leaves.
+    """
+
+    payload: dict[str, object] = {
+        "events": [
+            {"Action": "run", "Package": "example.com/foo", "Test": "TestParent"},
+            {"Action": "run", "Package": "example.com/foo", "Test": "TestParent/zero"},
+            {"Action": "pass", "Package": "example.com/foo", "Test": "TestParent/zero", "Elapsed": 0},
+            {"Action": "run", "Package": "example.com/foo", "Test": "TestParent/one"},
+            {"Action": "pass", "Package": "example.com/foo", "Test": "TestParent/one", "Elapsed": 0},
+            {"Action": "pass", "Package": "example.com/foo", "Test": "TestParent", "Elapsed": 0.002},
+        ],
+        "packages": ["example.com/foo"],
+        "failure_logs": {},
+    }
+    record = normalize_native_result(
+        _gotest_native_result(payload, tmp_path),
+        NativeEngineContext("go", "go-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    node_ids = {tr.node_id for tr in record.test_results}
+    assert "example.com/foo::TestParent" in node_ids
+    assert "example.com/foo::TestParent/zero" in node_ids
+    assert "example.com/foo::TestParent/one" in node_ids
+    assert all(tr.outcome == "passed" for tr in record.test_results)
+
+
+def test_gotest_skip_action_maps_to_skipped_outcome(tmp_path: Path) -> None:
+    payload: dict[str, object] = {
+        "events": [
+            {"Action": "run", "Package": "example.com/foo", "Test": "TestX"},
+            {"Action": "skip", "Package": "example.com/foo", "Test": "TestX", "Elapsed": 0},
+        ],
+        "packages": ["example.com/foo"],
+        "failure_logs": {},
+    }
+    record = normalize_native_result(
+        _gotest_native_result(payload, tmp_path),
+        NativeEngineContext("go", "go-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "passed"  # returncode=0, no failures
+    assert record.summary_counts["skipped"] == 1
+    assert {tr.outcome for tr in record.test_results} == {"skipped"}
+
+
+def test_gotest_unknown_terminal_action_maps_to_unknown_outcome(tmp_path: Path) -> None:
+    """Per the supported-engine-matrix decision (`2026-05-25`): unknown
+    terminal actions (none expected today, but Go MAY add one) map to
+    ``"unknown"`` rather than raising. Visible-not-silent.
+    """
+
+    payload: dict[str, object] = {
+        "events": [
+            {"Action": "run", "Package": "example.com/foo", "Test": "TestX"},
+            # `aborted` is a hypothetical future Go action not in the
+            # current `pass | fail | skip` set; the dispatcher's `if
+            # action not in (...): continue` clause is the path under test.
+            # We can't directly trigger an `unknown` row that way because
+            # the parser drops non-terminal actions; instead, the
+            # `unknown` outcome shows up via the defensive `if action in
+            # ("run", "pause", "cont", "output", "bench"): continue`
+            # bypass for any action NOT in the named set. To make this
+            # visible, supply a terminal-looking action of an unknown
+            # name and verify the result.
+            {"Action": "aborted", "Package": "example.com/foo", "Test": "TestX", "Elapsed": 0.5},
+        ],
+        "packages": ["example.com/foo"],
+        "failure_logs": {},
+    }
+    record = normalize_native_result(
+        _gotest_native_result(payload, tmp_path),
+        NativeEngineContext("go", "go-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    outcomes = [tr.outcome for tr in record.test_results]
+    assert outcomes == ["unknown"]
+
+
+def test_gotest_returncode_nonzero_with_no_failures_yields_errored(tmp_path: Path) -> None:
+    """A non-zero exit with no failing tests (e.g. test binary crash after
+    a successful test ran) surfaces as ``errored`` so callers do not
+    misread the run as ``passed``.
+    """
+
+    record = normalize_native_result(
+        _gotest_native_result(GOTEST_PASSING_PAYLOAD, tmp_path, returncode=2),
+        NativeEngineContext("go", "go-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "errored"
+
+
+def test_gotest_missing_events_array_raises(tmp_path: Path) -> None:
+    """A payload missing the top-level ``events`` array is unparseable —
+    the adapter is the only writer and should always include it.
+    """
+
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        normalize_native_result(
+            _gotest_native_result({"packages": []}, tmp_path),
+            NativeEngineContext("go", "go-test"),
+            target_expression="",
+            target_type="workspace",
+        )
+    assert exc_info.value.kind == "unparseable-output"

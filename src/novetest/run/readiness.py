@@ -11,8 +11,11 @@ Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
    - jest: ``node`` on PATH + jest declared in ``package.json``
      ``dependencies`` / ``devDependencies`` or installed under
      ``node_modules/.bin/jest``.
+   - go-test: ``go`` on PATH + ``go version`` succeeds + ``go.mod`` in
+     the workspace (the marker detection already confirmed this; we
+     re-check defensively to close a TOCTOU window).
 
-Both surfaces are pure inspection. **Nothing is ever installed.**
+All surfaces are pure inspection. **Nothing is ever installed.**
 """
 
 from __future__ import annotations
@@ -157,8 +160,19 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     if jest_candidate is not None:
         return await _assess_jest_readiness(project_workspace, jest_candidate)
 
+    gotest_candidate = next(
+        (
+            c
+            for c in relevant
+            if c.ecosystem == "go" and c.engine_name == "go-test"
+        ),
+        None,
+    )
+    if gotest_candidate is not None:
+        return await _assess_gotest_readiness(project_workspace, gotest_candidate)
+
     # A supported candidate was detected, but no adapter implementation
-    # exists yet (java / go / rust / dotnet) — surface as misconfigured so
+    # exists yet (java / rust / dotnet) — surface as misconfigured so
     # the CLI can name the ecosystem without pretending it is ready.
     chosen = relevant[0]
     return EngineReadinessResult(
@@ -398,3 +412,96 @@ def _read_jest_version_from_workspace(workspace: Path) -> str | None:
         return None
     version = meta.get("version") if isinstance(meta, dict) else None
     return str(version) if isinstance(version, str) else None
+
+
+# ---------------------------------------------------------------------------
+# go-test readiness (Phase 3 adapter backlog #1)
+# ---------------------------------------------------------------------------
+
+
+async def _assess_gotest_readiness(
+    project_workspace: Path,
+    candidate: EngineCandidate,
+) -> EngineReadinessResult:
+    """Decide ``go test``'s readiness state for a Go module workspace.
+
+    Sequence:
+    1. ``go`` on PATH? If absent → ``engine-missing``.
+    2. ``go.mod`` still present? Already confirmed by candidate detection
+       but re-checked to close a TOCTOU window.
+    3. ``go version`` succeeds? If non-zero exit → ``engine-misconfigured``
+       (broken installation — rare but observable when GOROOT is wrong).
+    4. Best-effort version extraction from ``go version``'s output — same
+       parser as the adapter's ``_read_go_version``; informational only.
+    """
+
+    if shutil.which("go") is None:
+        return EngineReadinessResult(
+            state="engine-missing",
+            engine_context=None,
+            evidence=candidate.evidence,
+            issues=(
+                "`go` not found on PATH; install Go 1.21+ from "
+                "https://go.dev/dl/",
+            ),
+        )
+
+    # Defensive go.mod re-check. `detect_engine_candidates` already saw it
+    # but the workspace state can shift between that scan and now.
+    if not (project_workspace / "go.mod").is_file():
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="go", engine_name="go-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "Go workspace marker `go.mod` is no longer present at the "
+                "workspace root",
+            ),
+        )
+
+    version_probe = await run_subprocess(
+        ["go", "version"], cwd=project_workspace, timeout=10.0
+    )
+    if version_probe.returncode != 0:
+        stderr_text = version_probe.stderr.decode("utf-8", errors="replace").strip()
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="go", engine_name="go-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                f"`go version` exited {version_probe.returncode}; check the "
+                f"Go installation (GOROOT/GOPATH). stderr: {stderr_text[-200:]}",
+            ),
+        )
+
+    engine_version = _parse_go_version(
+        version_probe.stdout.decode("utf-8", errors="replace")
+    )
+    return EngineReadinessResult(
+        state="ready",
+        engine_context=NativeEngineContext(
+            ecosystem="go", engine_name="go-test", engine_version=engine_version
+        ),
+        evidence=candidate.evidence,
+        issues=(),
+    )
+
+
+def _parse_go_version(go_version_output: str) -> str | None:
+    """Extract the bare version (e.g. ``"1.23.4"``) from ``go version``.
+
+    Expected output shape (stable since Go 1.0):
+    ``go version go1.23.4 linux/amd64``. Returns ``None`` on any
+    unparseable shape — version is informational metadata, never
+    load-bearing.
+    """
+
+    parts = go_version_output.strip().split()
+    if len(parts) >= 3 and parts[2].startswith("go"):
+        version = parts[2][2:]
+        return version if version else None
+    return None

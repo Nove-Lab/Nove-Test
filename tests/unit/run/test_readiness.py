@@ -180,3 +180,106 @@ async def test_jest_workspace_with_node_and_local_bin_is_ready(
     assert readiness.engine_context.engine_name == "jest"
     assert readiness.engine_context.ecosystem == "javascript-typescript"
     assert readiness.engine_context.engine_version == "29.7.0"
+
+
+# ---------------------------------------------------------------------------
+# go-test readiness (Phase 3 adapter backlog #1)
+#
+# These tests stub `shutil.which` AND `run_subprocess` so the outcome is
+# deterministic regardless of whether the host has Go installed. The
+# `_assess_gotest_readiness` probe shells out to `go version` for its
+# `ready` path; stubbing that returns the exact bytes the parser expects.
+# ---------------------------------------------------------------------------
+
+
+def _patch_go_on_path(
+    monkeypatch: pytest.MonkeyPatch, *, available: bool
+) -> None:
+    def fake_which(binary: str) -> str | None:
+        if available and binary == "go":
+            return "/fake/bin/go"
+        return None
+
+    monkeypatch.setattr(readiness_module.shutil, "which", fake_which)
+
+
+def _patch_go_version_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    returncode: int = 0,
+    stdout_bytes: bytes = b"go version go1.23.4 linux/amd64\n",
+    stderr_bytes: bytes = b"",
+) -> None:
+    """Stub `readiness.run_subprocess` so the `go version` probe is
+    deterministic on hosts without Go."""
+
+    from novetest.utils.asyncio_subprocess import SubprocessResult
+
+    async def fake_run_subprocess(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        return SubprocessResult(
+            returncode=returncode,
+            stdout=stdout_bytes,
+            stderr=stderr_bytes,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(readiness_module, "run_subprocess", fake_run_subprocess)
+
+
+async def test_go_workspace_without_go_on_path_is_engine_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    _patch_go_on_path(monkeypatch, available=False)
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-missing"
+    assert readiness.engine_context is None
+    assert any("https://go.dev/dl/" in issue for issue in readiness.issues)
+
+
+async def test_go_workspace_with_go_on_path_is_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`go.mod` present + `go` on PATH + `go version` succeeds → ready."""
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    _patch_go_on_path(monkeypatch, available=True)
+    _patch_go_version_subprocess(monkeypatch)
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "ready"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "go-test"
+    assert readiness.engine_context.ecosystem == "go"
+    assert readiness.engine_context.engine_version == "1.23.4"
+
+
+async def test_go_workspace_with_failing_go_version_is_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`go` on PATH but `go version` exits non-zero (broken GOROOT, etc.)
+    → ``engine-misconfigured`` with engine_context populated so the CLI
+    can name the engine in guidance.
+    """
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    _patch_go_on_path(monkeypatch, available=True)
+    _patch_go_version_subprocess(
+        monkeypatch,
+        returncode=1,
+        stdout_bytes=b"",
+        stderr_bytes=b"go: cannot find GOROOT\n",
+    )
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "go-test"
+    assert any("go version" in issue.lower() for issue in readiness.issues)
