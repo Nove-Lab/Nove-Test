@@ -7,7 +7,7 @@ from pathlib import Path
 
 from novetest.localization.persistence import write_localization_findings
 from novetest.localization.results import (
-    REASON_RUN_NOT_ANALYZABLE,
+    REASON_MISSING_DERIVED_FACTS,
     LocalizationUnavailable,
 )
 from novetest.localization.retrieval import (
@@ -53,11 +53,17 @@ def test_get_cache_present_returns_finding(
 def test_get_cache_absent_returns_unavailable(
     tmp_path: Path, default_ref: RunReference
 ) -> None:
+    """Per decision §X split: cache-empty → ``missing_derived_facts``
+    (recoverable: caller should derive). ``run_not_analyzable`` is
+    reserved for structurally non-derivable runs (e.g. tombstoned)."""
     store = create_project_store(tmp_path)
     result = get_localization_findings(store, default_ref)
     assert isinstance(result, LocalizationUnavailable)
-    assert result.reason == REASON_RUN_NOT_ANALYZABLE
+    assert result.reason == REASON_MISSING_DERIVED_FACTS
     assert result.detail == "findings not yet derived"
+    # ``run_reference`` is populated on the cache-empty path so the caller
+    # can identify which run needs deriving.
+    assert result.run_reference == default_ref
 
 
 # --- check_localization_availability ----------------------------------------
