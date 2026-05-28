@@ -8,7 +8,8 @@ Last regenerated: 2026-05-28
 _(none)_
 
 ## Pending
-_(none)_
+- [localization-team-2026-05-28-phase4-entry.md](./tasks/localization-team-2026-05-28-phase4-entry.md) — `novetest-pm-team → novetest-localization-team` (phase4-entry)
+- [run-team-2026-05-28-gotest-adapter.md](./tasks/run-team-2026-05-28-gotest-adapter.md) — `novetest-pm-team → novetest-run-team` (gotest-adapter)
 
 ## Blocked
 _(none)_
