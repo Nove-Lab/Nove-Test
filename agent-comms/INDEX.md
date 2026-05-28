@@ -8,7 +8,7 @@ Last regenerated: 2026-05-28
 _(none)_
 
 ## Pending
-_(none)_
+- [localization-team-2026-05-28-engine-completion.md](./tasks/localization-team-2026-05-28-engine-completion.md) — `novetest-pm-team → novetest-localization-team` (engine-completion)
 
 ## Blocked
 _(none)_
