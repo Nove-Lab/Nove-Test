@@ -86,6 +86,7 @@ propose floor/ceiling movements via `agent-comms/questions/`.
 | Node.js | 18 LTS | 22 LTS | tracks GHA `actions/setup-node` default LTS |
 | Python | 3.11 | 3.13 | matches CI matrix in `.github/workflows/ci.yml` |
 | Istanbul JSON (via jest) | — | — | format is jest-bundled; no separate floor |
+| go (toolchain) | 1.21 | TBD (pending CI Go cell; Release adds) | `go test -json` schema is 1.18+ compatible; floor 1.21 matches the fixture `go.mod` directive. `GOTOOLCHAIN=local` is set so older binaries don't auto-fetch a newer toolchain. Added 2026-05-29 (amendment) for the `go-test` adapter that landed 2026-05-28 (`adf7bac`). |
 
 This matrix is the contract surface for engine readiness probes and
 adapter version negotiation. When a probe sees an engine below floor it
