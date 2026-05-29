@@ -8,6 +8,7 @@ Last regenerated: 2026-05-30
 _(none)_
 
 ## Pending
+- [manual-test-team-2026-05-30-cargo-e2e-sweep.md](./tasks/manual-test-team-2026-05-30-cargo-e2e-sweep.md) — `novetest-pm-team → novetest-manual-test-team` (cargo-e2e-sweep)
 - [orchestration-team-2026-05-30-localization-cache-mismatch-warnings.md](./tasks/orchestration-team-2026-05-30-localization-cache-mismatch-warnings.md) — `novetest-pm-team → novetest-orchestration-team` (localization-cache-mismatch-warnings)
 
 ## Blocked
