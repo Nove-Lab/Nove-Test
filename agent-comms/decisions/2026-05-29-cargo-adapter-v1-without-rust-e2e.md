@@ -127,6 +127,41 @@ for them unless trigger (b) or (c) has already fired by then. PM
 documents the gap and trigger options up front in each new adapter
 task brief.
 
+### 5. Reproducible host setup lives at `scripts/dev-host-setup.md`
+
+To prevent the polyglot host equipping process from being re-discovered
+each time the dev environment moves between desktops, the canonical
+re-executable setup artifact lives at **`scripts/dev-host-setup.md`**.
+The doc is markdown (not a single shell script — OS / package-manager
+variance makes a single script brittle) and contains copy-pastable
+commands per ecosystem and per OS, plus per-section `Verify` blocks
+that MUST succeed on a clean host.
+
+Maintenance protocol pinned by this decision:
+
+- **PM owns `scripts/dev-host-setup.md`.** It is in PM's owned-files
+  list as a cross-cutting operational doc.
+- **Each new Native engine adapter task brief MUST add a section
+  here at handoff time.** Run team includes the install commands;
+  PM reviews at cycle close.
+- **Each floor-version bump in
+  `decisions/2026-05-25-supported-engine-matrix.md` MUST be mirrored
+  in `scripts/dev-host-setup.md` in the same commit** (the
+  supported-engine-matrix decision is the *spec*; this file is the
+  *recipe*; they MUST agree).
+- **When trigger (b) fires for the first time on a given host**, the
+  CEO / engineer equipping the host follows the relevant section
+  (§4 Rust, then if needed §5 Java, §6 .NET); if any step needs
+  refinement (e.g. a `apt-get` package name moved), the same commit
+  that brings the host online also updates this file. The doc gets
+  more accurate with each fresh-host install, not stale.
+
+The first version of the file (created in the same close-out commit as
+this decision) covers §1 Python (verified), §2 Node (verified),
+§3 Go (verified), §4 Rust (commands provided, awaiting first
+trigger-b verification), §5 Java + §6 .NET as placeholders. Cross-
+references back to this decision are embedded in the file.
+
 ## What this decision does NOT decide
 
 - **Floor-version CI lane.** The `2026-05-25-supported-engine-matrix.md`
