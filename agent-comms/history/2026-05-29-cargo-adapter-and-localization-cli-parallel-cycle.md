@@ -51,6 +51,15 @@ Manual Test merge cycle: `3e0fe93` (verifications) → `99bdbdb`
    handoff proposal §"Supported-engine-matrix proposal". Tested
    ceilings stay TBD until trigger (a) — Release CI Rust cell — or
    trigger (b) fires.
+4. **`scripts/dev-host-setup.md`** (NEW) — first reproducible
+   polyglot-host setup recipe. Markdown doc with copy-pastable
+   per-OS / per-ecosystem commands and `Verify` blocks. The
+   operational counterpart of (1) above: when a fresh host is
+   equipped per this file, it qualifies as a Manual Test E2E host
+   for all six adapters. Created in response to CEO's 2026-05-29
+   closing note that dev environment moves between multiple
+   desktops and the toolchain setup needs to be re-executable on
+   any host. PM owns this file; protocol pinned in (1) §5.
 
 Localization CLI slice raised three issues for PM/CEO review; the
 resolutions agreed at this close:
@@ -183,10 +192,14 @@ start (avoids a v1→v2 supersede). Specific scope:
 ## Other deferred items (visible to future PM)
 
 1. **Polyglot host equipping** — trigger (b) from the new decision.
-   When CEO equips the host, dispatch a Manual Test sweep covering
-   Steps 2-5 of the deleted 2026-05-29 cargo verification doc
-   (reconstruct from this history entry + the
-   `2026-05-29-cargo-adapter-nextest-primary.md` decision).
+   When CEO equips the host, follow `scripts/dev-host-setup.md` §4
+   (Rust) for the install recipe, then dispatch a Manual Test sweep
+   covering Steps 2-5 of the deleted 2026-05-29 cargo verification
+   doc (reconstruct from this history entry + the
+   `2026-05-29-cargo-adapter-nextest-primary.md` decision). When
+   trigger (b) fires for the first time, refine any
+   `scripts/dev-host-setup.md` §4 commands that needed adjustment in
+   the same commit.
 2. **Coverage engine LCOV parser dispatched on
    `engine_name == "cargo-test"`** — flagged in Run team's cargo
    handoff §Open items #2. Natural Coverage team slice; until it

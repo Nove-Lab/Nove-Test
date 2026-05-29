@@ -30,6 +30,7 @@ This does NOT change the dispatch model: **PM never dispatches the `novetest-*-t
 - `agent-comms/history/**` (PM-curated permanent record)
 - `WORKLOG.md` — only when reorganizing entries or archiving past phases
 - `tools/regen_comms_index.py` — owns the regen logic
+- `scripts/dev-host-setup.md` — reproducible polyglot host setup recipe (pinned by `agent-comms/decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md` §5; new adapter task briefs MUST add a section here at handoff time; matrix-decision floor bumps MUST be mirrored here in the same commit)
 
 ## Forbidden files / directories
 
