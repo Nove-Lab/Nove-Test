@@ -8,8 +8,7 @@ Last regenerated: 2026-05-30
 _(none)_
 
 ## Pending
-- [manual-test-team-2026-05-30-cargo-e2e-sweep.md](./tasks/manual-test-team-2026-05-30-cargo-e2e-sweep.md) — `novetest-pm-team → novetest-manual-test-team` (cargo-e2e-sweep)
-- [orchestration-team-2026-05-30-localization-cache-mismatch-warnings.md](./tasks/orchestration-team-2026-05-30-localization-cache-mismatch-warnings.md) — `novetest-pm-team → novetest-orchestration-team` (localization-cache-mismatch-warnings)
+- [run-team-2026-05-30-cargo-nextest-env-var-hotfix.md](./tasks/run-team-2026-05-30-cargo-nextest-env-var-hotfix.md) — `novetest-pm-team → novetest-run-team` (cargo-nextest-env-var-hotfix)
 
 ## Blocked
 _(none)_
@@ -25,6 +24,7 @@ _(none)_
 - [2026-05-28-regression-outcome-envelope-shape.md](./decisions/2026-05-28-regression-outcome-envelope-shape.md) — `novetest-pm-team → all` (regression-outcome-envelope-shape)
 - [2026-05-29-cargo-adapter-nextest-primary.md](./decisions/2026-05-29-cargo-adapter-nextest-primary.md) — `novetest-pm-team → all` (cargo-adapter-nextest-primary)
 - [2026-05-29-cargo-adapter-v1-without-rust-e2e.md](./decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md) — `novetest-pm-team → all` (cargo-adapter-v1-without-rust-e2e)
+- [2026-05-30-localization-outcome-envelope-shape.md](./decisions/2026-05-30-localization-outcome-envelope-shape.md) — `novetest-pm-team → all` (localization-outcome-envelope-shape)
 
 ## Recent history (last 7 days)
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
@@ -35,3 +35,4 @@ _(none)_
 - [2026-05-28-localization-engine-complete.md](./history/2026-05-28-localization-engine-complete.md) — `novetest-pm-team → all` (localization-engine-complete)
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
 - [2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md](./history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md) — `novetest-pm-team → all` (cargo-adapter-and-localization-cli-parallel-cycle)
+- [2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md](./history/2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md) — `novetest-pm-team → all` (localization-warnings-and-cargo-trigger-b-reopened)
