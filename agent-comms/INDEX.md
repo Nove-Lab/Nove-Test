@@ -25,6 +25,7 @@ _(none)_
 - [2026-05-29-cargo-adapter-nextest-primary.md](./decisions/2026-05-29-cargo-adapter-nextest-primary.md) — `novetest-pm-team → all` (cargo-adapter-nextest-primary)
 - [2026-05-29-cargo-adapter-v1-without-rust-e2e.md](./decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md) — `novetest-pm-team → all` (cargo-adapter-v1-without-rust-e2e)
 - [2026-05-30-localization-outcome-envelope-shape.md](./decisions/2026-05-30-localization-outcome-envelope-shape.md) — `novetest-pm-team → all` (localization-outcome-envelope-shape)
+- [2026-05-30-native-result-metadata-slot.md](./decisions/2026-05-30-native-result-metadata-slot.md) — `novetest-pm-team → all` (native-result-metadata-slot)
 
 ## Recent history (last 7 days)
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)

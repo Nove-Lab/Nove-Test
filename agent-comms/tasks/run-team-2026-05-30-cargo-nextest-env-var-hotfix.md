@@ -70,10 +70,14 @@ Two-line source change + one unit test + docstring note.
   error code when nextest's stderr matches the env-var literal),
   but it is a separate slice, not load-bearing.
 - **Issue 2 — `nextest_version` payload-stash convention** (the
-  normalizer drops `payload["nextest_version"]`). That is gated on
-  CEO's structural call between reserved-key vs typed-slot fix
-  paths. DO NOT amend `run/normalizer.py` or the `NativeResult` /
-  `NativeEngineContext` shape in this hotfix.
+  normalizer drops `payload["nextest_version"]`). RESOLVED
+  2026-05-30 evening as **(b) typed-slot** — see
+  `agent-comms/decisions/2026-05-30-native-result-metadata-slot.md`.
+  A separate Memory/Run typed-slot slice lands AFTER this hotfix
+  merges (per that decision §"Dispatch ordering" — both slices
+  touch `cargo_adapter.py`, parallel would conflict). DO NOT amend
+  `run/normalizer.py` or the `NativeResult` / `NativeEngineContext`
+  shape in this hotfix.
 - **Coverage LCOV parser dispatch on `engine_name == "cargo-test"`**.
   Coverage team carry-forward, independent slice.
 - **Any change to `_build_child_env()`'s other 3 env vars** —
