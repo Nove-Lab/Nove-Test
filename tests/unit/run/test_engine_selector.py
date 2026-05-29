@@ -52,10 +52,10 @@ def test_js_workspace_selects_jest(tmp_path: Path) -> None:
 
 
 def test_dotnet_workspace_raises_until_adapter_lands(tmp_path: Path) -> None:
-    """junit / cargo-test / xunit have no adapters yet — they must still
-    raise `EngineNotSupportedError`. xunit is chosen as the
-    representative because .NET uses a glob-based detection path that
-    exercises a different branch of `_ecosystem_for_workspace`.
+    """junit / xunit have no adapters yet — they must still raise
+    `EngineNotSupportedError`. xunit is chosen as the representative
+    because .NET uses a glob-based detection path that exercises a
+    different branch of `_ecosystem_for_workspace`.
     """
 
     (tmp_path / "Foo.csproj").write_text("<Project/>", encoding="utf-8")
@@ -74,3 +74,19 @@ def test_go_workspace_selects_gotest(tmp_path: Path) -> None:
     context = select_native_engine(target)
     assert context.ecosystem == "go"
     assert context.engine_name == "go-test"
+
+
+def test_rust_workspace_selects_cargo_test(tmp_path: Path) -> None:
+    """Phase 3 (adapter backlog #2): cargo-test is now an implemented
+    adapter, so `Cargo.toml` workspaces resolve to the cargo-test engine
+    context rather than raising.
+    """
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    target = TestTarget("", "workspace", tmp_path)
+    context = select_native_engine(target)
+    assert context.ecosystem == "rust"
+    assert context.engine_name == "cargo-test"

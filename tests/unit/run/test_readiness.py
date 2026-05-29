@@ -283,3 +283,164 @@ async def test_go_workspace_with_failing_go_version_is_misconfigured(
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "go-test"
     assert any("go version" in issue.lower() for issue in readiness.issues)
+
+
+# ---------------------------------------------------------------------------
+# cargo-test readiness (Phase 3 adapter backlog #2)
+#
+# Stubs `shutil.which` AND `run_subprocess` so the outcome is deterministic
+# regardless of whether the host has Rust + nextest installed. Per the Q3
+# decision the nextest gate is load-bearing — verified by the
+# "engine-misconfigured" cases below.
+# ---------------------------------------------------------------------------
+
+
+def _patch_cargo_on_path(
+    monkeypatch: pytest.MonkeyPatch, *, available: bool
+) -> None:
+    def fake_which(binary: str) -> str | None:
+        if available and binary == "cargo":
+            return "/fake/bin/cargo"
+        return None
+
+    monkeypatch.setattr(readiness_module.shutil, "which", fake_which)
+
+
+def _patch_cargo_subprocesses(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    nextest_returncode: int = 0,
+    nextest_stdout: bytes = b"cargo-nextest 0.9.70\n",
+    nextest_stderr: bytes = b"",
+    cargo_returncode: int = 0,
+    cargo_stdout: bytes = b"cargo 1.74.0 (ecb9851af 2023-10-18)\n",
+    cargo_stderr: bytes = b"",
+) -> None:
+    """Stub `readiness.run_subprocess` so cargo + nextest probes are
+    deterministic on hosts without Rust.
+
+    The stub distinguishes ``cargo nextest --version`` from
+    ``cargo --version`` by argv length / second token.
+    """
+
+    from novetest.utils.asyncio_subprocess import SubprocessResult
+
+    async def fake_run_subprocess(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        if isinstance(argv, (list, tuple)) and len(argv) >= 3 and argv[1] == "nextest":
+            return SubprocessResult(
+                returncode=nextest_returncode,
+                stdout=nextest_stdout,
+                stderr=nextest_stderr,
+                timed_out=False,
+            )
+        return SubprocessResult(
+            returncode=cargo_returncode,
+            stdout=cargo_stdout,
+            stderr=cargo_stderr,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(readiness_module, "run_subprocess", fake_run_subprocess)
+
+
+async def test_cargo_workspace_without_cargo_on_path_is_engine_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `cargo` on PATH → engine-missing with rustup install hint."""
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=False)
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-missing"
+    assert readiness.engine_context is None
+    assert any("https://rustup.rs" in issue for issue in readiness.issues)
+
+
+async def test_cargo_workspace_without_nextest_is_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cargo` present but `cargo nextest --version` fails → misconfigured.
+
+    Per the Q3 decision, nextest absence is surfaced loudly — there is
+    no plain-text `cargo test` fallback. The install hint MUST mention
+    `cargo install cargo-nextest --locked`.
+    """
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=True)
+    _patch_cargo_subprocesses(
+        monkeypatch,
+        nextest_returncode=101,
+        nextest_stdout=b"",
+        nextest_stderr=b"error: no such command: `nextest`\n",
+    )
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "cargo-test"
+    assert any(
+        "cargo install cargo-nextest" in issue for issue in readiness.issues
+    )
+
+
+async def test_cargo_workspace_with_cargo_and_nextest_is_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Cargo.toml` + `cargo` + nextest probe succeeds → ready + version parsed."""
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=True)
+    _patch_cargo_subprocesses(monkeypatch)
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "ready"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "cargo-test"
+    assert readiness.engine_context.ecosystem == "rust"
+    assert readiness.engine_context.engine_version == "1.74.0"
+
+
+async def test_cargo_workspace_with_failing_cargo_version_is_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cargo` on PATH and nextest probe OK but `cargo --version` fails →
+    engine-misconfigured with engine_context populated.
+
+    Mirrors the gotest "broken installation" branch — surfaces a clear
+    rustup-side diagnosis rather than a generic readiness error.
+    """
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=True)
+    _patch_cargo_subprocesses(
+        monkeypatch,
+        cargo_returncode=1,
+        cargo_stdout=b"",
+        cargo_stderr=b"cargo: cannot find rustc\n",
+    )
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "cargo-test"
+    assert any("cargo --version" in issue for issue in readiness.issues)

@@ -14,6 +14,13 @@ Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
    - go-test: ``go`` on PATH + ``go version`` succeeds + ``go.mod`` in
      the workspace (the marker detection already confirmed this; we
      re-check defensively to close a TOCTOU window).
+   - cargo-test: ``cargo`` on PATH + ``cargo nextest --version`` succeeds
+     + ``cargo --version`` succeeds + ``Cargo.toml`` in the workspace.
+     The nextest gate is **load-bearing**: per
+     `decisions/2026-05-29-cargo-adapter-nextest-primary.md`, there is
+     no plain-text ``cargo test`` fallback, so absence of
+     ``cargo-nextest`` is surfaced as ``engine-misconfigured`` with an
+     install hint.
 
 All surfaces are pure inspection. **Nothing is ever installed.**
 """
@@ -171,9 +178,20 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     if gotest_candidate is not None:
         return await _assess_gotest_readiness(project_workspace, gotest_candidate)
 
+    cargo_candidate = next(
+        (
+            c
+            for c in relevant
+            if c.ecosystem == "rust" and c.engine_name == "cargo-test"
+        ),
+        None,
+    )
+    if cargo_candidate is not None:
+        return await _assess_cargo_readiness(project_workspace, cargo_candidate)
+
     # A supported candidate was detected, but no adapter implementation
-    # exists yet (java / rust / dotnet) — surface as misconfigured so
-    # the CLI can name the ecosystem without pretending it is ready.
+    # exists yet (java / dotnet) — surface as misconfigured so the CLI
+    # can name the ecosystem without pretending it is ready.
     chosen = relevant[0]
     return EngineReadinessResult(
         state="engine-misconfigured",
@@ -503,5 +521,125 @@ def _parse_go_version(go_version_output: str) -> str | None:
     parts = go_version_output.strip().split()
     if len(parts) >= 3 and parts[2].startswith("go"):
         version = parts[2][2:]
+        return version if version else None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# cargo-test readiness (Phase 3 adapter backlog #2)
+# ---------------------------------------------------------------------------
+
+
+async def _assess_cargo_readiness(
+    project_workspace: Path,
+    candidate: EngineCandidate,
+) -> EngineReadinessResult:
+    """Decide ``cargo nextest``'s readiness state for a Cargo workspace.
+
+    Sequence (per `decisions/2026-05-29-cargo-adapter-nextest-primary.md`):
+    1. ``cargo`` on PATH? If absent → ``engine-missing``.
+    2. ``Cargo.toml`` still present? Already confirmed by candidate
+       detection but re-checked to close a TOCTOU window.
+    3. ``cargo nextest --version`` succeeds? **Required.** Per the Q3
+       decision there is no plain-text ``cargo test`` fallback; nextest
+       absence is surfaced as ``engine-misconfigured`` with a clear
+       install hint.
+    4. ``cargo --version`` succeeds? If non-zero → ``engine-misconfigured``
+       (broken Rust installation). Otherwise → ``ready`` with parsed
+       engine_version.
+    """
+
+    if shutil.which("cargo") is None:
+        return EngineReadinessResult(
+            state="engine-missing",
+            engine_context=None,
+            evidence=candidate.evidence,
+            issues=(
+                "`cargo` not found on PATH; install Rust toolchain from "
+                "https://rustup.rs",
+            ),
+        )
+
+    # Defensive re-check: marker detection already saw Cargo.toml, but
+    # the workspace state can drift between that scan and now.
+    if not (project_workspace / "Cargo.toml").is_file():
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="rust", engine_name="cargo-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "Rust workspace marker `Cargo.toml` is no longer present at "
+                "the workspace root",
+            ),
+        )
+
+    # nextest is REQUIRED — no plain-text fallback (Q3 decision §3).
+    nextest_probe = await run_subprocess(
+        ["cargo", "nextest", "--version"],
+        cwd=project_workspace,
+        timeout=15.0,
+    )
+    if nextest_probe.returncode != 0:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="rust", engine_name="cargo-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "`cargo nextest` is not installed (required by the cargo-test "
+                "adapter — there is no plain-text fallback per the Q3 "
+                "decision). Install with: cargo install cargo-nextest "
+                "--locked (or use cargo binstall)",
+            ),
+        )
+
+    version_probe = await run_subprocess(
+        ["cargo", "--version"],
+        cwd=project_workspace,
+        timeout=10.0,
+    )
+    if version_probe.returncode != 0:
+        stderr_text = version_probe.stderr.decode("utf-8", errors="replace").strip()
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="rust", engine_name="cargo-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                f"`cargo --version` exited {version_probe.returncode}; check "
+                f"the Rust installation (rustup). stderr: {stderr_text[-200:]}",
+            ),
+        )
+
+    engine_version = _parse_cargo_version(
+        version_probe.stdout.decode("utf-8", errors="replace")
+    )
+    return EngineReadinessResult(
+        state="ready",
+        engine_context=NativeEngineContext(
+            ecosystem="rust",
+            engine_name="cargo-test",
+            engine_version=engine_version,
+        ),
+        evidence=candidate.evidence,
+        issues=(),
+    )
+
+
+def _parse_cargo_version(cargo_version_output: str) -> str | None:
+    """Extract the bare version (e.g. ``"1.74.0"``) from ``cargo --version``.
+
+    Expected output shape (stable since cargo 1.0): ``cargo 1.74.0
+    (ecb9851af 2023-10-18)``. Returns ``None`` on any unparseable shape
+    — version is informational metadata, never load-bearing.
+    """
+
+    parts = cargo_version_output.strip().split()
+    if len(parts) >= 2 and parts[0] == "cargo":
+        version = parts[1]
         return version if version else None
     return None

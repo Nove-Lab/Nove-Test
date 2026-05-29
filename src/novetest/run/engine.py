@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from novetest.models import RunRecord
+from novetest.run.adapters.cargo_adapter import run_cargo
 from novetest.run.adapters.gotest_adapter import run_gotest
 from novetest.run.adapters.jest_adapter import run_jest
 from novetest.run.adapters.pytest_adapter import run_pytest
@@ -129,6 +130,13 @@ async def _invoke_adapter(
         )
     if engine_name == "go-test":
         return await run_gotest(
+            test_target,
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            collect_coverage=collect_coverage,
+        )
+    if engine_name == "cargo-test":
+        return await run_cargo(
             test_target,
             artifact_dir=artifact_dir,
             timeout=timeout,

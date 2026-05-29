@@ -249,3 +249,57 @@ async def test_execute_with_engine_context_dispatches_gotest(
     assert record.engine_name == "go-test"
     assert record.ecosystem == "go"
     assert record.engine_version == "1.23.4"
+
+
+async def test_execute_with_engine_context_dispatches_cargo(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`execute_with_engine_context(engine_name='cargo-test')` must call
+    ``run_cargo``.
+
+    Stubs ``run_cargo`` at the engine seam so we observe dispatch without
+    requiring the Rust toolchain to be installed. Same fake-NativeResult
+    pattern as the gotest dispatch test.
+    """
+
+    called_with: dict[str, Any] = {}
+
+    async def fake_run_cargo(test_target: Any, **kwargs: Any) -> NativeResult:
+        called_with["test_target"] = test_target
+        called_with.update(kwargs)
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        events_path = native_dir / "events.jsonl"
+        events_path.write_text("", encoding="utf-8")
+        return NativeResult(
+            engine_name="cargo-test",
+            payload={
+                "events": [],
+                "binaries": [],
+                "failure_logs": {},
+                "nextest_version": "0.9.70",
+            },
+            artifact_paths={
+                "cargo_events_jsonl": events_path,
+                "stdout": native_dir / "stdout.log",
+                "stderr": native_dir / "stderr.log",
+            },
+            returncode=0,
+            started_at_ms=0,
+            completed_at_ms=0,
+            engine_version="1.74.0",
+        )
+
+    monkeypatch.setattr(engine_module, "run_cargo", fake_run_cargo)
+    target = resolve_test_target("", cargo_test_basic_workspace)
+    context = NativeEngineContext(ecosystem="rust", engine_name="cargo-test")
+    record = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert called_with.get("collect_coverage") is False
+    assert record.engine_name == "cargo-test"
+    assert record.ecosystem == "rust"
+    assert record.engine_version == "1.74.0"

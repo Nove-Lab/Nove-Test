@@ -3,9 +3,10 @@
 Public surface (`normalize_native_result`) is engine-agnostic; the function
 dispatches on ``native_engine_context.engine_name`` to a per-engine
 ``_normalize_<engine>`` function. Phase 1 shipped pytest; Phase 2.5 added
-jest; Phase 3 (adapter backlog slice #1) adds go-test. The dispatcher
-table stays — a registry pattern is deferred until the surface motivates
-it (probably at adapter #5).
+jest; Phase 3 (adapter backlog slice #1) added go-test; Phase 3 (adapter
+backlog slice #2) adds cargo-test. The dispatcher table stays — a
+registry pattern is deferred until the surface motivates it (likely at
+adapter #5 / #6, when junit + xunit land).
 """
 
 from __future__ import annotations
@@ -40,6 +41,10 @@ def normalize_native_result(
         status, summary, test_results = _normalize_jest_payload(native_result.payload)
     elif engine_name == "go-test":
         status, summary, test_results = _normalize_gotest_payload(
+            native_result.payload, returncode=native_result.returncode
+        )
+    elif engine_name == "cargo-test":
+        status, summary, test_results = _normalize_cargo_payload(
             native_result.payload, returncode=native_result.returncode
         )
     else:
@@ -425,6 +430,150 @@ def _aggregate_gotest_status(
     - No failing tests, returncode != 0 → ``"errored"`` (the build / test
       harness itself broke after at least one test ran; the adapter's
       build-failure short-circuit handles the "no tests ran at all" case).
+    """
+
+    failures = sum(1 for tr in test_results if tr.outcome == "failed")
+    if failures:
+        return "failed"
+    if returncode == 0:
+        return "passed"
+    return "errored"
+
+
+# ---------------------------------------------------------------------------
+# cargo-test payload normalization (libtest-json NDJSON event stream)
+# ---------------------------------------------------------------------------
+
+
+_CARGO_EVENT_TO_OUTCOME: dict[str, str] = {
+    "ok": "passed",
+    "failed": "failed",
+    "ignored": "skipped",
+}
+
+
+def _normalize_cargo_payload(
+    payload: Mapping[str, Any],
+    *,
+    returncode: int,
+) -> tuple[str, dict[str, int], tuple[TestResult, ...]]:
+    """Normalize the cargo adapter's payload into Run Record components.
+
+    Payload shape (set by `cargo_adapter.run_cargo`):
+
+    ``{"events": [<event dict>...],
+       "binaries": [<binary name>...],
+       "failure_logs": {"<name>": "<rel path>", ...},
+       "nextest_version": "<version>" | None}``
+
+    Each event dict mirrors nextest's libtest-json shape
+    (``type``, ``event``, ``name``, optional ``stdout`` / ``stderr``).
+    A TestResult is emitted for every terminal ``test`` event (``event``
+    in ``{"ok", "failed", "ignored"}``) with a non-empty ``name``. The
+    ``name`` field is used directly as the ``node_id`` — nextest's mode
+    includes the binary path prefix in the name, so integration tests
+    in ``tests/foo.rs`` arrive with a distinguishing prefix (e.g.
+    ``cargo_test_basic--integration_test::test_add_via_integration``)
+    naturally.
+
+    Unknown terminal events (libtest may add new ones) map to
+    ``outcome="unknown"`` rather than raising. Visible-not-silent per
+    `decisions/2026-05-25-supported-engine-matrix.md` §2.
+
+    Per-test durations are NOT typically present in libtest-json (they
+    are aggregated at the suite level), so ``duration_ms`` defaults to
+    ``None`` unless an ``exec_time`` field is observed on the event.
+    """
+
+    events_raw = payload.get("events")
+    if not isinstance(events_raw, list):
+        raise AdapterInvocationError(
+            "cargo-test payload missing 'events' array",
+            kind="unparseable-output",
+        )
+
+    failure_logs_raw = payload.get("failure_logs")
+    failure_logs: Mapping[str, str] = (
+        {str(k): str(v) for k, v in failure_logs_raw.items() if isinstance(v, str)}
+        if isinstance(failure_logs_raw, Mapping)
+        else {}
+    )
+
+    test_results: list[TestResult] = []
+    summary: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
+
+    for event in events_raw:
+        if not isinstance(event, Mapping):
+            continue
+        ev_type = event.get("type")
+        if ev_type != "test":
+            # Suite-level events (`started`, `ok`, `failed`) carry no
+            # per-test row; they delimit test-binary blocks. Skip.
+            continue
+        ev_event = event.get("event")
+        if not isinstance(ev_event, str):
+            continue
+        if ev_event == "started":
+            # Lifecycle marker, not a terminal outcome — skip per the
+            # gotest precedent.
+            continue
+        name = event.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+
+        # Map the event to an outcome string. Unknown event names
+        # surface as `"unknown"` per defensive-parsing.
+        outcome = _CARGO_EVENT_TO_OUTCOME.get(ev_event, "unknown")
+        if outcome == "passed":
+            summary["passed"] += 1
+        elif outcome == "failed":
+            summary["failed"] += 1
+        elif outcome == "skipped":
+            summary["skipped"] += 1
+        # Unknown outcomes count toward `total` via len() below; the
+        # imbalance is observable (visible-not-silent).
+
+        duration_ms: int | None = None
+        exec_time = event.get("exec_time")
+        if isinstance(exec_time, (int, float)):
+            # libtest-json's `exec_time` field is in seconds (mirrors
+            # libtest's own JSON format on nightly). Convert to ms for
+            # parity with go-test's `Elapsed * 1000`.
+            duration_ms = int(round(float(exec_time) * 1000))
+
+        failure_reference = failure_logs.get(name) if outcome == "failed" else None
+
+        test_results.append(
+            TestResult(
+                node_id=name,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                failure_reference=failure_reference,
+            )
+        )
+
+    summary["total"] = len(test_results)
+
+    status = _aggregate_cargo_status(
+        returncode=returncode,
+        test_results=tuple(test_results),
+    )
+    return status, summary, tuple(test_results)
+
+
+def _aggregate_cargo_status(
+    *,
+    returncode: int,
+    test_results: tuple[TestResult, ...],
+) -> str:
+    """Decide passed / failed / errored from cargo-nextest signals.
+
+    Same rule as go-test:
+    - Any failing test → ``"failed"``.
+    - No failing tests, returncode == 0 → ``"passed"``.
+    - No failing tests, returncode != 0 → ``"errored"`` (a build script
+      failure or post-test harness crash; the adapter's build-failure
+      short-circuit handles the "no tests ran at all" case).
     """
 
     failures = sum(1 for tr in test_results if tr.outcome == "failed")

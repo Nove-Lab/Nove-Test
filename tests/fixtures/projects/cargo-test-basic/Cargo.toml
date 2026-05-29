@@ -1,0 +1,14 @@
+[package]
+name = "cargo_test_basic"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+
+# No external dependencies — the fixture deliberately stays within `std`
+# so `cargo nextest run` walks no `[dependencies]` graph and does not
+# attempt registry access. The `[package]` block alone is sufficient for
+# nextest to discover both the unit tests in `src/lib.rs` and the
+# integration test in `tests/integration_test.rs`.
+
+[lib]
+path = "src/lib.rs"
