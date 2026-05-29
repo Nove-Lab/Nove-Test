@@ -3,16 +3,15 @@ from __future__ import annotations
 import pytest
 
 
-# Commands that remain as stubs at Phase 3. Phase 1: init / run / status /
+# Commands that remain as stubs at Phase 4 close. Phase 1: init / run / status /
 # memory list / show / delete are real. Phase 2: coverage show / diff and
 # inspect are real. Phase 3 (this slice): compare, regression compare,
-# regression latest are real. The remaining `replay` and `localization`
-# stubs activate in Phase 4 / 5.
+# regression latest are real. Phase 4: localization <run_id> and
+# localization latest are real. Only `replay` and `test` remain as stubs.
 @pytest.mark.parametrize(
     "argv,expected_command",
     [
         (["replay"], "replay"),
-        (["localization"], "localization"),
     ],
 )
 def test_subcommand_stub_emits_not_implemented(run_cli, argv: list[str], expected_command: str) -> None:

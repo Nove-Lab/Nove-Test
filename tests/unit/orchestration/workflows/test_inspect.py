@@ -15,6 +15,8 @@ import pytest
 
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_DERIVED_FACTS
+from novetest.localization import LocalizationUnavailable
+from novetest.localization.results import REASON_MISSING_DERIVED_FACTS as LOC_REASON_MISSING
 from novetest.memory import RunEvidenceNotFoundError
 from novetest.models import MemoryEntry, RunRecord, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet, CoverageSummary
@@ -121,6 +123,18 @@ def _patch_memory(
         )
 
     monkeypatch.setattr(inspect_module, "compare_runs", must_not_be_called)
+
+    # Localization section — default to unavailable (missing_derived_facts) so
+    # existing Coverage-section tests stay focused and don't hit the filesystem.
+    monkeypatch.setattr(
+        inspect_module,
+        "get_localization_findings",
+        lambda _store, ref: LocalizationUnavailable(
+            run_reference=ref,
+            reason=LOC_REASON_MISSING,
+            detail="findings not yet derived",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

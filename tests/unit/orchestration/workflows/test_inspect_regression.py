@@ -15,6 +15,8 @@ import pytest
 
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_DERIVED_FACTS
+from novetest.localization import LocalizationUnavailable
+from novetest.localization.results import REASON_MISSING_DERIVED_FACTS as LOC_REASON_MISSING
 from novetest.models import MemoryEntry, RunRecord, RunReference
 from novetest.models.regression_fact_set import RegressionFactSet, RegressionSummary
 from novetest.orchestration.workflows import inspect as inspect_module
@@ -135,6 +137,19 @@ def _patch_seams(
         return compare_result
 
     monkeypatch.setattr(inspect_module, "compare_runs", fake_compare)
+
+    # Localization section — default to unavailable so the Regression-section
+    # tests stay focused and don't hit the filesystem.
+    monkeypatch.setattr(
+        inspect_module,
+        "get_localization_findings",
+        lambda _store, ref: LocalizationUnavailable(
+            run_reference=ref,
+            reason=LOC_REASON_MISSING,
+            detail="findings not yet derived",
+        ),
+    )
+
     return seen
 
 
