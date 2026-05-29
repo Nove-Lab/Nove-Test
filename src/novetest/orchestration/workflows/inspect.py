@@ -20,6 +20,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from novetest.coverage import CoverageUnavailable, get_coverage_facts
+from novetest.localization import (
+    LocalizationFinding,
+    LocalizationUnavailable,
+    get_localization_findings,
+)
 from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,
@@ -60,11 +65,13 @@ class InspectView:
     entry: MemoryEntry
     coverage_outcome: CoverageFactSet | CoverageUnavailable
     regression_outcome: RegressionFactSet | RegressionUnavailable
+    localization_outcome: LocalizationFinding | LocalizationUnavailable
 
     def to_dict(self) -> dict[str, object]:
         record = self.entry.run_record
         coverage_present = isinstance(self.coverage_outcome, CoverageFactSet)
         regression_present = isinstance(self.regression_outcome, RegressionFactSet)
+        localization_present = isinstance(self.localization_outcome, LocalizationFinding)
         return {
             "run_reference": record.run_reference.to_dict(),
             "run_summary": {
@@ -78,10 +85,13 @@ class InspectView:
             },
             "coverage_outcome": _coverage_outcome_section(self.coverage_outcome),
             "regression_outcome": _regression_outcome_section(self.regression_outcome),
+            "localization_outcome": _localization_outcome_section(
+                self.localization_outcome
+            ),
             "sub_reports": {
                 "coverage": "available" if coverage_present else "unavailable",
                 "regression": "available" if regression_present else "unavailable",
-                "localization": "unavailable",
+                "localization": "available" if localization_present else "unavailable",
                 "replay": "unavailable",
             },
         }
@@ -123,6 +133,7 @@ def build_inspect_view(store: ProjectStore, run_id: str) -> InspectView | None:
         entry=entry,
         coverage_outcome=get_coverage_facts(store, ref),
         regression_outcome=_resolve_inspect_regression(store, entry),
+        localization_outcome=_resolve_inspect_localization(store, entry),
     )
 
 
@@ -169,6 +180,30 @@ def _resolve_inspect_regression(
     prior.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
     baseline_ref = prior[0].run_record.run_reference
     return compare_runs(store, baseline_ref, inspected_ref)
+
+
+def _resolve_inspect_localization(
+    store: ProjectStore,
+    inspected: MemoryEntry,
+) -> LocalizationFinding | LocalizationUnavailable:
+    """Cache-only read of the Localization findings for the inspected run.
+
+    Unlike Regression (which has no per-run cache, so ``inspect`` must
+    compose ``find_runs_for_target`` + ``compare_runs``), Localization HAS a
+    per-run cache at
+    ``<store>/localization/findings/run_<id>/localization_findings.json``.
+    So ``inspect`` reads it cache-only via ``get_localization_findings`` — it
+    NEVER derives (no subprocess, no SBFL math), mirroring the Coverage
+    section's ``get_coverage_facts`` behavior. A run that is analyzable but
+    has not had ``novetest localization`` run against it therefore surfaces
+    ``LocalizationUnavailable(reason="missing_derived_facts")`` — the engine
+    fills ``run_reference`` + the ``"findings not yet derived"`` detail when
+    the input ref resolves but the cache is empty. (The ``no_failed_tests`` /
+    ``no_coverage`` reasons only fire from ``derive_localization_findings``,
+    never from this cache-only path.)
+    """
+
+    return get_localization_findings(store, inspected.run_record.run_reference)
 
 
 def _coverage_outcome_section(
@@ -234,3 +269,26 @@ def _regression_outcome_section(
         "reason": outcome.reason,
         "detail": outcome.detail,
     }
+
+
+def _localization_outcome_section(
+    outcome: LocalizationFinding | LocalizationUnavailable,
+) -> dict[str, object]:
+    """Project a Localization outcome onto the working-draft ``localization_outcome`` shape.
+
+    Identical wire shape to ``cli/app.py::_localization_outcome_payload`` —
+    the same orchestration↔cli import-cycle reason the Coverage / Regression
+    analogs duplicate their projections. ``fact-set`` carries the verbatim
+    ``LocalizationFinding.to_dict()`` with the top-level ``schema_version``
+    stripped; ``unavailable`` carries the 3-key
+    ``LocalizationUnavailable.to_dict()``. Shape is the working draft (the
+    finding shape itself is frozen by
+    ``decisions/2026-05-28-localization-finding-shape-v2.md``; PM freezes the
+    envelope projection via a follow-up decision after Manual Test fields it).
+    """
+
+    if isinstance(outcome, LocalizationFinding):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        return {"kind": "fact-set", **body}
+    return {"kind": "unavailable", **outcome.to_dict()}

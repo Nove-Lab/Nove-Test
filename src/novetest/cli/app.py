@@ -29,6 +29,15 @@ from novetest.coverage import (
     get_coverage_facts,
 )
 from novetest.coverage.compare import CoverageDelta
+from novetest.localization import (
+    DEFAULT_FORMULA,
+    DEFAULT_TOP_N,
+    FORMULAS,
+    LocalizationFinding,
+    LocalizationUnavailable,
+    derive_latest_localization,
+    derive_localization_findings,
+)
 from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
@@ -681,6 +690,154 @@ def _regression_outcome_payload(
 
 
 # ---------------------------------------------------------------------------
+# Localization subcommand group
+# ---------------------------------------------------------------------------
+
+
+localization_app = App(
+    name="localization",
+    help="Localization commands: rank suspicious code locations (SBFL) for a run.",
+)
+app.command(localization_app)
+
+
+def _validate_localization_flags(command: str, formula: str, top_n: int) -> None:
+    """Reject bad ``--formula`` / ``--top-n`` at the CLI boundary (exit 2).
+
+    The closed ``FORMULAS`` enum and the positive-integer ``top_n``
+    contract are enforced HERE so the engine never sees an invalid value —
+    a bad flag is a transport error (``invalid-flag``), distinct from the
+    data-level ``unavailable`` outcomes the engine returns. ``_emit_and_exit``
+    is ``NoReturn``, so a normal return means both flags are valid.
+    """
+    if formula not in FORMULAS:
+        _emit_and_exit(
+            Envelope(
+                command=command,
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="invalid-flag",
+                        message=(
+                            f"Invalid --formula={formula!r}; "
+                            f"expected one of {sorted(FORMULAS)!r}"
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    if top_n < 1:
+        _emit_and_exit(
+            Envelope(
+                command=command,
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="invalid-flag",
+                        message=(
+                            f"Invalid --top-n={top_n!r}; expected a positive integer"
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+
+
+@localization_app.default
+def localization_run(
+    run_id: str,
+    *,
+    formula: str = DEFAULT_FORMULA,
+    top_n: Annotated[int, Parameter(name=["--top-n"])] = DEFAULT_TOP_N,
+) -> None:
+    """Rank suspicious code locations for RUN_ID via SBFL.
+
+    Calls ``derive_localization_findings`` — the cache-aware engine entry
+    point. On cache miss it derives + persists; on cache hit it reads the
+    stored ``localization_findings.json`` (so ``derived_at`` is preserved
+    across repeated invocations). Bad ``--formula`` / ``--top-n`` values are
+    rejected up-front with ``invalid-flag`` (exit 2) so the engine never
+    sees them. A stale or fake ``run_id`` short-circuits to a structured
+    ``not-found`` envelope (exit 2) via ``_resolve_run_reference``.
+
+    Engine-level unavailability (no failed tests, no per-test coverage, a
+    tombstoned run) surfaces as ``localization_outcome.kind == "unavailable"``
+    with ``ok: true``, exit 0 — the transport succeeded; the unavailability
+    is data.
+    """
+
+    store = _require_store("localization")
+    _validate_localization_flags("localization", formula, top_n)
+    ref = _resolve_run_reference(store, "localization", run_id)
+    outcome = derive_localization_findings(store, ref, top_n=top_n, formula=formula)
+    _emit_and_exit(
+        Envelope(
+            command="localization",
+            ok=True,
+            data={"localization_outcome": _localization_outcome_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+@localization_app.command(name="latest")
+def localization_latest(
+    *,
+    formula: str = DEFAULT_FORMULA,
+    top_n: Annotated[int, Parameter(name=["--top-n"])] = DEFAULT_TOP_N,
+) -> None:
+    """Rank suspicious code locations for the latest analyzable run.
+
+    Composes the engine's ``derive_latest_localization`` end-to-end:
+    newest-first walk of Run History → first run that passes the
+    availability probe → ``derive_localization_findings``. An empty store
+    surfaces ``unavailable`` with reason ``no_run_evidence``; a store whose
+    runs are all non-analyzable surfaces ``run_not_analyzable``. Flag
+    validation mirrors the explicit-run verb.
+    """
+
+    store = _require_store("localization.latest")
+    _validate_localization_flags("localization.latest", formula, top_n)
+    outcome = derive_latest_localization(store, formula=formula, top_n=top_n)
+    _emit_and_exit(
+        Envelope(
+            command="localization.latest",
+            ok=True,
+            data={"localization_outcome": _localization_outcome_payload(outcome)},
+        ),
+        EXIT_OK,
+    )
+
+
+def _localization_outcome_payload(
+    outcome: LocalizationFinding | LocalizationUnavailable,
+) -> dict[str, Any]:
+    """Project a Localization outcome onto the working-draft wire shape.
+
+    Working draft for this slice — PM freezes it via a follow-up decision
+    after Manual Test fields it (the 4th application of the ship →
+    field-test → freeze cadence Coverage and Regression followed). Two
+    ``kind`` values discriminate at parse time: ``fact-set`` carries the
+    full persisted body (verbatim ``LocalizationFinding.to_dict()`` with the
+    top-level ``schema_version`` stripped — envelope versioning lives at the
+    top-level ``schema`` field, not inside data blocks), and ``unavailable``
+    carries the 3-key ``LocalizationUnavailable.to_dict()`` (``run_reference``
+    / ``reason`` / ``detail``, all always present; ``run_reference`` is
+    ``null`` for the latest-resolution empty / non-analyzable cases). The
+    nested ``LocalizationEntry`` / ``CodeLocation`` / ``EvidenceCitation``
+    shapes round-trip verbatim — the projection's only job is to add ``kind``
+    and strip the top-level ``schema_version``.
+    """
+    if isinstance(outcome, LocalizationFinding):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        return {"kind": "fact-set", **body}
+    return {"kind": "unavailable", **outcome.to_dict()}
+
+
+# ---------------------------------------------------------------------------
 # Aggregated single-run view
 # ---------------------------------------------------------------------------
 
@@ -690,13 +847,15 @@ def inspect_cmd(run_id: str) -> None:
     """Show the aggregated single-run view for ``run_id``.
 
     Composes the Run Record summary with the persisted Coverage Facts (the
-    same ``coverage_outcome`` block ``coverage show`` emits) AND a
-    Regression section computed against the most-recent live prior run on
-    the same target — flipping the ``sub_reports["regression"]`` marker
-    from ``"unavailable"`` to ``"available"`` when a baseline resolves.
-    Localization / Replay remain present-but-``unavailable`` until their
-    engines land in Phase 4/5. ``inspect`` executes nothing — it is a
-    pure read over stored evidence.
+    same ``coverage_outcome`` block ``coverage show`` emits), a Regression
+    section computed against the most-recent live prior run on the same
+    target, AND a Localization section read cache-only from the per-run
+    ``localization_findings.json`` (the same ``localization_outcome`` block
+    ``novetest localization`` emits) — each flips its
+    ``sub_reports[...]`` marker from ``"unavailable"`` to ``"available"``
+    when its evidence resolves. Replay remains present-but-``unavailable``
+    until its engine lands in Phase 5. ``inspect`` executes nothing — it is
+    a pure read over stored evidence (no derivation, no subprocess).
 
     A stale or fake ``run_id`` surfaces a structured ``not-found`` error
     (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
@@ -741,7 +900,7 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-for _name in ("test", "replay", "localization"):
+for _name in ("test", "replay"):
     _register_flat_stub(_name)
 # ``compare`` promoted to a real verb above.
 # ``regression`` promoted to a real sub-app above.
