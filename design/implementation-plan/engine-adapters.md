@@ -303,11 +303,15 @@ go tool covdata textfmt -i=$GOCOVERDIR -o=$RUN_DIR/native/cover.out
 
 ---
 
-## 5. Rust + `cargo test` / `cargo-nextest`
+## 5. Rust + `cargo nextest`
 
-**Decision: target `cargo-nextest` as the primary; fall back to `cargo test` only if nextest is absent.**
+**Decision (CEO-approved 2026-05-29, `decisions/2026-05-29-cargo-adapter-nextest-primary.md`): `cargo-nextest` is the ONLY execution path. No plain-text `cargo test` fallback. No nightly `-Z unstable-options` JSON path.**
 
-`cargo test`'s native JSON output (`--format=json -Z unstable-options`) is nightly-only. `cargo-nextest` is the de-facto modern test runner, has stable JUnit XML output on stable Rust, and is what most modern Rust projects already use in CI.
+`cargo-nextest`'s `libtest-json` message format is stable on stable Rust at nextest **0.9.50+** (2024). That replaces both:
+- the plain-text `cargo test` fallback this section originally sketched (lossy, locale-dependent, no per-test duration / failure detail), and
+- the nightly `cargo test --format=json -Z unstable-options` path (regresses Rust support to "nightly required").
+
+Users without nextest get an `engine-misconfigured` readiness state with a clear install hint (`cargo install cargo-nextest --locked` or `cargo binstall cargo-nextest`). Nove Test does not silently degrade.
 
 ### Discovery
 
@@ -315,73 +319,79 @@ go tool covdata textfmt -i=$GOCOVERDIR -o=$RUN_DIR/native/cover.out
 cargo nextest list --message-format=json
 ```
 
-Stable output. Fallback for non-nextest projects:
-
-```
-cargo test -- --list --format=terse
-```
-
-Parse the `name: test` lines.
+Stable output since nextest 0.9. (Discovery is currently out-of-scope for the adapter — the v1 slice ships execution + coverage only.)
 
 ### Execution with structured output
 
-Configure `.config/nextest.toml` in the project:
-
-```toml
-[profile.ci.junit]
-path = "junit.xml"
+```
+cargo nextest run \
+  --message-format=libtest-json \
+  --no-fail-fast \
+  --workspace \
+  [<target_expression>]
 ```
 
-Then:
+The adapter does **NOT** write `.config/nextest.toml` (the "we never modify the build file" rule applies across all six ecosystems). `--message-format=libtest-json` is stable on nextest >= 0.9.50.
 
-```
-cargo nextest run --profile=ci --no-fail-fast
-```
+Each NDJSON line shapes roughly:
 
-Nextest writes JUnit XML to `target/nextest/ci/junit.xml` (relative to the workspace). Parse the JUnit XML.
+- Suite-level: `{"type":"suite", "event":"started"|"ok"|"failed", ...}`
+- Test-level: `{"type":"test", "event":"started"|"ok"|"failed"|"ignored", "name":"<crate>::<path>", "stdout":"...", "stderr":"...", "exec_time": <seconds>}`
 
-If nextest is absent and the user is on stable Rust without nightly, we degrade to `cargo test --no-fail-fast` and parse the human-readable output - lossy. The doctor pass strongly recommends installing nextest; we document the install command.
+The `name` field already carries the binary path prefix in nextest mode (e.g. `crate--integration_test::test_x` for an integration-test binary), so it is used directly as the Run Record's `node_id`.
 
 ### Failure detail capture
 
-Nextest's JUnit XML carries:
-- panic message and file:line of the panic
-- captured stdout/stderr per test in `<system-out>`/`<system-err>`
-- `RUST_BACKTRACE=1` in the environment to land richer backtraces in the captured stderr
-
-Keep capture on (default); `--no-capture` streams output but loses per-test partitioning.
+The `test` event with `event: "failed"` carries `stdout` and `stderr` strings — the captured panic message and (with `RUST_BACKTRACE=1`) the backtrace. The adapter concatenates both into a single failure log file under `<artifact_dir>/native/failures/<safe_name>.log` and stores the relative path as the TestResult's `failure_reference`. Same coupling pattern as the gotest adapter.
 
 ### Coverage emission
 
 ```
-cargo llvm-cov nextest --lcov --output-path $RUN_DIR/native/lcov.info
-cargo llvm-cov --cobertura --output-path $RUN_DIR/native/cobertura.xml
-cargo llvm-cov --json --output-path $RUN_DIR/native/llvm-cov.json
+cargo llvm-cov nextest \
+  --lcov --output-path <artifact_dir>/native/coverage.lcov \
+  --no-fail-fast --workspace \
+  --message-format=libtest-json \
+  [<target_expression>]
 ```
 
-The underlying engine is LLVM source-based coverage (`-C instrument-coverage`); precise (region-level) and stable. Emit LCOV (most universal in Rust) plus Cobertura for interop.
+The underlying engine is LLVM source-based coverage (`-C instrument-coverage`); precise (region-level) and stable. The adapter emits LCOV only in v1 — Cobertura / LLVM JSON are deferred until Coverage team needs them. Coverage mode and execution mode are mutually exclusive per invocation (cargo-llvm-cov wraps nextest internally).
+
+Artifact key: **`coverage_lcov`** (distinct from pytest/jest `coverage_json` and go-test `coverage_profile`). The Coverage engine dispatches on `engine_name == "cargo-test"` to parse LCOV.
 
 ### Test-to-code mapping
 
-**Aggregate only on stable.** LLVM source-based coverage supports per-function counters but `cargo-llvm-cov` does not expose per-test tagging. Per-test mode = per-test invocations, opt-in slow mode.
+**Aggregate only on stable.** LLVM source-based coverage supports per-function counters but `cargo-llvm-cov` does not expose per-test tagging. Per-test mode = per-test invocations, opt-in slow mode — out-of-scope for v1 (deferred to a post-MVP slice).
 
 ### Required user-side tools
 
-| Tool | Purpose |
-| --- | --- |
-| `cargo-nextest` | Test runner with stable structured output |
-| `cargo-llvm-cov` | Coverage |
-| `llvm-tools-preview` rustup component | Required by `cargo-llvm-cov` |
+| Tool | Purpose | Min version | Readiness state on absence |
+| --- | --- | --- | --- |
+| `cargo` (Rust toolchain) | Build / spawn nextest | 1.74 | `engine-missing` (rustup hint) |
+| `cargo-nextest` | Test runner with libtest-json output | 0.9.50 | `engine-misconfigured` (`cargo install` hint) |
+| `cargo-llvm-cov` | Coverage (only when `--coverage` requested) | latest | `engine-misconfigured` (when coverage requested) |
+| `llvm-tools-preview` rustup component | Required by `cargo-llvm-cov` | — | `engine-misconfigured` |
 
-The doctor pass checks for these. `cargo binstall` produces faster installs than `cargo install`.
+`cargo binstall` produces faster installs than `cargo install`. The adapter never invokes installs on the user's behalf — install hints are text only.
+
+### Child subprocess env
+
+```
+CARGO_TERM_COLOR=never
+RUST_BACKTRACE=1
+NO_COLOR=1
+```
+
+NO `RUSTFLAGS` override (would invalidate the build cache). NO `CARGO_INCREMENTAL=0` (leave the user's incremental cache alone).
 
 ### Edge cases
 
-- Workspaces: `cargo test` and `cargo nextest` run all members; pass `-p <pkg>` or `--workspace` deliberately.
-- Doctests: `cargo test --doc` is a separate path; nextest does not run doctests yet. Run them separately and merge.
-- Integration tests in `tests/` get one binary per file - affects discovery counts.
+- Workspaces: `--workspace` is always passed so all members run by default. Users can scope to one crate via a nextest filter expression (e.g. `package(foo)`) plumbed through `target_expression`.
+- Doctests: `cargo test --doc` is a separate path; nextest does not run doctests. Out of scope for v1; future slice.
+- Integration tests in `tests/` get one binary per file — they appear as separate suite blocks in the libtest-json stream and the `name` field disambiguates them.
 - Build cache: ensure same `--features` set across discovery, execution, and coverage runs or the cache invalidates.
 - Windows: LLVM coverage works but path normalization is tricky; lowercase drive letters when joining.
+- Race detector / thread sanitizer: separate Run mode, future work.
+- JUnit-XML fallback for pre-0.9.50 nextest: explicitly deferred per the Q3 decision (additive extension; does not require a v2 decision).
 
 ---
 

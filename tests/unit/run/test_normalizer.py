@@ -600,3 +600,243 @@ def test_gotest_missing_events_array_raises(tmp_path: Path) -> None:
             target_type="workspace",
         )
     assert exc_info.value.kind == "unparseable-output"
+
+
+# ---------------------------------------------------------------------------
+# cargo-test payload normalization (Phase 3 adapter backlog #2)
+# ---------------------------------------------------------------------------
+
+
+def _cargo_native_result(
+    payload: dict[str, object],
+    tmp_path: Path,
+    *,
+    returncode: int = 0,
+) -> NativeResult:
+    return NativeResult(
+        engine_name="cargo-test",
+        payload=payload,
+        artifact_paths={
+            "cargo_events_jsonl": tmp_path / "events.jsonl",
+            "stdout": tmp_path / "stdout.log",
+            "stderr": tmp_path / "stderr.log",
+        },
+        returncode=returncode,
+        started_at_ms=1_700_000_000_000,
+        completed_at_ms=1_700_000_000_500,
+        engine_version="1.74.0",
+    )
+
+
+CARGO_PASSING_PAYLOAD: dict[str, object] = {
+    "events": [
+        {"type": "suite", "event": "started", "test_count": 2},
+        {"type": "test", "event": "started", "name": "my_crate::tests::test_add"},
+        {
+            "type": "test",
+            "event": "ok",
+            "name": "my_crate::tests::test_add",
+            "exec_time": 0.003,
+        },
+        {"type": "test", "event": "started", "name": "my_crate::tests::test_sub"},
+        {
+            "type": "test",
+            "event": "ok",
+            "name": "my_crate::tests::test_sub",
+            "exec_time": 0.001,
+        },
+        {"type": "suite", "event": "ok", "passed": 2, "failed": 0},
+    ],
+    "binaries": [],
+    "failure_logs": {},
+    "nextest_version": "0.9.70",
+}
+
+
+CARGO_FAILING_PAYLOAD: dict[str, object] = {
+    "events": [
+        {"type": "suite", "event": "started", "test_count": 2},
+        {"type": "test", "event": "started", "name": "my_crate::tests::test_ok"},
+        {"type": "test", "event": "ok", "name": "my_crate::tests::test_ok", "exec_time": 0.002},
+        {"type": "test", "event": "started", "name": "my_crate::tests::test_bad"},
+        {
+            "type": "test",
+            "event": "failed",
+            "name": "my_crate::tests::test_bad",
+            "stdout": "thread 'tests::test_bad' panicked at 'assertion `left == right` failed'\n",
+            "exec_time": 0.001,
+        },
+        {"type": "suite", "event": "failed", "passed": 1, "failed": 1},
+    ],
+    "binaries": [],
+    "failure_logs": {
+        "my_crate::tests::test_bad": "native/failures/my_crate__tests__test_bad.log",
+    },
+    "nextest_version": "0.9.70",
+}
+
+
+def test_cargo_passing_payload_yields_passed_status(tmp_path: Path) -> None:
+    record = normalize_native_result(
+        _cargo_native_result(CARGO_PASSING_PAYLOAD, tmp_path),
+        NativeEngineContext("rust", "cargo-test", "1.74.0"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "passed"
+    assert record.engine_name == "cargo-test"
+    assert record.ecosystem == "rust"
+    assert record.engine_version == "1.74.0"
+    assert record.summary_counts["passed"] == 2
+    assert record.summary_counts["failed"] == 0
+    assert record.summary_counts["total"] == 2
+    assert len(record.test_results) == 2
+    # node_id = libtest-json `name` field, used directly.
+    assert {tr.node_id for tr in record.test_results} == {
+        "my_crate::tests::test_add",
+        "my_crate::tests::test_sub",
+    }
+    # exec_time (seconds, float) → duration_ms (int).
+    durations = {tr.node_id: tr.duration_ms for tr in record.test_results}
+    assert durations["my_crate::tests::test_add"] == 3
+    assert durations["my_crate::tests::test_sub"] == 1
+
+
+def test_cargo_failing_payload_yields_failed_status_and_failure_reference(
+    tmp_path: Path,
+) -> None:
+    record = normalize_native_result(
+        _cargo_native_result(CARGO_FAILING_PAYLOAD, tmp_path, returncode=1),
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "failed"
+    failed = [tr for tr in record.test_results if tr.outcome == "failed"]
+    assert len(failed) == 1
+    assert failed[0].node_id == "my_crate::tests::test_bad"
+    assert (
+        failed[0].failure_reference
+        == "native/failures/my_crate__tests__test_bad.log"
+    )
+
+
+def test_cargo_integration_test_node_id_distinguishes_binary(tmp_path: Path) -> None:
+    """Integration tests in `tests/foo.rs` arrive with a binary-prefixed
+    `name` in nextest mode (e.g. `my_crate--integration_test::test_x`).
+    The normalizer uses ``name`` directly as node_id, so the binary
+    prefix surfaces verbatim — downstream consumers can distinguish
+    unit-test vs integration-test rows by the `--` substring or by
+    parsing the prefix.
+    """
+
+    payload: dict[str, object] = {
+        "events": [
+            {
+                "type": "test",
+                "event": "ok",
+                "name": "my_crate--integration_test::test_x",
+                "exec_time": 0.001,
+            },
+        ],
+        "binaries": ["my_crate--integration_test"],
+        "failure_logs": {},
+        "nextest_version": "0.9.70",
+    }
+    record = normalize_native_result(
+        _cargo_native_result(payload, tmp_path),
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert len(record.test_results) == 1
+    assert record.test_results[0].node_id == "my_crate--integration_test::test_x"
+
+
+def test_cargo_ignored_event_maps_to_skipped(tmp_path: Path) -> None:
+    """libtest's ``ignored`` event (``#[ignore]``) maps to ``skipped``.
+
+    Aggregate status stays ``passed`` when returncode is 0.
+    """
+
+    payload: dict[str, object] = {
+        "events": [
+            {"type": "test", "event": "ignored", "name": "my_crate::tests::test_x"},
+        ],
+        "binaries": [],
+        "failure_logs": {},
+        "nextest_version": "0.9.70",
+    }
+    record = normalize_native_result(
+        _cargo_native_result(payload, tmp_path),
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "passed"
+    assert record.summary_counts["skipped"] == 1
+    assert {tr.outcome for tr in record.test_results} == {"skipped"}
+
+
+def test_cargo_unknown_terminal_event_maps_to_unknown_outcome(tmp_path: Path) -> None:
+    """Per the supported-engine-matrix decision: unknown terminal events
+    map to ``"unknown"`` rather than raising. Visible-not-silent.
+    """
+
+    payload: dict[str, object] = {
+        "events": [
+            # `aborted` is a hypothetical future libtest event not in the
+            # current `ok | failed | ignored` set; the parser drops the
+            # known-non-terminal `started` event but falls through to
+            # outcome-mapping for any other terminal-shaped event.
+            {
+                "type": "test",
+                "event": "aborted",
+                "name": "my_crate::tests::test_x",
+                "exec_time": 0.5,
+            },
+        ],
+        "binaries": [],
+        "failure_logs": {},
+        "nextest_version": "0.9.70",
+    }
+    record = normalize_native_result(
+        _cargo_native_result(payload, tmp_path),
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    outcomes = [tr.outcome for tr in record.test_results]
+    assert outcomes == ["unknown"]
+
+
+def test_cargo_returncode_nonzero_with_no_failures_yields_errored(
+    tmp_path: Path,
+) -> None:
+    """Non-zero exit with no failing tests (e.g. build-script post-test
+    crash) surfaces as ``errored`` so callers do not misread the run as
+    ``passed``.
+    """
+
+    record = normalize_native_result(
+        _cargo_native_result(CARGO_PASSING_PAYLOAD, tmp_path, returncode=101),
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "errored"
+
+
+def test_cargo_missing_events_array_raises(tmp_path: Path) -> None:
+    """A payload missing the top-level ``events`` array is unparseable —
+    the adapter is the only writer and should always include it.
+    """
+
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        normalize_native_result(
+            _cargo_native_result({"binaries": []}, tmp_path),
+            NativeEngineContext("rust", "cargo-test"),
+            target_expression="",
+            target_type="workspace",
+        )
+    assert exc_info.value.kind == "unparseable-output"

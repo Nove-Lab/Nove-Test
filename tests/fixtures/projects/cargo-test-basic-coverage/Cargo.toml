@@ -1,0 +1,12 @@
+[package]
+name = "cargo_test_basic_coverage"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+
+# Two source files under `src/` so the LCOV report carries multi-file
+# block structure. No external dependencies — `cargo llvm-cov nextest`
+# walks `std` only.
+
+[lib]
+path = "src/lib.rs"

@@ -50,3 +50,13 @@ def gotest_basic_workspace() -> Path:
 @pytest.fixture
 def gotest_basic_coverage_workspace() -> Path:
     return FIXTURE_PROJECTS_ROOT / "gotest-basic-coverage"
+
+
+@pytest.fixture
+def cargo_test_basic_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "cargo-test-basic"
+
+
+@pytest.fixture
+def cargo_test_basic_coverage_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "cargo-test-basic-coverage"

@@ -1,10 +1,11 @@
 """Supported (ecosystem, engine) pairs and selection from a Test Target.
 
 Phase 1 shipped pytest; Phase 2.5 added jest; Phase 3 (adapter backlog
-slice #1) added go-test. The remaining three pairs (junit / cargo-test /
-xunit) appear in `list_supported_engine_pairs` so detection and CLI
-surfaces can name them even though `select_native_engine` raises for any
-selection without an implemented adapter.
+slice #1) added go-test; Phase 3 (adapter backlog slice #2) added
+cargo-test. The remaining two pairs (junit / xunit) appear in
+`list_supported_engine_pairs` so detection and CLI surfaces can name
+them even though `select_native_engine` raises for any selection
+without an implemented adapter.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ _IMPLEMENTED_ECOSYSTEM_TO_ENGINE: dict[str, str] = {
     "python": "pytest",
     "javascript-typescript": "jest",
     "go": "go-test",
+    "rust": "cargo-test",
 }
 
 
@@ -66,11 +68,11 @@ def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
     """Pick the Native Engine for a resolved Test Target.
 
     Returns a `NativeEngineContext` for any ecosystem with a shipping
-    adapter (python+pytest, javascript-typescript+jest, go+go-test). Any
-    other detected-but-not-yet-implemented ecosystem (java / rust /
-    dotnet) raises `EngineNotSupportedError`. Workspaces that match no
-    supported ecosystem also raise — the caller is expected to gate on
-    `assess_engine_readiness` first.
+    adapter (python+pytest, javascript-typescript+jest, go+go-test,
+    rust+cargo-test). Any other detected-but-not-yet-implemented
+    ecosystem (java / dotnet) raises `EngineNotSupportedError`.
+    Workspaces that match no supported ecosystem also raise — the caller
+    is expected to gate on `assess_engine_readiness` first.
     """
 
     ecosystem = _ecosystem_for_workspace(test_target.workspace_path)
