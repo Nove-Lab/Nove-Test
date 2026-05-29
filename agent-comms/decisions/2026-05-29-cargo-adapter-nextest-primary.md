@@ -118,6 +118,19 @@ PM amends the matrix in the cycle-close commit.
   A JUnit-XML fallback parser could be added later WITHOUT auto-writing
   `.config/nextest.toml` (which our adapters never do), but that work
   is not scheduled at v1.
+- **The `nextest_version` payload-stash convention** (raised in the
+  Run team's handoff §Open items #1). The Run team stashed
+  `nextest_version` in `NativeResult.payload["nextest_version"]`
+  rather than `NativeEngineContext` (which is a frozen dataclass
+  with no extension hook), keeping `models/` untouched. The eventual
+  call — codify payload-stash as the engine-version-stash convention,
+  OR amend `NativeEngineContext` with an optional
+  `metadata: dict[str, str]` slot in a future `models/` slice — is
+  deferred until a polyglot-host pass actually inspects where
+  `nextest_version` surfaces in a persisted Run Record. Added
+  2026-05-29 at the cycle-close — see
+  `decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md` §"What
+  this does NOT decide" for the trigger conditions.
 
 ## Affected files / teams
 

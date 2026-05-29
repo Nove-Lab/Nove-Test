@@ -183,10 +183,10 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Definition-of-done:**
 
-- [ ] `novetest localization latest --output json` against `localization-branch` ranks the bug in top 3.
+- [x] `novetest localization latest --output json` against `localization-branch` ranks the bug in top 3. *(closed 2026-05-29: Localization CLI slice `385e2dc` ranks `divide` at rank 1, Ochiai 1.0 — Manual Test verified verbatim against the `localization-branch` fixture; see history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md.)*
 - [ ] Mode field populated correctly across all three fixtures.
 - [ ] Performance NFR-LOC-002 met (500 failed tests + 50k covered locations within 8s).
-- [ ] All four formulas computed and persisted; `--formula` flag selects which is presented as primary.
+- [x] All four formulas computed and persisted; `--formula` flag selects which is presented as primary. *(closed 2026-05-29: Localization CLI slice `385e2dc` — Manual Test verified all 4 formulas (ochiai / dstar2 / op2 / tarantula) under `--formula` selection; `alternate_scores_available` is always 3 sorted strings with primary excluded; engine persists all 4 scores per entry.)*
 
 **Risks:**
 

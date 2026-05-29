@@ -8,8 +8,7 @@ Last regenerated: 2026-05-29
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-05-29-localization-cli.md](./tasks/orchestration-team-2026-05-29-localization-cli.md) — `novetest-pm-team → novetest-orchestration-team` (localization-cli)
-- [run-team-2026-05-29-cargo-adapter.md](./tasks/run-team-2026-05-29-cargo-adapter.md) — `novetest-pm-team → novetest-run-team` (cargo-adapter)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -24,6 +23,7 @@ _(none)_
 - [2026-05-28-localization-finding-shape.md](./decisions/2026-05-28-localization-finding-shape.md) — `novetest-pm-team → all` (localization-finding-shape)
 - [2026-05-28-regression-outcome-envelope-shape.md](./decisions/2026-05-28-regression-outcome-envelope-shape.md) — `novetest-pm-team → all` (regression-outcome-envelope-shape)
 - [2026-05-29-cargo-adapter-nextest-primary.md](./decisions/2026-05-29-cargo-adapter-nextest-primary.md) — `novetest-pm-team → all` (cargo-adapter-nextest-primary)
+- [2026-05-29-cargo-adapter-v1-without-rust-e2e.md](./decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md) — `novetest-pm-team → all` (cargo-adapter-v1-without-rust-e2e)
 
 ## Recent history (last 7 days)
 - [2026-05-25-duplicate-merge-cycle.md](./history/2026-05-25-duplicate-merge-cycle.md) — `novetest-pm-team → all` (duplicate-merge-cycle)
@@ -33,3 +33,4 @@ _(none)_
 - [2026-05-28-gotest-adapter-and-localization-phase4-entry.md](./history/2026-05-28-gotest-adapter-and-localization-phase4-entry.md) — `novetest-pm-team → all` (gotest-adapter-and-localization-phase4-entry)
 - [2026-05-28-localization-engine-complete.md](./history/2026-05-28-localization-engine-complete.md) — `novetest-pm-team → all` (localization-engine-complete)
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
+- [2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md](./history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md) — `novetest-pm-team → all` (cargo-adapter-and-localization-cli-parallel-cycle)
