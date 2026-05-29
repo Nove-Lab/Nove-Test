@@ -249,8 +249,19 @@ section). This closes the cargo E2E gap.
 cargo --version          # cargo 1.74 or newer
 cargo nextest --version  # 0.9.50 or newer
 cargo llvm-cov --version # any
-rustup component list --installed | grep llvm-tools-preview
+rustup component list --installed | grep llvm-tools
 ```
+
+The `add` command accepts the historical alias `llvm-tools-preview`,
+but `rustup component list --installed` reports the component as
+`llvm-tools-<host-triple>` (e.g. `llvm-tools-x86_64-unknown-linux-gnu`)
+— the `-preview` suffix was dropped upstream. Grep the unsuffixed
+prefix `llvm-tools` so the check survives both naming forms.
+
+Refined 2026-05-30 on first trigger-(b) firing (Linux/WSL2 host).
+Observed install versions: cargo 1.96.0, cargo-nextest 0.9.137,
+cargo-llvm-cov 0.8.7. Floors held with comfortable headroom; no
+floor bump warranted at this firing.
 
 ---
 
