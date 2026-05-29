@@ -308,3 +308,99 @@ def test_localization_latest_uninitialized_workspace_exits_2(
     assert exc_info.value.code == 2
     payload = _captured_envelope(capsys)
     assert payload["errors"][0]["code"] == "uninitialized"
+
+
+# ---------------------------------------------------------------------------
+# Cache-args-ignored warning suite (latest verb). The detection logic lives
+# in the shared ``_build_localization_cache_mismatch_warning`` helper —
+# these tests only confirm the latest-verb path wires up the warning slot
+# the same way as the explicit-run verb. The full six-scenario matrix is
+# covered in ``test_localization.py``.
+# ---------------------------------------------------------------------------
+
+
+_CACHE_WARN_CODE = "localization-cache-args-ignored"
+
+
+def test_localization_latest_emits_warning_on_explicit_formula_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+) -> None:
+    """``latest`` resolves to a cached run; the engine's
+    ``derive_latest_localization`` returns the cached finding (formula
+    ``ochiai``); user passed ``--formula=dstar2``. Warning fires; same
+    code and details schema as the explicit-run verb."""
+
+    cached_finding = _make_finding(formula="ochiai", top_n=10)
+    monkeypatch.setattr(
+        app_module,
+        "derive_latest_localization",
+        lambda _store, *, formula, top_n: cached_finding,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_latest(formula="dstar2")
+    assert exc_info.value.code == 0
+
+    payload = _captured_envelope(capsys)
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["code"] == _CACHE_WARN_CODE
+    details = warning["details"]
+    assert details["requested"]["formula"] == "dstar2"
+    assert details["requested"]["formula_explicit"] is True
+    assert details["cached"]["formula"] == "ochiai"
+
+
+def test_localization_latest_no_warning_on_match(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+) -> None:
+    """When ``latest`` returns a finding whose flags match the user's
+    explicit request, no warning."""
+
+    matching = _make_finding(formula="tarantula", top_n=5)
+    monkeypatch.setattr(
+        app_module,
+        "derive_latest_localization",
+        lambda _store, *, formula, top_n: matching,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_latest(formula="tarantula", top_n=5)
+    assert exc_info.value.code == 0
+
+    payload = _captured_envelope(capsys)
+    assert payload["warnings"] == []
+
+
+def test_localization_latest_no_warning_when_outcome_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+) -> None:
+    """``latest`` against an empty store: ``LocalizationUnavailable`` —
+    no warning even when the user passed explicit flags."""
+
+    monkeypatch.setattr(
+        app_module,
+        "derive_latest_localization",
+        lambda _store, *, formula, top_n: LocalizationUnavailable(
+            run_reference=None,
+            reason=REASON_NO_RUN_EVIDENCE,
+            detail="empty store",
+        ),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_latest(formula="dstar2", top_n=3)
+    assert exc_info.value.code == 0
+
+    payload = _captured_envelope(capsys)
+    assert payload["warnings"] == []

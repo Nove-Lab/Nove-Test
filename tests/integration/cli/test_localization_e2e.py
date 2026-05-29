@@ -243,3 +243,74 @@ def test_inspect_after_localization_derive_shows_fact_set(
     assert sub_reports.get("localization") == "available", (
         f"Expected localization=available, got: {sub_reports!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# E2E Test 4: cache-args-ignored warning on re-inspection with --formula change.
+# Reproduces the Manual Test §2 cache-hit silent-ignore scenario end-to-end.
+# ---------------------------------------------------------------------------
+
+
+def test_localization_latest_warns_when_cached_flags_ignored(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """``novetest localization latest --formula dstar2`` against a store
+    whose cache was derived with the default ``ochiai`` formula:
+
+    - The cached ``ochiai`` findings are returned unchanged
+      (``outcome.formula == "ochiai"``; entries[0] is still ``divide``
+      with score 1.0 — Ochiai's value).
+    - The envelope-level ``warnings`` tuple carries exactly one
+      ``localization-cache-args-ignored`` warning with the full
+      requested/cached payload pinned by the task brief.
+
+    Mirrors the Manual Test §2 finding from
+    ``findings/manual-test-team-2026-05-29-orchestration-localization-cli.md``,
+    closed by Option B (warning, do not re-derive)."""
+
+    workspace = seeded_workspace["workspace"]
+    run_id = seeded_workspace["run_id"]
+
+    code, envelope, stderr = _run_cli(
+        workspace, ["localization", "latest", "--formula", "dstar2"]
+    )
+    assert code == 0, f"Expected exit 0, got {code}. stderr={stderr!r}"
+    assert envelope.get("command") == "localization.latest"
+    assert envelope.get("ok") is True
+
+    data = envelope.get("data")
+    assert isinstance(data, dict)
+    outcome = data.get("localization_outcome")
+    assert isinstance(outcome, dict)
+    # Cached findings returned unchanged — formula stays "ochiai" despite
+    # the user's --formula=dstar2 request.
+    assert outcome["kind"] == "fact-set"
+    assert outcome["formula"] == "ochiai"
+    entries = outcome.get("entries")
+    assert isinstance(entries, list)
+    top = entries[0]
+    assert top["rank"] == 1
+    assert top["score_raw"] == 1.0
+    assert top["code_location"]["symbol"] == "divide"
+
+    warnings = envelope.get("warnings")
+    assert isinstance(warnings, list)
+    assert len(warnings) == 1, (
+        f"Expected exactly one cache-args-ignored warning, got {warnings!r}"
+    )
+    warning = warnings[0]
+    assert warning["code"] == "localization-cache-args-ignored"
+    assert "--formula='dstar2'" in warning["message"]
+    assert "--formula='ochiai'" in warning["message"]
+    assert "delete cache" in warning["message"]
+
+    details = warning["details"]
+    assert details["requested"]["formula"] == "dstar2"
+    assert details["requested"]["formula_explicit"] is True
+    assert details["requested"]["top_n_explicit"] is False
+    assert details["cached"]["formula"] == "ochiai"
+    assert details["cached"]["top_n"] == 10  # engine default
+    expected_path = (
+        f".novetest/localization/findings/run_{run_id}/localization_findings.json"
+    )
+    assert details["cache_path"] == expected_path

@@ -17,6 +17,7 @@ from novetest.cli.output import (
     EXIT_USER_TESTS_FAILED,
     Envelope,
     EnvelopeError,
+    EnvelopeWarning,
     OutputMode,
     apply_no_color,
     emit_envelope,
@@ -749,8 +750,8 @@ def _validate_localization_flags(command: str, formula: str, top_n: int) -> None
 def localization_run(
     run_id: str,
     *,
-    formula: str = DEFAULT_FORMULA,
-    top_n: Annotated[int, Parameter(name=["--top-n"])] = DEFAULT_TOP_N,
+    formula: str | None = None,
+    top_n: Annotated[int | None, Parameter(name=["--top-n"])] = None,
 ) -> None:
     """Rank suspicious code locations for RUN_ID via SBFL.
 
@@ -766,17 +767,37 @@ def localization_run(
     tombstoned run) surfaces as ``localization_outcome.kind == "unavailable"``
     with ``ok: true``, exit 0 — the transport succeeded; the unavailability
     is data.
+
+    ``--formula`` defaults to ``"ochiai"``; ``--top-n`` defaults to ``10``.
+    Both flags use ``None`` sentinels here so the handler can distinguish
+    "user explicitly passed this value" from "Cyclopts default in effect" —
+    the cache-args-ignored warning fires only on explicit-and-different
+    (see ``_build_localization_cache_mismatch_warning`` below).
     """
 
     store = _require_store("localization")
-    _validate_localization_flags("localization", formula, top_n)
+    formula_explicit = formula is not None
+    top_n_explicit = top_n is not None
+    resolved_formula = formula if formula is not None else DEFAULT_FORMULA
+    resolved_top_n = top_n if top_n is not None else DEFAULT_TOP_N
+    _validate_localization_flags("localization", resolved_formula, resolved_top_n)
     ref = _resolve_run_reference(store, "localization", run_id)
-    outcome = derive_localization_findings(store, ref, top_n=top_n, formula=formula)
+    outcome = derive_localization_findings(
+        store, ref, top_n=resolved_top_n, formula=resolved_formula
+    )
+    warning = _build_localization_cache_mismatch_warning(
+        outcome=outcome,
+        requested_formula=resolved_formula,
+        requested_top_n=resolved_top_n,
+        formula_explicit=formula_explicit,
+        top_n_explicit=top_n_explicit,
+    )
     _emit_and_exit(
         Envelope(
             command="localization",
             ok=True,
             data={"localization_outcome": _localization_outcome_payload(outcome)},
+            warnings=(warning,) if warning is not None else (),
         ),
         EXIT_OK,
     )
@@ -785,8 +806,8 @@ def localization_run(
 @localization_app.command(name="latest")
 def localization_latest(
     *,
-    formula: str = DEFAULT_FORMULA,
-    top_n: Annotated[int, Parameter(name=["--top-n"])] = DEFAULT_TOP_N,
+    formula: str | None = None,
+    top_n: Annotated[int | None, Parameter(name=["--top-n"])] = None,
 ) -> None:
     """Rank suspicious code locations for the latest analyzable run.
 
@@ -796,18 +817,113 @@ def localization_latest(
     surfaces ``unavailable`` with reason ``no_run_evidence``; a store whose
     runs are all non-analyzable surfaces ``run_not_analyzable``. Flag
     validation mirrors the explicit-run verb.
+
+    Cache-args-ignored warning semantics match the explicit-run verb: the
+    ``None`` sentinel defaults let the handler distinguish "user explicitly
+    passed this value" from "Cyclopts default in effect".
     """
 
     store = _require_store("localization.latest")
-    _validate_localization_flags("localization.latest", formula, top_n)
-    outcome = derive_latest_localization(store, formula=formula, top_n=top_n)
+    formula_explicit = formula is not None
+    top_n_explicit = top_n is not None
+    resolved_formula = formula if formula is not None else DEFAULT_FORMULA
+    resolved_top_n = top_n if top_n is not None else DEFAULT_TOP_N
+    _validate_localization_flags(
+        "localization.latest", resolved_formula, resolved_top_n
+    )
+    outcome = derive_latest_localization(
+        store, formula=resolved_formula, top_n=resolved_top_n
+    )
+    warning = _build_localization_cache_mismatch_warning(
+        outcome=outcome,
+        requested_formula=resolved_formula,
+        requested_top_n=resolved_top_n,
+        formula_explicit=formula_explicit,
+        top_n_explicit=top_n_explicit,
+    )
     _emit_and_exit(
         Envelope(
             command="localization.latest",
             ok=True,
             data={"localization_outcome": _localization_outcome_payload(outcome)},
+            warnings=(warning,) if warning is not None else (),
         ),
         EXIT_OK,
+    )
+
+
+def _build_localization_cache_mismatch_warning(
+    *,
+    outcome: LocalizationFinding | LocalizationUnavailable,
+    requested_formula: str,
+    requested_top_n: int,
+    formula_explicit: bool,
+    top_n_explicit: bool,
+) -> EnvelopeWarning | None:
+    """Return the cache-args-ignored warning, or ``None`` when no warning is due.
+
+    Detection model — "peek-after-derive" via the returned ``LocalizationFinding``:
+
+    - A fresh derive (no prior cache) always returns a finding whose
+      ``formula`` / ``top_n`` match the values passed to the engine
+      (because the engine writes them straight onto the payload). So if
+      ``outcome.formula == requested_formula`` AND
+      ``outcome.top_n == requested_top_n``, either there was no prior
+      cache OR the prior cache's stored flags happened to match — both
+      cases are non-warning per the brief (scope §3 + §4 + §6).
+    - A cache hit returns the cached finding verbatim, so its
+      ``formula`` / ``top_n`` reflect the FLAGS the cache was originally
+      derived with. A mismatch on either field — combined with the user
+      having explicitly passed that flag — is the precise condition the
+      warning is meant to surface.
+    - When the outcome is ``LocalizationUnavailable``, there's nothing
+      cached to warn about; return ``None``.
+
+    Per scope §1, the ``*_explicit`` gating means a defaulted flag that
+    happens to differ from the cache produces NO warning for that flag —
+    the user did not ask for a specific value. The message format still
+    lists BOTH flags' requested/cached values whenever ANY mismatch
+    triggers (scope brief §134-139).
+
+    The ``cache_path`` is computed by template — the on-disk layout is
+    pinned by ``localization/persistence.py`` and Memory's availability
+    probe both reference the exact ``<store>/localization/findings/run_<id>/localization_findings.json``
+    path. Hardcoding the template here avoids a redundant disk read and
+    keeps the orchestration layer self-contained.
+    """
+    if not isinstance(outcome, LocalizationFinding):
+        return None
+    cached_formula = outcome.formula
+    cached_top_n = outcome.top_n
+    formula_mismatch = formula_explicit and requested_formula != cached_formula
+    top_n_mismatch = top_n_explicit and requested_top_n != cached_top_n
+    if not (formula_mismatch or top_n_mismatch):
+        return None
+    run_id = outcome.run_reference.run_id
+    cache_path = (
+        f".novetest/localization/findings/run_{run_id}/localization_findings.json"
+    )
+    message = (
+        f"requested --formula='{requested_formula}' --top-n={requested_top_n} "
+        f"but cached findings were derived with --formula='{cached_formula}' "
+        f"--top-n={cached_top_n}; delete cache ({cache_path}) and re-run to override"
+    )
+    return EnvelopeWarning(
+        code="localization-cache-args-ignored",
+        message=message,
+        details={
+            "requested": {
+                "formula": requested_formula,
+                "top_n": requested_top_n,
+                "formula_explicit": formula_explicit,
+                "top_n_explicit": top_n_explicit,
+            },
+            "cached": {
+                "formula": cached_formula,
+                "top_n": cached_top_n,
+            },
+            "cache_path": cache_path,
+        },
     )
 
 
