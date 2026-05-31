@@ -2,18 +2,25 @@
 //!
 //! Splits the SuT into two modules (`arithmetic` + `classifier`) so the
 //! LCOV report carries cross-file block structure. `arithmetic::divide`
-//! has a DELIBERATE bug (returns `a + b` instead of `a / b`); the
-//! `test_divide` test fails, and its panic message references
-//! `src/arithmetic.rs:<line>:<col>` — which the Localization engine's
-//! `sbfl_aggregate` mode parses to lift that file's suspicion above
+//! has a DELIBERATE bug (returns `a + b` instead of `a / b`).
+//!
+//! The **failing** `test_divide` test lives INSIDE `arithmetic.rs`
+//! (Option A from the 2026-05-31 equipped-host defect Q&A) so the
+//! `assert_eq!` panic site IS the bug site — the panic trace
+//! references `src/arithmetic.rs:<line>:<col>` and the Localization
+//! engine's `sbfl_aggregate` mode lifts that file's suspicion above
 //! every other covered file.
+//!
+//! The PASSING tests below (`test_add`, `test_subtract`,
+//! `test_classify_positive`) stay at the crate root because their
+//! bug-site/assert-site alignment doesn't matter — they pass.
 
 pub mod arithmetic;
 pub mod classifier;
 
 #[cfg(test)]
 mod tests {
-    use super::arithmetic::{add, divide, subtract};
+    use super::arithmetic::{add, subtract};
     use super::classifier::classify;
 
     #[test]
@@ -24,15 +31,6 @@ mod tests {
     #[test]
     fn test_subtract() {
         assert_eq!(subtract(10, 4), 6);
-    }
-
-    /// THIS TEST FAILS. The seeded bug in `arithmetic::divide` returns
-    /// `a + b` instead of `a / b`; the assert fires with a panic
-    /// referencing `src/arithmetic.rs:<line>:<col>`. Do NOT fix the
-    /// bug — the fixture's contract is the bug.
-    #[test]
-    fn test_divide() {
-        assert_eq!(divide(10, 2), 5);
     }
 
     /// Covers the positive branch of `classify`.
