@@ -168,6 +168,26 @@ async def run_cargo(
         # during coverage runs (unlike Go where coverage just augments
         # the same `-json` invocation, Rust's coverage path requires the
         # llvm-cov wrapper).
+        #
+        # `--ignore-run-fail` (NOT `--no-fail-fast`) is the load-bearing
+        # flag here. The two are mutually exclusive on cargo-llvm-cov's
+        # CLI; `--no-fail-fast` runs every test but tells cargo-llvm-cov
+        # to surface nextest's non-zero exit (any failing test → exit
+        # 100) as the wrapper's own failure, which suppresses the LCOV
+        # report. `--ignore-run-fail` also runs every test (it implies
+        # `--no-fail-fast` internally — verify via stderr trace: cargo-
+        # llvm-cov passes `--no-fail-fast` to the inner cargo-nextest
+        # invocation regardless), BUT also commits to emitting the LCOV
+        # report even when nextest exits non-zero. That is exactly the
+        # behavior we need: a Localization / Coverage consumer of a
+        # failing run wants to see what code the failing tests touched.
+        # Empirical proof in
+        # `agent-comms/questions/main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md`
+        # §Defect 1: pre-fix `lcov written: NO`; post-fix `lcov written:
+        # YES (1710 bytes)` on the `localization-aggregate-only`
+        # fixture. Plain cargo-nextest (the non-coverage path below)
+        # does NOT accept `--ignore-run-fail` — it is a cargo-llvm-cov-
+        # only flag — so the swap is confined to this branch.
         argv = [
             cargo_path,
             "llvm-cov",
@@ -175,7 +195,7 @@ async def run_cargo(
             "--lcov",
             "--output-path",
             str(coverage_path),
-            "--no-fail-fast",
+            "--ignore-run-fail",
             "--workspace",
             "--message-format=libtest-json",
         ]
@@ -183,7 +203,10 @@ async def run_cargo(
         # `--no-fail-fast` keeps nextest running after the first failure
         # so the Run Record captures every test outcome — matches the
         # `pytest --maxfail=1` opt-out posture (default is no
-        # short-circuit).
+        # short-circuit). The cargo-llvm-cov-specific
+        # `--ignore-run-fail` (used in the coverage branch above) is
+        # NOT applicable here: it is a wrapper-level flag that plain
+        # cargo-nextest rejects.
         argv = [
             cargo_path,
             "nextest",
