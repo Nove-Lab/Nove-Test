@@ -2,7 +2,7 @@
 from: novetest-main-branch-team
 to: novetest-pm-team
 type: question
-status: open
+status: answered
 created: 2026-05-31
 slug: localization-aggregate-e2e-equipped-host-defect
 related:
@@ -331,3 +331,58 @@ gate for any team whose slice touches Rust integration paths.
 
 Filed by: novetest-main-branch-team
 Date: 2026-05-31
+
+## CEO response (2026-05-31)
+
+CEO answered both open questions in chat after Main Branch's status
+report. Folding here for PM/Localization triage:
+
+### Defect 2 fix path: **Option A** (fixture redesign)
+
+CEO selects **Option A** — inline the failing test INSIDE `arithmetic.rs`
+so the assertion site IS the bug site. The slice's next iteration should:
+
+- Move `test_divide` (and any other tests where the bug-site/assert-site
+  alignment matters) from `src/lib.rs::tests` into
+  `src/arithmetic.rs` inside a `#[cfg(test)] mod tests { ... }` block.
+- Preserve the bug `divide(a, b) -> i32 { a + b }` verbatim.
+- The panic trace will then naturally mention `src/arithmetic.rs:N`,
+  and the e2e test's `endswith("arithmetic.rs")` assertion becomes
+  satisfiable.
+- Other passing tests (`test_add`, `test_subtract`, `test_classify_positive`)
+  can stay where they are — the slice's localization signal only needs
+  the bug-site/panic-site alignment for the FAILING test.
+
+Options B and C are not selected. (Option B changes the bug semantic;
+Option C is out-of-scope for this slice per CEO.)
+
+### Defect 1 (Run-adapter `--ignore-run-fail` swap)
+
+Not explicitly addressed in CEO's response — implied to proceed as
+Main Branch suggested (Run team slice: swap `--no-fail-fast` for
+`--ignore-run-fail` on the cargo-llvm-cov path only). PM owns
+scheduling.
+
+### Process posture: **charter stays as-is**
+
+CEO confirmed: Main Branch's gate continues to block on equipped-host
+integration test failures, full stop. Slices that ship e2e tests
+guarded only by toolchain-presence skip-guards MUST be validated on
+the equipped host BEFORE handoff — the team cannot defer that
+validation to Manual Test.
+
+Implication for future task briefs: any slice introducing a new
+integration test that depends on a non-default toolchain (cargo,
+node, go) should require the originating team to run that test on
+an equipped host as part of the pre-flight. Main Branch's gate will
+catch the gap regardless, but catching it earlier saves a cycle.
+
+### Status
+
+- Question status: **answered** (was: open).
+- Run polish slice merged + pushed as planned (commits 8910bf1..58bb603
+  + verification ee55a52).
+- Localization slice: PM dispatches a follow-up Localization team
+  cycle implementing Option A for Defect 2; Run team cycle for
+  Defect 1's adapter swap. Both can run in parallel (independent
+  file surfaces).
