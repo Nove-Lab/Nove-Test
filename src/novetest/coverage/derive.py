@@ -5,12 +5,15 @@ Workflow (from ``design/workflows/coverage.md``):
     derive_coverage_facts(run_reference) -> memory/retrieve_run_evidence
 
 We resolve the Memory Entry for the run, look up the native coverage
-payload registered under ``RunRecord.artifact_paths["coverage_json"]``,
-parse it, persist the resulting ``CoverageFactSet`` so subsequent
-``get_coverage_facts`` calls hit cache, and return the fact set.
+payload (artifact key depends on engine: ``coverage_json`` for
+pytest / jest / go-test, ``coverage_lcov`` for cargo-test), parse it
+through the engine-appropriate parser, persist the resulting
+``CoverageFactSet`` so subsequent ``get_coverage_facts`` calls hit
+cache, and return the fact set.
 
 Missing or unregistered native payload is an **explicit unavailable
-outcome** (REQ-COV-004), not an exception. Corrupt JSON is propagated as
+outcome** (REQ-COV-004), not an exception. Corrupt payloads (JSON or
+LCOV) are propagated as
 ``CoverageUnavailable(reason="native-payload-corrupt")`` to keep the
 operation total at the engine boundary.
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 import json
 
 from novetest.coverage.istanbul_parser import parse_istanbul_json
+from novetest.coverage.lcov_parser import parse_lcov
 from novetest.coverage.parser import CoverageJsonParseError, parse_coverage_json
 from novetest.coverage.persistence import write_coverage_facts
 from novetest.coverage.results import (
@@ -31,6 +35,7 @@ from novetest.coverage.results import (
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
 from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 
 
@@ -38,6 +43,21 @@ from novetest.models.run_reference import RunReference
 # payload. Coverage's contract with Run is that this key, if present,
 # points to a Project-Store-relative path to the coverage.py JSON file.
 COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
+
+# Cargo's adapter registers LCOV text at a distinct artifact key — the
+# cargo path uses ``cargo llvm-cov nextest --lcov`` which produces a
+# completely different format from coverage.py / Istanbul JSON. The
+# cargo branch in ``derive_coverage_facts`` dispatches on
+# ``engine_name == "cargo-test"`` and resolves THIS key, not
+# ``coverage_json``. See
+# ``src/novetest/run/adapters/cargo_adapter.py:311`` for the registration.
+COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
+
+# Engine name the cargo adapter sets on its ``NativeResult`` /
+# ``RunRecord.engine_name``. The literal value is contractual — Run
+# team pins it in ``cargo_adapter.py``; the dispatch here matches
+# against it.
+_CARGO_ENGINE_NAME = "cargo-test"
 
 
 def derive_coverage_facts(
@@ -64,6 +84,14 @@ def derive_coverage_facts(
         )
 
     record = entry.run_record
+
+    # Cargo-test uses LCOV at a distinct artifact key and a non-JSON
+    # text format — different read path, different parser, different
+    # error vocabulary. Branch early so the rest of this function keeps
+    # the simple "JSON payload at coverage_json key" mental model.
+    if record.engine_name == _CARGO_ENGINE_NAME:
+        return _derive_cargo_lcov(store, record)
+
     rel_path = record.artifact_paths.get(COVERAGE_JSON_ARTIFACT_KEY)
     if not rel_path:
         return CoverageUnavailable(
@@ -125,6 +153,58 @@ def derive_coverage_facts(
                 engine_name=record.engine_name,
                 ecosystem=record.ecosystem,
             )
+    except CoverageJsonParseError as exc:
+        return CoverageUnavailable(
+            reason=REASON_NATIVE_PAYLOAD_CORRUPT,
+            detail=str(exc),
+            run_reference=record.run_reference,
+        )
+
+    write_coverage_facts(store, fact_set)
+    return fact_set
+
+
+def _derive_cargo_lcov(
+    store: ProjectStore, record: RunRecord,
+) -> CoverageFactSet | CoverageUnavailable:
+    """Cargo-test branch: parse the LCOV artifact and persist facts.
+
+    Same total-at-the-boundary contract as the JSON path:
+    ``CoverageUnavailable(missing-native-payload)`` for absent / unreg-
+    istered artifact, ``CoverageUnavailable(native-payload-corrupt)``
+    for malformed LCOV. Other failure modes (e.g. invariant violation
+    inside the model layer) propagate as exceptions.
+    """
+    rel_path = record.artifact_paths.get(COVERAGE_LCOV_ARTIFACT_KEY)
+    if not rel_path:
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"RunRecord.artifact_paths has no {COVERAGE_LCOV_ARTIFACT_KEY!r} "
+                "entry; this cargo-test run was executed without coverage collection"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    lcov_path = store.path / rel_path
+    if not lcov_path.is_file():
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=f"Native LCOV payload not found on disk at {lcov_path}",
+            run_reference=record.run_reference,
+        )
+
+    try:
+        fact_set = parse_lcov(
+            lcov_path,
+            run_reference=record.run_reference,
+            engine_name=record.engine_name,
+            ecosystem=record.ecosystem,
+            # The .novetest/ directory's PARENT is the workspace root —
+            # the same convention `derive_coverage_facts` uses to convert
+            # Istanbul's absolute paths in the jest branch.
+            workspace_root=store.path.parent,
+        )
     except CoverageJsonParseError as exc:
         return CoverageUnavailable(
             reason=REASON_NATIVE_PAYLOAD_CORRUPT,

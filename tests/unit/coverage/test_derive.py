@@ -347,3 +347,161 @@ def test_derive_handles_top_level_json_array_as_corrupt(
     result = derive_coverage_facts(store, sample_run_reference)
     assert isinstance(result, CoverageUnavailable)
     assert result.reason == REASON_NATIVE_PAYLOAD_CORRUPT
+
+
+# --- cargo-test (LCOV) dispatch ---------------------------------------------
+
+# Project-Store-relative LCOV artifact path. The conftest
+# `initialized_store` creates `<tmp_path>/ws/.novetest/`, so an LCOV
+# `SF:` of `<tmp_path>/ws/src/lib.rs` relativizes to `src/lib.rs`
+# (derive passes `store.path.parent` as workspace_root).
+_CARGO_FIXTURE_REL = (
+    "run/artifacts/run_01HCOV0000000000000000FACT/native/coverage.lcov"
+)
+
+
+def _seed_cargo_run(
+    store: Any,
+    *,
+    run_reference: RunReference,
+    lcov_body: str,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """Persist a cargo-test RunRecord with an LCOV payload on disk."""
+    target = store.path / _CARGO_FIXTURE_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(lcov_body, encoding="utf-8")
+    store_run_evidence(
+        store,
+        make_run_record(
+            run_reference=run_reference,
+            artifact_paths={"coverage_lcov": _CARGO_FIXTURE_REL},
+            engine_name="cargo-test",
+            ecosystem="rust",
+        ),
+    )
+
+
+def test_derive_routes_cargo_test_engine_through_lcov_parser(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """A ``cargo-test`` Run Record's LCOV payload yields a CoverageFactSet.
+
+    Confirms ``derive_coverage_facts`` dispatches on ``engine_name`` to
+    ``parse_lcov`` (NOT ``parse_coverage_json`` — pointing the cargo
+    artifact at the JSON parser would surface as ``native-payload-corrupt``
+    because LCOV isn't valid JSON). Asserts the cargo-specific shape:
+    ``aggregate`` granularity, ``rust`` ecosystem, LCOV-format metadata
+    marker, workspace-relative file paths.
+    """
+    store = get_project_store_state(initialized_store)
+    workspace = store.path.parent
+    body = (
+        "SF:" + str(workspace / "src" / "lib.rs") + "\n"
+        "DA:1,1\n"
+        "DA:2,0\n"
+        "LF:2\n"
+        "LH:1\n"
+        "end_of_record\n"
+    )
+    _seed_cargo_run(
+        store,
+        run_reference=sample_run_reference,
+        lcov_body=body,
+        make_run_record=make_run_record,
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+
+    assert isinstance(result, CoverageFactSet)
+    assert result.engine_name == "cargo-test"
+    assert result.ecosystem == "rust"
+    assert result.mapping_granularity == "aggregate"
+    assert result.metadata["coverage_format"] == "lcov"
+    assert [f.file_path for f in result.files] == ["src/lib.rs"]
+    assert result.files[0].executed_lines == (1,)
+    assert result.files[0].missing_lines == (2,)
+    # The load-bearing facts file landed on disk — Memory's
+    # `has_coverage_facts` flag auto-flips from this path existing.
+    assert coverage_facts_path(store, sample_run_reference.run_id).is_file()
+
+
+def test_derive_cargo_run_without_coverage_lcov_returns_unavailable(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """A cargo-test Run Record missing the ``coverage_lcov`` artifact key
+    surfaces as ``missing-native-payload`` — the cargo analog of the
+    pytest/jest "no coverage artifact" path. The detail mentions the
+    cargo-specific artifact key so operators don't grep for the wrong one.
+    """
+    store = get_project_store_state(initialized_store)
+    store_run_evidence(
+        store,
+        make_run_record(
+            run_reference=sample_run_reference,
+            # NO coverage_lcov key — equivalent to `cargo run` without
+            # `--coverage`.
+            engine_name="cargo-test",
+            ecosystem="rust",
+        ),
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_MISSING_NATIVE_PAYLOAD
+    # The detail should reference the cargo-specific artifact key — NOT
+    # ``coverage_json`` (that would mislead an operator debugging a
+    # cargo run).
+    assert "coverage_lcov" in (result.detail or "")
+    assert "coverage_json" not in (result.detail or "")
+
+
+def test_derive_cargo_with_missing_lcov_file_returns_unavailable(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """RunRecord registers ``coverage_lcov`` but the file was removed.
+
+    Same total-at-the-boundary contract as the JSON path's analog
+    (``test_derive_native_payload_path_missing_returns_unavailable``).
+    """
+    store = get_project_store_state(initialized_store)
+    store_run_evidence(
+        store,
+        make_run_record(
+            run_reference=sample_run_reference,
+            artifact_paths={"coverage_lcov": _CARGO_FIXTURE_REL},
+            engine_name="cargo-test",
+            ecosystem="rust",
+        ),
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_MISSING_NATIVE_PAYLOAD
+
+
+def test_derive_cargo_malformed_lcov_returns_unavailable(
+    initialized_store: Path,
+    sample_run_reference: RunReference,
+    make_run_record: Callable[..., RunRecord],
+) -> None:
+    """A malformed LCOV body (DA outside any SF: block) surfaces as
+    ``native-payload-corrupt`` — keeps the engine total at the boundary
+    even when the parser raises mid-stream."""
+    store = get_project_store_state(initialized_store)
+    _seed_cargo_run(
+        store,
+        run_reference=sample_run_reference,
+        lcov_body="DA:1,5\n",  # no preceding SF: — structurally invalid
+        make_run_record=make_run_record,
+    )
+
+    result = derive_coverage_facts(store, sample_run_reference)
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_NATIVE_PAYLOAD_CORRUPT
