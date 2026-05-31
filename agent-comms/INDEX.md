@@ -16,6 +16,7 @@ _(none)_
 _(none)_
 
 ## Open questions
+- [main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-defect3-parser-stdlib-pollution)
 - [main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-equipped-host-defect)
 
 ## Recent decisions (last 7 days)
