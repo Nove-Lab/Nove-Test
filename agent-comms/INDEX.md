@@ -8,7 +8,7 @@ Last regenerated: 2026-05-31
 _(none)_
 
 ## Pending
-- [run-team-2026-05-30-cargo-nextest-env-var-hotfix.md](./tasks/run-team-2026-05-30-cargo-nextest-env-var-hotfix.md) — `novetest-pm-team → novetest-run-team` (cargo-nextest-env-var-hotfix)
+- [run-team-2026-05-31-native-result-metadata-typed-slot.md](./tasks/run-team-2026-05-31-native-result-metadata-typed-slot.md) — `novetest-pm-team → novetest-run-team` (native-result-metadata-typed-slot)
 
 ## Blocked
 _(none)_
@@ -37,3 +37,4 @@ _(none)_
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
 - [2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md](./history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md) — `novetest-pm-team → all` (cargo-adapter-and-localization-cli-parallel-cycle)
 - [2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md](./history/2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md) — `novetest-pm-team → all` (localization-warnings-and-cargo-trigger-b-reopened)
+- [2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md](./history/2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md) — `novetest-pm-team → all` (cargo-env-var-hotfix-and-trigger-b-closure)
