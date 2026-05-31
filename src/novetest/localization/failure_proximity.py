@@ -117,8 +117,23 @@ _CARGO_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(rf"panicked at ({_PYTHON_FILE_CHARS}\.rs):(\d+):\d+"),
     # ``assertion `...` failed at <path>:<line>:<col>`` — newer rustc forms.
     re.compile(rf"failed at ({_PYTHON_FILE_CHARS}\.rs):(\d+):\d+"),
-    # Any Rust file:line:col mention (defensive catch-all).
-    re.compile(rf"\b({_PYTHON_FILE_CHARS}\.rs):(\d+):\d+"),
+    # NOTE: a third "defensive catch-all" regex (`\b(...)\.rs:(\d+):\d+`)
+    # used to live here. It was DROPPED at 2026-05-31 (Defect 3 fix,
+    # CEO-implied Option D) because cargo nextest's default stack
+    # backtrace (no `RUST_BACKTRACE=1` needed) contains every frame's
+    # path including Rust stdlib files like
+    # ``/rustc/<hash>/library/core/src/panicking.rs:N:M``. The catch-all
+    # would slurp those stdlib paths and tie them with the real bug
+    # file at e_f=1; lexicographic tie-break (the algorithm sorts ties
+    # by file path ascending) pushed `src/arithmetic.rs` to rank #4
+    # behind three `/rustc/...` paths. Now only the two anchored
+    # patterns above match — the panic-at frame is the load-bearing
+    # extraction surface. Algorithm-side filter in ``_derive_aggregate``
+    # (intersection with covered files) is the defense-in-depth layer
+    # that catches any remaining stdlib-path leakage from future
+    # adapter / rustc backtrace shape changes.
+    #
+    # Source: questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md
 )
 
 _GOTEST_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
