@@ -18,6 +18,7 @@ _(none)_
 ## Open questions
 - [main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-defect3-parser-stdlib-pollution)
 - [main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-equipped-host-defect)
+- [main-branch-team-2026-06-01-localization-latest-aggregate-discovery.md](./questions/main-branch-team-2026-06-01-localization-latest-aggregate-discovery.md) — `novetest-main-branch-team → novetest-pm-team` (localization-latest-aggregate-discovery)
 
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
