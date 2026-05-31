@@ -8,6 +8,7 @@ Last regenerated: 2026-05-31
 _(none)_
 
 ## Pending
+- [coverage-team-2026-05-31-cargo-lcov-dispatch.md](./tasks/coverage-team-2026-05-31-cargo-lcov-dispatch.md) — `novetest-pm-team → novetest-coverage-team` (cargo-lcov-dispatch)
 - [run-team-2026-05-31-native-result-metadata-typed-slot.md](./tasks/run-team-2026-05-31-native-result-metadata-typed-slot.md) — `novetest-pm-team → novetest-run-team` (native-result-metadata-typed-slot)
 
 ## Blocked
