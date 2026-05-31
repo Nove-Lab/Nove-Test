@@ -8,8 +8,10 @@ Last regenerated: 2026-05-31
 _(none)_
 
 ## Pending
+- [localization-team-2026-05-31-aggregate-fixture-redesign.md](./tasks/localization-team-2026-05-31-aggregate-fixture-redesign.md) — `novetest-pm-team → novetest-localization-team` (aggregate-fixture-redesign)
 - [localization-team-2026-05-31-fallback-modes.md](./tasks/localization-team-2026-05-31-fallback-modes.md) — `novetest-pm-team → novetest-localization-team` (fallback-modes)
 - [run-team-2026-05-31-build-failure-heuristic-polish.md](./tasks/run-team-2026-05-31-build-failure-heuristic-polish.md) — `novetest-pm-team → novetest-run-team` (build-failure-heuristic-polish)
+- [run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md](./tasks/run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md) — `novetest-pm-team → novetest-run-team` (cargo-llvm-cov-ignore-run-fail)
 
 ## Blocked
 _(none)_
