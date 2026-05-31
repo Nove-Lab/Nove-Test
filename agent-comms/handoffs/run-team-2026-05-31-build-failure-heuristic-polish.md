@@ -15,7 +15,7 @@ related:
 
 ## TL;DR
 
-Diagnostic UX polish on the cargo adapter's `unparseable-output` branches: when nextest's stderr carries the literal `NEXTEST_EXPERIMENTAL_LIBTEST_JSON`, the adapter now raises a specific `misconfigured-environment` `AdapterInvocationError` kind (with override-diagnosis prose pointing at the env var by name) instead of the generic `unparseable-output` (which mis-frames the symptom as a compile failure). Polish applies symmetrically to both the build-failure path and the coverage path. **2 files modified, +109/-7 lines, 0 new src files.** Pre-flight gates all green. Ready to merge.
+Diagnostic UX polish on the cargo adapter's `unparseable-output` branches: when nextest's stderr carries the literal `NEXTEST_EXPERIMENTAL_LIBTEST_JSON`, the adapter now raises a specific `misconfigured-environment` `AdapterInvocationError` kind (with override-diagnosis prose pointing at the env var by name) instead of the generic `unparseable-output` (which mis-frames the symptom as a compile failure). Polish applies symmetrically to both the build-failure path and the coverage path. **2 src+tests files modified, +177/-0 lines, 0 new src files** (pure insertion before the existing `unparseable-output` raises — the generic fallback stays intact). Pre-flight gates all green. Ready to merge.
 
 ## Worktree
 
@@ -28,13 +28,13 @@ Diagnostic UX polish on the cargo adapter's `unparseable-output` branches: when 
 
 | File | Lines | Nature |
 |---|---|---|
-| `src/novetest/run/adapters/cargo_adapter.py` | +45 / −1 | Added `_NEXTEST_LIBTEST_JSON_ENV_LITERAL` module constant + `_libtest_json_env_misconfigured_error` helper. Inserted env-var-literal detection BEFORE both existing `unparseable-output` raises (build-failure path + coverage path). |
-| `tests/unit/run/adapters/test_cargo_adapter.py` | +62 / −0 | Added `test_build_failure_heuristic_surfaces_env_var_literal` and `test_collect_coverage_env_var_literal_surfaces_misconfigured_environment` (one per branch). |
-| `WORKLOG.md` | +9 / −0 | Top entry `2026-05-31 — phase3 / cargo-build-failure-heuristic-polish` per format. |
-| `agent-comms/handoffs/run-team-2026-05-31-build-failure-heuristic-polish.md` | NEW | This file. |
-| `agent-comms/INDEX.md` | regen | `python3 tools/regen_comms_index.py` output. |
+| `src/novetest/run/adapters/cargo_adapter.py` | +66 / −0 | Added `_NEXTEST_LIBTEST_JSON_ENV_LITERAL` module constant + `_libtest_json_env_misconfigured_error` helper. Inserted env-var-literal detection BEFORE both existing `unparseable-output` raises (build-failure path + coverage path). |
+| `tests/unit/run/adapters/test_cargo_adapter.py` | +111 / −0 | Added `test_build_failure_heuristic_surfaces_env_var_literal` and `test_collect_coverage_env_var_literal_surfaces_misconfigured_environment` (one per branch). |
+| `WORKLOG.md` | +8 / −0 | Top entry `2026-05-31 — phase3 / cargo-build-failure-heuristic-polish` per format. |
+| `agent-comms/handoffs/run-team-2026-05-31-build-failure-heuristic-polish.md` | NEW (159 lines) | This file. |
+| `agent-comms/INDEX.md` | regen (no diff) | `python3 tools/regen_comms_index.py` output. INDEX doesn't list handoffs; pending-task entry stays unchanged until PM moves it post-merge. |
 
-**Source-file count: 71 → 71** (no new src files; only a string constant + helper function added inside the existing `cargo_adapter.py`).
+**Source-file count: 71 → 71** (no new src files; only a string constant + helper function added inside the existing `cargo_adapter.py`). **All src/tests edits are pure insertions** — the existing `unparseable-output` raises stay byte-identical, the new code branches are gated on the env-var-literal substring check.
 
 ## DoD bullets believed closed (PM verifies + ticks)
 
