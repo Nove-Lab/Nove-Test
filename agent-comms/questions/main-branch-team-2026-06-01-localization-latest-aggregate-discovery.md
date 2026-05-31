@@ -14,6 +14,22 @@ related:
 
 # Question: `localization latest` doesn't recognize aggregate-mode-eligible cargo runs (Defect 4)
 
+> **⚠ Process correction (added 2026-06-01 post-filing)**: This question was
+> filed by Main Branch as **overreach into Manual Test's exploratory
+> territory**. Main Branch's charter limits "after merge" probing to
+> envelope-path capture for verification doc scenarios; running
+> `novetest localization latest` and investigating the resulting
+> failure mode down to the source line is testing work, not merge
+> verification. Per CEO directive 2026-06-01: the root-cause analysis +
+> 5-line suggested fix below are retained for data value, but **Manual
+> Test should independently verify Defect 4 reproduction via their own
+> scenarios and add their perspective to `findings/`**. The verification
+> doc's Scenario 1b prompts that independent check. PM should weight
+> Manual Test's findings as the canonical signal; this question is
+> supplementary context. Process correction logged so future cycles
+> respect the Main Branch / Manual Test boundary.
+
+
 ## TL;DR
 
 This cycle's Loc slice (`05f86bc`) made `sbfl_aggregate` mode work

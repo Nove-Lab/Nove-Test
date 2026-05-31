@@ -221,6 +221,51 @@ PATH=$HOME/.cargo/bin:/home/yjshin/dev/Nove-Test/.venv/bin:$PATH novetest locali
 - `entries[0].rank == 1`, `entries[0].code_location.file == "src/arithmetic.rs"`
 - `entries[0].code_location.primary_line == 53`
 
+### Scenario 1b — Independently verify Defect 4 (`localization latest` discoverability)
+
+After Scenario 1 above, the localization findings are cached for that
+run. Now probe the `latest` verb against the same store:
+
+```bash
+PATH=$HOME/.cargo/bin:/home/yjshin/dev/Nove-Test/.venv/bin:$PATH \
+  novetest localization latest
+```
+
+**Expected (Defect 4 reproduction)**:
+- `kind: "unavailable"`
+- `reason: "run_not_analyzable"`
+- `detail: "no analyzable runs in store (1 candidates checked)"`
+- `run_reference: null`
+
+This contradicts Scenario 1's success: the SAME run that
+`novetest localization <run_id>` ranks correctly is rejected by
+`localization latest`. The asymmetry is **Defect 4** (filed at
+`agent-comms/questions/main-branch-team-2026-06-01-localization-latest-aggregate-discovery.md`).
+
+**Important — process note**: That question was filed by Main Branch as
+overreach into your exploratory territory (Main Branch went beyond
+envelope-path capture into source-level root-cause investigation).
+Per CEO directive 2026-06-01, the question is retained for data value
+but **YOUR independent verification + perspective is the canonical
+signal**. Things you may want to add to your findings:
+- Confirm the reproduction shape verbatim against your equipped host
+  (might differ if `mapping_granularity` semantics shift in some way I
+  didn't probe).
+- Probe whether the same `run_not_analyzable` symptom shows up for
+  the no-coverage / `failure_proximity` fixture (Scenario 4) when
+  invoked via `localization latest` — Main Branch's question
+  speculates this is also broken but didn't verify.
+- Probe whether `localization latest --formula op2 --top-n 3` (or any
+  explicit-flag invocation) produces a different code path (it
+  shouldn't, but worth confirming).
+- Optionally probe whether the inspect command (`novetest inspect
+  <run_id>`)'s `sub_reports.localization` marker is consistent with
+  what `localization latest` claims (it shouldn't claim "available"
+  if `latest` claims "no analyzable runs").
+
+Your findings doc is the load-bearing artifact for PM's triage; the
+filed question is supplementary context only.
+
 ### Scenario 2 — Inspect the redesigned fixture
 
 ```bash
