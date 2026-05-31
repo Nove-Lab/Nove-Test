@@ -415,10 +415,27 @@ def _derive_aggregate(
             file_to_failed_tests[file_path].add(tr.node_id)
             file_to_evidence_lines[file_path].add(line)
 
-    # Step 2: per-file count vectors over the (covered-files ∪ failure-trace
-    # files) union.
+    # Step 2: per-file count vectors over the COVERED file set.
+    #
+    # Defect 3 fix (2026-05-31): restrict candidates to files in the
+    # project's coverage scope. Failure-trace paths that aren't in
+    # ``coverage.files`` (e.g. Rust stdlib frames like
+    # ``/rustc/<hash>/library/core/src/panicking.rs:N:M`` that the
+    # parser may extract from cargo nextest's default stack backtrace)
+    # are dropped here. The parser-side regex was tightened in parallel
+    # (catch-all dropped in ``failure_proximity._CARGO_REGEXES``) — this
+    # algorithm-side filter is the defense-in-depth layer.
+    #
+    # Trade-off: a workspace file mentioned in a failure trace but NOT
+    # in any test's coverage would also be dropped here. Per the Defect 3
+    # analysis, this is bounded — files with zero coverage typically
+    # don't appear in failing-test panic traces anyway (they weren't
+    # executed by any test). The practical loss is small; the noise
+    # rejection is large.
+    #
+    # Source: questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md
     covered_files = {f.file_path for f in coverage.files}
-    all_files = sorted(covered_files | set(file_to_failed_tests.keys()))
+    all_files = sorted(covered_files)
 
     total_failing = len(failed_test_ids)
     total_passing = sum(

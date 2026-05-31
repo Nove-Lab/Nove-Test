@@ -121,11 +121,77 @@ def test_cargo_failed_at_form_extracts_path_and_line() -> None:
     assert ("tests/integration_test.rs", 18) in result
 
 
-def test_cargo_catch_all_extracts_bare_rs_path() -> None:
-    """``<path>.rs:<line>:<col>`` — defensive catch-all."""
+def test_cargo_bare_rs_path_does_NOT_match_after_defect3_fix() -> None:
+    """Bare ``<path>.rs:<line>:<col>`` without the ``panicked at`` /
+    ``failed at`` prefix MUST NOT match — regression pin for Defect 3
+    (2026-05-31).
+
+    Pre-fix the cargo regex set had a third "defensive catch-all"
+    pattern ``\\b<file>.rs:N:M`` which slurped every frame in cargo
+    nextest's default stack backtrace, including Rust stdlib paths
+    like ``/rustc/<hash>/library/core/src/panicking.rs:N:M``. Those
+    stdlib paths then tied with the real bug file at e_f=1; the
+    lexicographic tie-break (file path ascending for ties) pushed
+    ``src/arithmetic.rs`` to rank #4 behind three ``/rustc/...`` paths.
+
+    The catch-all was DROPPED at 2026-05-31 (CEO-implied Option D from
+    questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md).
+    This negative test pins that decision: a bare path:line that lacks
+    the ``panicked at`` / ``failed at`` prefix MUST NOT be returned by
+    the parser.
+
+    The algorithm-side defense-in-depth (intersect with covered files
+    in ``_derive_aggregate``) is the second layer — but THIS layer
+    (parser-side) is the load-bearing one: keep the parser's output
+    set tight, don't rely on the algorithm to clean up after it.
+    """
     text = "Some stack-like text with src/arithmetic.rs:7:3 mentioned"
     result = parse_failure_log("cargo-test", text)
-    assert ("src/arithmetic.rs", 7) in result
+    # Pre-Defect-3 expectation: would have matched. Post-fix: does NOT match.
+    assert ("src/arithmetic.rs", 7) not in result
+
+
+def test_cargo_stdlib_backtrace_frames_do_NOT_match_after_defect3_fix() -> None:
+    """Real cargo nextest stack-backtrace stdlib frames MUST NOT match.
+
+    Captured verbatim from
+    ``questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md``
+    (the cargo failure log on equipped host that surfaced Defect 3).
+    The parser MUST extract only the top ``panicked at src/arithmetic.rs:53:9``
+    line and NOTHING from the ``stack backtrace:`` block.
+    """
+    real_log = (
+        "thread 'arithmetic::tests::test_divide' (27482) panicked at src/arithmetic.rs:53:9:\n"
+        "assertion `left == right` failed\n"
+        "  left: 12\n"
+        " right: 5\n"
+        "stack backtrace:\n"
+        "   0: __rustc::rust_begin_unwind\n"
+        "             at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/std/src/panicking.rs:689:5\n"
+        "   1: core::panicking::panic_fmt\n"
+        "             at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/panicking.rs:80:14\n"
+        "   4: localization_aggregate_only::arithmetic::tests::test_divide\n"
+        "             at ./src/arithmetic.rs:53:9\n"
+        "   6: <closure as core::ops::function::FnOnce<()>>::call_once\n"
+        "             at /rustc/ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96/library/core/src/ops/function.rs:250:5\n"
+    )
+    result = parse_failure_log("cargo-test", real_log)
+    # The ONLY extracted tuple should be the panicked-at one.
+    assert ("src/arithmetic.rs", 53) in result
+    # Stdlib paths from the stack backtrace MUST NOT appear (Defect 3 regression pin).
+    stdlib_paths_in_result = [
+        path for path, _line in result
+        if path.startswith("/rustc/") or "/library/" in path or "ops/function.rs" in path
+    ]
+    assert stdlib_paths_in_result == [], (
+        f"Defect 3 regression: stdlib paths leaked into parser output: "
+        f"{stdlib_paths_in_result!r}; full result: {result!r}"
+    )
+    # Also the ./src/arithmetic.rs:53 frame inside the backtrace section is
+    # de-duped with the panicked-at hit (line 53 = same line, same file
+    # modulo leading ./ — parser DOES distinguish "./src/x.rs" from
+    # "src/x.rs" as separate strings, but that's OK because the algorithm
+    # filters non-covered paths anyway). What matters here is no stdlib.
 
 
 # ---------------------------------------------------------------------------

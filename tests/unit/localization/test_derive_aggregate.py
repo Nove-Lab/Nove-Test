@@ -432,3 +432,131 @@ def test_per_test_file_granularity_routed_to_aggregate(tmp_path: Path) -> None:
     # Same algorithm, same output mode.
     assert finding.mode == "sbfl_aggregate"
     assert len(finding.entries) == 1
+
+
+# ---------------------------------------------------------------------------
+# Defect 3 regression pins (2026-05-31) — coverage-scope filter
+# ---------------------------------------------------------------------------
+
+
+def test_defect3_stdlib_path_in_failure_trace_is_dropped_by_coverage_filter(
+    tmp_path: Path,
+) -> None:
+    """Defect 3 regression pin: a failure-trace path that's NOT in coverage
+    (e.g. Rust stdlib like ``/rustc/.../library/core/src/panicking.rs``)
+    MUST be dropped from the candidate set by the algorithm-level filter.
+
+    Without the filter, the parser-extracted stdlib path would tie with
+    the real bug file at e_f=1 (or take the top spot lexicographically).
+    With the filter, only files in the project's ``coverage.files`` are
+    considered candidates; stdlib files (which aren't instrumented for
+    coverage) are naturally excluded.
+
+    This is the defense-in-depth half of CEO Option D (the other half is
+    the parser-side catch-all regex removal, tested separately in
+    ``test_failure_log_parser.py::test_cargo_bare_rs_path_does_NOT_match_after_defect3_fix``).
+    """
+    store, record, coverage = _make_setup(
+        tmp_path,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                # Simulate a failure trace that mentions BOTH the bug file
+                # AND a "stdlib-like" path (something not in covered_files).
+                # The two anchored cargo regexes (panicked at / failed at)
+                # also extract this synthetic input on the cargo engine,
+                # but the same principle applies for pytest-style inputs:
+                # the algorithm filter MUST drop the un-covered path.
+                failure_reference=(
+                    "src/buggy.py:5: AssertionError\n"
+                    "stack: /rustc/abc123/library/core/src/panicking.rs:80: panic_fmt"
+                ),
+            ),
+        ),
+        # Coverage ONLY includes the workspace file, not the stdlib path.
+        covered_files=("src/buggy.py",),
+    )
+    finding = _derive_aggregate(
+        store=store,
+        record=record,
+        coverage=coverage,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+        formula="ochiai",
+    )
+    # The stdlib-like path MUST NOT appear in entries.
+    file_paths = [e.code_location.file for e in finding.entries]
+    assert not any("panicking.rs" in p for p in file_paths), (
+        f"Defect 3 regression: stdlib path leaked into ranking: {file_paths!r}"
+    )
+    assert not any("/rustc/" in p for p in file_paths), (
+        f"Defect 3 regression: /rustc/ path leaked into ranking: {file_paths!r}"
+    )
+    # Only the covered workspace file is a candidate.
+    assert file_paths == ["src/buggy.py"]
+    # Sanity: the surviving file ranks #1 with positive Ochiai score.
+    assert finding.entries[0].rank == 1
+    assert finding.entries[0].score_raw > 0
+
+
+def test_defect3_failure_trace_only_files_are_filtered_out(tmp_path: Path) -> None:
+    """A workspace file mentioned in a failure trace but NOT in coverage
+    is dropped by the filter. Per the question doc's Risk analysis:
+
+      "if a bug is in a workspace file that wasn't covered by any test
+      (zero coverage), this filter would drop it too."
+
+    This test pins that tradeoff explicitly. The fixture: one failing
+    test points at `src/never_covered.py`, but coverage only includes
+    `src/sometimes_covered.py` (a different file with no failure mention).
+    Result: NO entries — both files have score=0 after the algorithm.
+
+    (`src/never_covered.py` is filtered before scoring; `src/sometimes_covered.py`
+    has ef=0 and is filtered by the Step 5 score-zero gate.)
+    """
+    store, record, coverage = _make_setup(
+        tmp_path,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/never_covered.py:1: AssertionError",
+            ),
+            TestResult(
+                node_id="tests/t.py::t_ok",
+                outcome="passed",
+                duration_ms=1,
+            ),
+        ),
+        # Coverage includes a DIFFERENT file from the one in the failure trace.
+        covered_files=("src/sometimes_covered.py",),
+    )
+    finding = _derive_aggregate(
+        store=store,
+        record=record,
+        coverage=coverage,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+        formula="ochiai",
+    )
+    # Trade-off documented in derive.py: never_covered.py is dropped because
+    # it's not in coverage; sometimes_covered.py has ef=0 (no failure mention)
+    # so Ochiai=0 and it's dropped by the Step 5 score-zero gate.
+    # Result: no entries. Mode still surfaces (so the consumer sees the
+    # ranking attempt outcome).
+    assert finding.entries == ()
+    assert finding.mode == "sbfl_aggregate"
+    # The parse_warnings should still mention the failing test was processed
+    # (failure log was parseable; the file just wasn't in coverage scope).
+    # No parse_warning expected here — parsing succeeded; the filter is
+    # downstream. (parse_warnings only fire when the parser returns empty.)
+    parse_warnings = finding.metadata.get("parse_warnings", [])
+    assert parse_warnings == [], (
+        f"Expected no parse_warnings (file was parseable, just not in coverage); "
+        f"got {parse_warnings!r}"
+    )
