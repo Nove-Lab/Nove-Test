@@ -68,6 +68,48 @@ STDERR_LOG_FILENAME = "stderr.log"
 COVERAGE_LCOV_FILENAME = "coverage.lcov"
 FAILURES_DIR_NAME = "failures"
 
+# The runtime env-var literal `cargo-nextest` ≥ 0.9.50 emits in its
+# stderr when ``--message-format=libtest-json`` was requested without
+# ``NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1``. The 2026-05-31 hotfix
+# (`_build_child_env`) sets this env var unconditionally so the symptom
+# is not reachable in normal operation — but if a parent process /
+# shell strips it, or a future nextest version renames the gate, the
+# adapter surfaces a specific ``misconfigured-environment`` error
+# instead of the generic ``unparseable-output``. The generic kind would
+# mislead AI consumers and humans into root-causing this as a compile
+# failure. Detection is substring-only on the env-var name (not the
+# full upstream error sentence) so benign upstream wording tweaks do
+# not break the heuristic; the env-var name itself is the load-bearing
+# token nextest will keep printing as long as the gate is named that.
+_NEXTEST_LIBTEST_JSON_ENV_LITERAL = "NEXTEST_EXPERIMENTAL_LIBTEST_JSON"
+
+
+def _libtest_json_env_misconfigured_error(
+    *, mode: str, returncode: int, stderr_tail: str
+) -> AdapterInvocationError:
+    """Build the ``misconfigured-environment`` error raised when
+    nextest's stderr signals the libtest-json gate env var was not
+    honored.
+
+    ``mode`` is either ``"nextest"`` (plain run) or
+    ``"llvm-cov nextest"`` (coverage run) — embedded as the spawn-path
+    identifier in the message so AI consumers and humans can tell
+    which path produced the failure. Both call sites use the same
+    diagnosis prose so the symptom-to-action mapping stays consistent
+    across the two branches. Single helper, two callers — duplicated
+    f-strings would have drifted on the next polish pass.
+    """
+
+    return AdapterInvocationError(
+        f"cargo {mode} exited {returncode} signaling that "
+        f"NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1 was not honored; the "
+        f"adapter sets this env var in _build_child_env() — check that "
+        f"the parent process or shell hasn't pre-unset it, and that a "
+        f"future nextest version hasn't renamed the gate. stderr tail: "
+        f"{stderr_tail}",
+        kind="misconfigured-environment",
+    )
+
 
 async def run_cargo(
     test_target: TestTarget,
@@ -264,6 +306,18 @@ async def run_cargo(
         stderr_text = result.stderr.decode("utf-8", errors="replace")
         stdout_text = result.stdout.decode("utf-8", errors="replace")
         detail_source = stderr_text if stderr_text else stdout_text
+        # The env-var-missing case is a more specific cause than a
+        # generic build failure — check the literal in stderr first so
+        # the typed error guides root-cause analysis to the right
+        # spot. Falls through to the generic ``unparseable-output``
+        # branch for true compile errors, which never reference the
+        # env-var name.
+        if _NEXTEST_LIBTEST_JSON_ENV_LITERAL in stderr_text:
+            raise _libtest_json_env_misconfigured_error(
+                mode="nextest",
+                returncode=result.returncode,
+                stderr_tail=detail_source[-400:],
+            )
         raise AdapterInvocationError(
             f"cargo nextest exited {result.returncode} without starting any test "
             f"(likely build failure); stderr tail: {detail_source[-400:]}",
@@ -279,6 +333,18 @@ async def run_cargo(
 
     if collect_coverage and not coverage_path.exists():
         stderr_text = result.stderr.decode("utf-8", errors="replace")
+        # Symmetric with the build-failure branch above: env-var-
+        # missing is a more specific cause than "llvm-cov didn't
+        # write the LCOV file" and must be checked first. ``cargo
+        # llvm-cov nextest`` propagates the same env-var requirement
+        # because it wraps nextest internally and forwards the
+        # ``--message-format=libtest-json`` flag.
+        if _NEXTEST_LIBTEST_JSON_ENV_LITERAL in stderr_text:
+            raise _libtest_json_env_misconfigured_error(
+                mode="llvm-cov nextest",
+                returncode=result.returncode,
+                stderr_tail=stderr_text[-400:],
+            )
         raise AdapterInvocationError(
             f"cargo llvm-cov did not write {coverage_path}; "
             f"stderr tail: {stderr_text[-400:]}",
