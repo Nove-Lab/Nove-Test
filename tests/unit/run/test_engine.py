@@ -280,7 +280,6 @@ async def test_execute_with_engine_context_dispatches_cargo(
                 "events": [],
                 "binaries": [],
                 "failure_logs": {},
-                "nextest_version": "0.9.70",
             },
             artifact_paths={
                 "cargo_events_jsonl": events_path,
@@ -291,6 +290,11 @@ async def test_execute_with_engine_context_dispatches_cargo(
             started_at_ms=0,
             completed_at_ms=0,
             engine_version="1.74.0",
+            # `nextest_version` rides the typed metadata slot post the
+            # 2026-05-30 migration (was previously stashed in
+            # `payload[...]` and silently dropped at the normalizer
+            # seam — Issue 2 of the cargo E2E sweep).
+            metadata={"nextest_version": "0.9.70"},
         )
 
     monkeypatch.setattr(engine_module, "run_cargo", fake_run_cargo)

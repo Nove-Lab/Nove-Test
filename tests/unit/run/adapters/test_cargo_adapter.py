@@ -266,9 +266,14 @@ async def test_happy_path_parses_payload_and_returns_native_result(
     assert isinstance(payload["events"], list)
     assert isinstance(payload["binaries"], list)
     assert "failure_logs" in payload
-    # nextest_version is probed and stashed in payload (NOT in engine_context,
-    # which only carries `engine_version` for the cargo version).
-    assert payload["nextest_version"] == "0.9.70"
+    # `nextest_version` is probed and surfaced via the typed metadata
+    # slot (NOT `payload[...]`) so the persisted `RunRecord.metadata`
+    # carries it — Issue 2 of the 2026-05-30 cargo sweep, resolved by
+    # `decisions/2026-05-30-native-result-metadata-slot.md`. The
+    # primary engine version (cargo itself) stays on
+    # `engine_version`; the secondary runner lives on `metadata`.
+    assert "nextest_version" not in payload
+    assert result.metadata["nextest_version"] == "0.9.70"
 
     events_path = result.artifact_paths["cargo_events_jsonl"]
     assert events_path.name == EVENTS_JSONL_FILENAME
@@ -878,8 +883,13 @@ async def test_engine_version_returns_none_on_unparseable_output(
     target = resolve_test_target("", cargo_test_basic_workspace)
     result = await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
     assert result.engine_version is None
-    # nextest_version is also None when its probe fails.
-    assert result.payload["nextest_version"] is None
+    # `nextest_version` is omitted from `metadata` entirely when its
+    # probe fails — the typed slot is `dict[str, str]` so a `None`
+    # value is not representable, and absence is more informative than
+    # a literal ``"None"`` string. The payload no longer carries the
+    # key in any form post the 2026-05-30 typed-slot migration.
+    assert "nextest_version" not in result.metadata
+    assert "nextest_version" not in result.payload
 
 
 def test_build_child_env_pins_nextest_libtest_json_gate() -> None:

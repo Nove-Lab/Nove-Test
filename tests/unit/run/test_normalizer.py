@@ -649,7 +649,6 @@ CARGO_PASSING_PAYLOAD: dict[str, object] = {
     ],
     "binaries": [],
     "failure_logs": {},
-    "nextest_version": "0.9.70",
 }
 
 
@@ -672,7 +671,6 @@ CARGO_FAILING_PAYLOAD: dict[str, object] = {
     "failure_logs": {
         "my_crate::tests::test_bad": "native/failures/my_crate__tests__test_bad.log",
     },
-    "nextest_version": "0.9.70",
 }
 
 
@@ -741,7 +739,6 @@ def test_cargo_integration_test_node_id_distinguishes_binary(tmp_path: Path) -> 
         ],
         "binaries": ["my_crate--integration_test"],
         "failure_logs": {},
-        "nextest_version": "0.9.70",
     }
     record = normalize_native_result(
         _cargo_native_result(payload, tmp_path),
@@ -765,7 +762,6 @@ def test_cargo_ignored_event_maps_to_skipped(tmp_path: Path) -> None:
         ],
         "binaries": [],
         "failure_logs": {},
-        "nextest_version": "0.9.70",
     }
     record = normalize_native_result(
         _cargo_native_result(payload, tmp_path),
@@ -798,7 +794,6 @@ def test_cargo_unknown_terminal_event_maps_to_unknown_outcome(tmp_path: Path) ->
         ],
         "binaries": [],
         "failure_logs": {},
-        "nextest_version": "0.9.70",
     }
     record = normalize_native_result(
         _cargo_native_result(payload, tmp_path),
@@ -840,3 +835,144 @@ def test_cargo_missing_events_array_raises(tmp_path: Path) -> None:
             target_type="workspace",
         )
     assert exc_info.value.kind == "unparseable-output"
+
+
+# ---------------------------------------------------------------------------
+# NativeResult.metadata typed-slot overlay (Phase 3, Issue 2 follow-up;
+# `decisions/2026-05-30-native-result-metadata-slot.md` — option (b))
+# ---------------------------------------------------------------------------
+
+
+def _native_result_with_metadata(
+    payload: dict[str, object],
+    tmp_path: Path,
+    *,
+    metadata: dict[str, str],
+    returncode: int = 0,
+) -> NativeResult:
+    """Build a cargo-shaped `NativeResult` carrying the given typed metadata.
+
+    Engine choice is incidental — these tests exercise the normalizer's
+    overlay logic, not cargo-specific parsing. Cargo is used because it
+    is the only engine that already populates `metadata` (so the test
+    surface stays close to real-world usage), but the overlay
+    contract is engine-agnostic.
+    """
+
+    return NativeResult(
+        engine_name="cargo-test",
+        payload=payload,
+        artifact_paths={
+            "cargo_events_jsonl": tmp_path / "events.jsonl",
+            "stdout": tmp_path / "stdout.log",
+            "stderr": tmp_path / "stderr.log",
+        },
+        returncode=returncode,
+        started_at_ms=1_700_000_000_000,
+        completed_at_ms=1_700_000_000_500,
+        engine_version="1.74.0",
+        metadata=metadata,
+    )
+
+
+def test_metadata_overlay_passes_through_adapter_keys(tmp_path: Path) -> None:
+    """Positive case: the normalizer must overlay every key the adapter
+    set on `NativeResult.metadata` onto the `RunRecord.metadata` dict,
+    sitting alongside the normalizer-owned `native_exit_code`.
+
+    This is the Issue-2 resolution check: pre-migration, the cargo
+    adapter stashed `nextest_version` in `payload[...]` and the
+    normalizer silently dropped it; post-migration, the typed slot
+    surfaces verbatim. The strict `dict[str, str]` typing prevents
+    accidental `None` smuggling.
+    """
+
+    native = _native_result_with_metadata(
+        CARGO_PASSING_PAYLOAD,
+        tmp_path,
+        metadata={"nextest_version": "0.9.137", "runner_profile": "ci-fast"},
+    )
+    record = normalize_native_result(
+        native,
+        NativeEngineContext("rust", "cargo-test", "1.74.0"),
+        target_expression="",
+        target_type="workspace",
+    )
+
+    # Normalizer-owned key still authoritative.
+    assert record.metadata["native_exit_code"] == 0
+    # Adapter-provided keys overlay verbatim.
+    assert record.metadata["nextest_version"] == "0.9.137"
+    assert record.metadata["runner_profile"] == "ci-fast"
+    # The three are the only keys in the resulting metadata dict — no
+    # accidental serialization noise creeps in.
+    assert set(record.metadata) == {
+        "native_exit_code",
+        "nextest_version",
+        "runner_profile",
+    }
+
+
+def test_metadata_overlay_defaults_to_only_native_exit_code(tmp_path: Path) -> None:
+    """Default case: an adapter that stashes nothing in `metadata`
+    leaves the `RunRecord.metadata` dict equal to the historical
+    pre-migration shape (`{"native_exit_code": <int>}`).
+
+    Regression-pins the public contract for the three adapters that do
+    NOT yet populate `metadata` (pytest, jest, gotest — audited in
+    this slice, no record-bound payload fields found).
+    """
+
+    native = _native_result_with_metadata(
+        CARGO_PASSING_PAYLOAD,
+        tmp_path,
+        metadata={},  # adapter set nothing
+        returncode=7,
+    )
+    record = normalize_native_result(
+        native,
+        NativeEngineContext("rust", "cargo-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+
+    assert record.metadata == {"native_exit_code": 7}
+
+
+def test_metadata_overlay_rejects_reserved_native_exit_code_key(
+    tmp_path: Path,
+) -> None:
+    """Negative case: an adapter that pre-populates `native_exit_code`
+    in its `NativeResult.metadata` is a programming error — the key is
+    reserved for the normalizer (the only layer that knows the
+    canonical exit code from the subprocess result).
+
+    The normalizer raises `ValueError` rather than silently dropping
+    the adapter's value or letting it shadow the canonical one.
+    Strict-raise was picked over pop-and-warn at the
+    metadata-slot decision; the project posture is
+    "visible-not-silent" per `CLAUDE.md`. This guards against the
+    drift the decision explicitly closed: silent payload-stash
+    convention.
+    """
+
+    native = _native_result_with_metadata(
+        CARGO_PASSING_PAYLOAD,
+        tmp_path,
+        # The value here doesn't matter — type is `str` per the typed
+        # slot, but the guard fires on key presence, not value.
+        metadata={"native_exit_code": "99"},
+    )
+    with pytest.raises(ValueError) as exc_info:
+        normalize_native_result(
+            native,
+            NativeEngineContext("rust", "cargo-test"),
+            target_expression="",
+            target_type="workspace",
+        )
+    # Error message identifies both the offending key and the engine
+    # so an adapter author can locate the bug from the traceback alone.
+    msg = str(exc_info.value)
+    assert "native_exit_code" in msg
+    assert "cargo-test" in msg
+    assert "reserved" in msg.lower()
