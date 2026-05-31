@@ -816,13 +816,112 @@ async def test_collect_coverage_adds_flags_and_registers_artifact(
     assert "nextest" in captured_argv
     assert "--lcov" in captured_argv
     assert "--output-path" in captured_argv
-    assert "--no-fail-fast" in captured_argv
+    # `--ignore-run-fail`, NOT `--no-fail-fast` — see the swap-rationale
+    # docstring in `cargo_adapter.run_cargo` (coverage branch) and the
+    # focused test `test_coverage_argv_swaps_no_fail_fast_for_ignore_run_fail`
+    # below for the load-bearing regression pin.
+    assert "--ignore-run-fail" in captured_argv
     assert "--workspace" in captured_argv
 
     coverage_path = result.artifact_paths["coverage_lcov"]
     assert coverage_path.name == COVERAGE_LCOV_FILENAME
     assert coverage_path.is_file()
     assert coverage_path.read_text(encoding="utf-8").startswith("TN:")
+
+
+async def test_coverage_argv_swaps_no_fail_fast_for_ignore_run_fail(
+    cargo_test_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cargo-llvm-cov argv must use ``--ignore-run-fail`` and NOT
+    ``--no-fail-fast``.
+
+    Empirical evidence in `agent-comms/questions/main-branch-team-
+    2026-05-31-localization-aggregate-e2e-equipped-host-defect.md`
+    §Defect 1: cargo-llvm-cov with ``--no-fail-fast`` refuses to emit
+    the LCOV report when the inner cargo-nextest exits non-zero (i.e.,
+    any failing test). ``--ignore-run-fail`` is cargo-llvm-cov's flag
+    that internally implies ``--no-fail-fast`` AND commits to writing
+    the LCOV report even when nextest exits non-zero. The two flags
+    are mutually exclusive on cargo-llvm-cov's CLI.
+
+    This test pins both invariants in isolation so a future
+    refactor cannot regress the flag swap silently. The non-coverage
+    path's separate `test_argv_*` tests pin ``--no-fail-fast`` on
+    plain ``cargo nextest run`` (where ``--ignore-run-fail`` would
+    error — it is a cargo-llvm-cov-only flag).
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    captured_argv: list[str] = []
+
+    async def stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        # Route the `cargo --version` and `cargo nextest --version`
+        # probes to canned responses (identical to other tests'
+        # version-probe handling) so the captured argv contains ONLY
+        # the main spawn's flags — not the version-probe argvs.
+        if isinstance(argv, (list, tuple)) and len(argv) >= 2:
+            if argv[-1] == "--version" and (len(argv) == 2 or argv[1] == "nextest"):
+                if len(argv) == 2:
+                    return SubprocessResult(
+                        returncode=0,
+                        stdout=b"cargo 1.74.0\n",
+                        stderr=b"",
+                        timed_out=False,
+                    )
+                return SubprocessResult(
+                    returncode=0,
+                    stdout=b"cargo-nextest 0.9.70\n",
+                    stderr=b"",
+                    timed_out=False,
+                )
+        captured_argv.extend(argv)
+        # Honor coverage write so the post-spawn LCOV-exists check
+        # doesn't fire the symmetric ``misconfigured-environment`` or
+        # ``unparseable-output`` raises (those have their own tests).
+        output_path = None
+        for i, a in enumerate(argv):
+            if isinstance(a, str) and a == "--output-path" and i + 1 < len(argv):
+                output_path = argv[i + 1]
+                break
+        assert output_path is not None
+        coverage_path = Path(output_path)
+        coverage_path.parent.mkdir(parents=True, exist_ok=True)
+        coverage_path.write_text(
+            "TN:\nSF:src/lib.rs\nDA:1,1\nLF:1\nLH:1\nend_of_record\n",
+            encoding="utf-8",
+        )
+        return SubprocessResult(
+            returncode=0,
+            stdout=_ndjson_bytes(_passing_events()),
+            stderr=b"",
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", stub)
+
+    target = resolve_test_target("", cargo_test_basic_coverage_workspace)
+    await run_cargo(
+        target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
+    )
+
+    # Both invariants. The negative assertion is the load-bearing one
+    # — without it, a future polish that added BOTH flags (mutually
+    # exclusive on cargo-llvm-cov's CLI; would error at runtime) could
+    # pass the positive assertion alone.
+    assert "--ignore-run-fail" in captured_argv
+    assert "--no-fail-fast" not in captured_argv
+    # Confirm we captured the coverage spawn, not the non-coverage
+    # one (paranoia guard against a stub-routing bug).
+    assert "llvm-cov" in captured_argv
 
 
 async def test_collect_coverage_missing_lcov_raises_unparseable(
