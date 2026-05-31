@@ -507,6 +507,64 @@ async def test_build_failure_shape_raises_unparseable(
     assert "build failure" in str(exc_info.value).lower()
 
 
+async def test_build_failure_heuristic_surfaces_env_var_literal(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When nextest's stderr contains ``NEXTEST_EXPERIMENTAL_LIBTEST_JSON``,
+    the build-failure heuristic surfaces a specific
+    ``misconfigured-environment`` kind instead of the generic
+    ``unparseable-output`` (which would mislead consumers into
+    diagnosing this as a compile failure).
+
+    The 2026-05-31 env-var hotfix (`_build_child_env`) sets the env
+    var unconditionally so this symptom should not surface in normal
+    operation, but if a parent process / shell strips it or a future
+    nextest version renames the gate, the adapter should still emit a
+    diagnostic that points at the env var by name. Heuristic polish
+    per `tasks/run-team-2026-05-31-build-failure-heuristic-polish.md`.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    # The literal nextest 0.9.137 error sentence on the env-var-missing
+    # path — keep this as the realistic shape the substring check has
+    # to recognize. We only assert on the env-var literal itself
+    # because nextest's exact wording is upstream-owned.
+    nextest_env_missing_stderr = (
+        b"error: libtest JSON output is an experimental feature and "
+        b"must be enabled with NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1\n"
+    )
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=95,
+            stdout_bytes=b"",
+            stderr_bytes=nextest_env_missing_stderr,
+        ),
+    )
+
+    target = resolve_test_target("", cargo_test_basic_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
+
+    # Specific kind, not the generic build-failure kind.
+    assert exc_info.value.kind == "misconfigured-environment"
+    message = str(exc_info.value)
+    # Message names the env-var literal so AI consumers and humans
+    # can map the symptom to the cause without re-reading stderr.
+    assert "NEXTEST_EXPERIMENTAL_LIBTEST_JSON" in message
+    # Message carries the override-diagnosis prose so the next step
+    # is obvious.
+    assert "parent process or shell hasn't pre-unset" in message
+    # Spawn-path identifier is "nextest" (plain run), not the
+    # coverage-path "llvm-cov nextest" — guards against the two
+    # branches being mis-wired to the same mode label.
+    assert "cargo nextest exited 95" in message
+
+
 async def test_skip_action_does_not_trigger_build_failure(
     cargo_test_basic_workspace: Path,
     tmp_path: Path,
@@ -793,6 +851,59 @@ async def test_collect_coverage_missing_lcov_raises_unparseable(
             target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
         )
     assert exc_info.value.kind == "unparseable-output"
+
+
+async def test_collect_coverage_env_var_literal_surfaces_misconfigured_environment(
+    cargo_test_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The coverage path applies the symmetric env-var-literal detection.
+
+    ``cargo llvm-cov nextest`` forwards ``--message-format=libtest-json``
+    to nextest internally; the env-var gate fires identically, so the
+    coverage-path branch raises ``misconfigured-environment`` (NOT the
+    generic ``unparseable-output`` from "llvm-cov did not write the
+    LCOV file") when the literal surfaces in stderr. Spawn-path
+    identifier in the message is ``llvm-cov nextest``, distinguishing
+    this branch from the plain-run branch above.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    nextest_env_missing_stderr = (
+        b"error: libtest JSON output is an experimental feature and "
+        b"must be enabled with NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1\n"
+    )
+    # write_coverage_lcov=False → coverage_path.exists() is False on
+    # entry to the post-events check, which triggers the symmetric
+    # branch. Non-zero returncode mirrors the real-world failure
+    # shape (nextest exits 95 when the env var is missing).
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=95,
+            stdout_bytes=b"",
+            stderr_bytes=nextest_env_missing_stderr,
+            write_coverage_lcov=False,
+        ),
+    )
+
+    target = resolve_test_target("", cargo_test_basic_coverage_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_cargo(
+            target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
+        )
+
+    assert exc_info.value.kind == "misconfigured-environment"
+    message = str(exc_info.value)
+    assert "NEXTEST_EXPERIMENTAL_LIBTEST_JSON" in message
+    assert "parent process or shell hasn't pre-unset" in message
+    # Coverage spawn path → mode label is "llvm-cov nextest", not
+    # "nextest" — proves the helper's mode kwarg is wired through
+    # correctly from the coverage call site.
+    assert "cargo llvm-cov nextest exited 95" in message
 
 
 async def test_engine_version_parsed_from_cargo_version_output(
