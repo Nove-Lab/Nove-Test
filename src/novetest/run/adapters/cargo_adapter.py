@@ -362,6 +362,13 @@ def _build_child_env() -> dict[str, str]:
     - ``NO_COLOR=1`` is the cross-tool convention (libtest itself, the
       panic handler, third-party assertion crates like `pretty_assertions`
       all honor it).
+    - ``NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1`` is the gate that
+      ``cargo-nextest`` ≥ 0.9.50 (our supported floor — see
+      `decisions/2026-05-25-supported-engine-matrix.md`) requires before
+      it will accept ``--message-format=libtest-json``. Without it,
+      nextest exits 95 with a runtime error and writes zero events,
+      which the build-failure heuristic then misclassifies as
+      ``adapter-unparseable-output``.
 
     Notably absent:
     - NO ``RUSTFLAGS`` — overriding would invalidate the user's build
@@ -374,6 +381,7 @@ def _build_child_env() -> dict[str, str]:
     env["CARGO_TERM_COLOR"] = "never"
     env["RUST_BACKTRACE"] = "1"
     env["NO_COLOR"] = "1"
+    env["NEXTEST_EXPERIMENTAL_LIBTEST_JSON"] = "1"
     return env
 
 
