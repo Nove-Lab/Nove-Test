@@ -184,7 +184,7 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 **Definition-of-done:**
 
 - [x] `novetest localization latest --output json` against `localization-branch` ranks the bug in top 3. *(closed 2026-05-29: Localization CLI slice `385e2dc` ranks `divide` at rank 1, Ochiai 1.0 — Manual Test verified verbatim against the `localization-branch` fixture; see history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md.)*
-- [ ] Mode field populated correctly across all three fixtures.
+- [x] Mode field populated correctly across all three fixtures. *(closed 2026-06-01 via 4-attempt Localization slice landing: `804690b` (sbfl_aggregate + failure_proximity modes) + `3ccfd72` (fixture co-location Option A) + `05f86bc` (Defect 3 Option D: parser catch-all drop + algorithm coverage-files filter) — Manual Test verified all 3 fixtures produce distinct mode values verbatim: `localization-branch` → `sbfl_per_test`, `localization-aggregate-only` → `sbfl_aggregate` (arithmetic.rs top-1, Ochiai 0.5), `localization-no-coverage` → `failure_proximity` (statistics.py top-1). See history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md.)*
 - [ ] Performance NFR-LOC-002 met (500 failed tests + 50k covered locations within 8s).
 - [x] All four formulas computed and persisted; `--formula` flag selects which is presented as primary. *(closed 2026-05-29: Localization CLI slice `385e2dc` — Manual Test verified all 4 formulas (ochiai / dstar2 / op2 / tarantula) under `--formula` selection; `alternate_scores_available` is always 3 sorted strings with primary excluded; engine persists all 4 scores per entry.)*
 
