@@ -13,7 +13,9 @@ Pure filesystem/record probing. Two probes:
    charter rule ("must agree without importing Memory's private helpers").
 
 2. **Derivable from native payload?** Probe whether the Run Record
-   advertises a ``coverage_json`` artifact AND that file exists on disk.
+   advertises EITHER a ``coverage_json`` artifact (pytest / jest /
+   go-test) OR a ``coverage_lcov`` artifact (cargo-test) AND that
+   file exists on disk.
 
 A run is *available* when either probe succeeds. Orchestration's stage
 eligibility uses this signal to decide whether to call ``derive`` /
@@ -30,9 +32,17 @@ from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidenc
 from novetest.models.run_reference import RunReference
 
 
-# Mirror the pinned artifact key from derive.py so the two stay in sync if
-# Run Team ever renames it (the rename would land in a single decision).
+# Mirror the pinned artifact keys from derive.py so the two stay in sync
+# if Run Team ever renames either (the rename would land in a single
+# decision). ``coverage_json`` covers pytest / jest / go-test;
+# ``coverage_lcov`` covers cargo-test. The native-payload probe accepts
+# EITHER — derive's engine dispatch picks the right parser at derive time.
 _COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
+_COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
+_COVERAGE_ARTIFACT_KEYS: tuple[str, ...] = (
+    _COVERAGE_JSON_ARTIFACT_KEY,
+    _COVERAGE_LCOV_ARTIFACT_KEY,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -86,9 +96,11 @@ def check_coverage_availability(
     facts_persisted = coverage_facts_path(store, run_id).is_file()
 
     native_payload_present = False
-    rel_path = entry.run_record.artifact_paths.get(_COVERAGE_JSON_ARTIFACT_KEY)
-    if rel_path:
-        native_payload_present = (store.path / rel_path).is_file()
+    for artifact_key in _COVERAGE_ARTIFACT_KEYS:
+        rel_path = entry.run_record.artifact_paths.get(artifact_key)
+        if rel_path and (store.path / rel_path).is_file():
+            native_payload_present = True
+            break
 
     available = facts_persisted or native_payload_present
     return CoverageAvailability(
