@@ -15,7 +15,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-equipped-host-defect)
 
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
