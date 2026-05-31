@@ -8,7 +8,8 @@ Last regenerated: 2026-05-31
 _(none)_
 
 ## Pending
-_(none)_
+- [localization-team-2026-05-31-fallback-modes.md](./tasks/localization-team-2026-05-31-fallback-modes.md) — `novetest-pm-team → novetest-localization-team` (fallback-modes)
+- [run-team-2026-05-31-build-failure-heuristic-polish.md](./tasks/run-team-2026-05-31-build-failure-heuristic-polish.md) — `novetest-pm-team → novetest-run-team` (build-failure-heuristic-polish)
 
 ## Blocked
 _(none)_
