@@ -8,8 +8,7 @@ Last regenerated: 2026-05-31
 _(none)_
 
 ## Pending
-- [coverage-team-2026-05-31-cargo-lcov-dispatch.md](./tasks/coverage-team-2026-05-31-cargo-lcov-dispatch.md) — `novetest-pm-team → novetest-coverage-team` (cargo-lcov-dispatch)
-- [run-team-2026-05-31-native-result-metadata-typed-slot.md](./tasks/run-team-2026-05-31-native-result-metadata-typed-slot.md) — `novetest-pm-team → novetest-run-team` (native-result-metadata-typed-slot)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -39,3 +38,4 @@ _(none)_
 - [2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md](./history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md) — `novetest-pm-team → all` (cargo-adapter-and-localization-cli-parallel-cycle)
 - [2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md](./history/2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md) — `novetest-pm-team → all` (localization-warnings-and-cargo-trigger-b-reopened)
 - [2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md](./history/2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md) — `novetest-pm-team → all` (cargo-env-var-hotfix-and-trigger-b-closure)
+- [2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md](./history/2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md) — `novetest-pm-team → all` (parallel-cycle-cargo-lcov-and-typed-metadata)
