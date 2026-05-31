@@ -38,12 +38,16 @@ from numpy.typing import NDArray
 
 from novetest.coverage.retrieval import get_coverage_facts
 from novetest.coverage.results import CoverageUnavailable
+from novetest.localization.failure_proximity import (
+    derive_failure_proximity,
+    parse_failure_log,
+    resolve_failure_text,
+)
 from novetest.localization.persistence import (
     read_localization_findings_raw,
     write_localization_findings,
 )
 from novetest.localization.results import (
-    REASON_NO_COVERAGE,
     REASON_NO_FAILED_TESTS,
     REASON_NO_RUN_EVIDENCE,
     REASON_RUN_NOT_ANALYZABLE,
@@ -59,6 +63,7 @@ from novetest.localization.symbol_resolver import resolve_python_symbol
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import (
     RunEvidenceNotFoundError,
+    find_runs_for_target,
     list_run_history,
     retrieve_run_evidence,
 )
@@ -69,8 +74,11 @@ from novetest.models.localization_finding import (
     LocalizationEntry,
     LocalizationFinding,
 )
+from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
+from novetest.regression.results import RegressionUnavailable
+from novetest.regression.retrieval import get_regression_facts
 
 
 # Default presentation formula (design-of-record §1). The CLI ``--formula``
@@ -157,39 +165,48 @@ def derive_localization_findings(
             detail="run has no failed test results",
         )
 
-    # 4. Coverage Facts present?
+    # 4. Coverage Facts present? Mode selection per strategy doc §2:
+    #    - Path A (per-test coverage)       → ``sbfl_per_test``
+    #    - Path B (aggregate / per-test-*)  → ``sbfl_aggregate`` (FLUCCS-reweighted
+    #      when Regression Facts exist; failure-only Ochiai floor otherwise)
+    #    - Path C (no coverage at all)      → ``failure_proximity``
     coverage = get_coverage_facts(store, record.run_reference)
+    regression_facts = try_get_latest_regression_facts(store, record)
+
+    finding: LocalizationFinding
     if isinstance(coverage, CoverageUnavailable):
-        return LocalizationUnavailable(
-            run_reference=record.run_reference,
-            reason=REASON_NO_COVERAGE,
-            detail=(
-                "coverage facts unavailable; failure_proximity mode is not "
-                "yet implemented (Phase 4 follow-up)"
-            ),
+        # Path C: failure_proximity (no coverage at all).
+        finding = derive_failure_proximity(
+            store=store,
+            record=record,
+            failed_test_ids=failed_test_ids,
+            regression_facts=regression_facts,
+            top_n=top_n,
+        )
+    elif coverage.mapping_granularity == "per-test":
+        # Path A: existing sbfl_per_test (unchanged).
+        finding = _derive_per_test(
+            store=store,
+            record=record,
+            coverage=coverage,
+            failed_test_ids=failed_test_ids,
+            top_n=top_n,
+            formula=formula,
+        )
+    else:
+        # Path B: sbfl_aggregate — covers ``aggregate``, ``per-test-file``,
+        # ``per-test-class`` (the latter two degrade to file-level here
+        # at v1; symbol-level upgrade is post-MVP per strategy doc §3).
+        finding = _derive_aggregate(
+            store=store,
+            record=record,
+            coverage=coverage,
+            failed_test_ids=failed_test_ids,
+            regression_facts=regression_facts,
+            top_n=top_n,
+            formula=formula,
         )
 
-    # 5. Per-test granularity required for this slice.
-    if coverage.mapping_granularity != "per-test":
-        return LocalizationUnavailable(
-            run_reference=record.run_reference,
-            reason=REASON_NO_COVERAGE,
-            detail=(
-                f"coverage mapping_granularity={coverage.mapping_granularity!r} "
-                "is not per-test; sbfl_aggregate mode is not yet implemented "
-                "(Phase 4 follow-up)"
-            ),
-        )
-
-    # 6-11. Build spectra, compute scores, rank, persist.
-    finding = _derive_per_test(
-        store=store,
-        record=record,
-        coverage=coverage,
-        failed_test_ids=failed_test_ids,
-        top_n=top_n,
-        formula=formula,
-    )
     write_localization_findings(store, finding)
     return finding
 
@@ -304,6 +321,365 @@ def _derive_per_test(
         entries=tuple(entries),
         derived_at=int(time.time() * 1000),
     )
+
+
+# ---------------------------------------------------------------------------
+# Aggregate pipeline — Path B (strategy doc §2 + FLUCCS-style reweighting)
+# ---------------------------------------------------------------------------
+
+
+# FLUCCS-style regression-reweighting boost factor (Sohn & Yoo, ISSTA 2017).
+# Multiplicative: ``score *= (1 + ALPHA)`` for files in the regression
+# change set. ``0.5`` is the published tuned value in the FLUCCS paper.
+_REGRESSION_BOOST_ALPHA: float = 0.5
+
+
+def _derive_aggregate(
+    *,
+    store: ProjectStore,
+    record: RunRecord,
+    coverage: CoverageFactSet,
+    failed_test_ids: frozenset[str],
+    regression_facts: RegressionFactSet | None,
+    top_n: int,
+    formula: str,
+) -> LocalizationFinding:
+    """Build the file-level ``sbfl_aggregate`` finding.
+
+    Algorithm (strategy doc §2 + task brief §"Scope §1"):
+
+    1. For each failing test, parse its failure_reference into the set
+       of files mentioned by the failure trace. This is the "did this
+       failing test touch this file" approximation since per-test
+       attribution is unavailable.
+    2. Build per-file counts:
+       - ``ef`` = number of failing tests whose trace mentions the file.
+       - ``ep`` = total passing tests if file appears in aggregate coverage
+                  (i.e. ANY test executed code in this file), else 0.
+                  This is the brief's "passing component approximated from
+                  aggregate minus failing" — degenerated to "passing tests
+                  hit every covered file" because per-test mapping is
+                  absent. The approximation is conservative: it
+                  overestimates ``ep`` for files not touched by passing
+                  tests, depressing their Ochiai score and reducing
+                  false-positive ranks.
+       - ``nf = total_failing - ef``
+       - ``np = total_passing - ep``
+    3. Apply all four SBFL formulas via the existing
+       ``_compute_all_formula_scores`` helper — formulas are mode-
+       agnostic vector ops over count tuples.
+    4. If a non-empty regression "changed_files" set is available, apply
+       FLUCCS-style reweighting: ``score *= (1 + 0.5)`` for files in the
+       set. Applied to ALL four formulas so alternate_scores stay
+       consistent with the primary formula's reweighting.
+    5. Sort candidates by the selected formula desc, tie-break by file
+       path ascending. Filter out non-positive-score candidates for the
+       selected formula (the file is unsuspicious and shouldn't pad the
+       top_n list with noise). Min-max normalize within the surviving
+       candidate set; dense-rank with ties; truncate to ``top_n``.
+
+    File-level granularity is the v1 fallback per strategy doc §3 (no
+    symbol resolver for non-Python languages yet). The brief authorizes
+    this fallback explicitly under §"File-level granularity is
+    acceptable for v1".
+
+    Confidence is ``"medium"`` per strategy doc §2 table for both the
+    regression-reweighted sub-variant and the failure-only Ochiai floor;
+    callers see ``metadata["regression_reweighted"]`` to disambiguate.
+    """
+    # Step 1: per-failing-test failure-log parses.
+    file_to_failed_tests: dict[str, set[str]] = defaultdict(set)
+    file_to_evidence_lines: dict[str, set[int]] = defaultdict(set)
+    parse_warnings: list[str] = []
+
+    for tr in record.test_results:
+        if tr.outcome not in _FAILED_OUTCOMES:
+            continue
+        if tr.node_id not in failed_test_ids:
+            continue
+        failure_text = resolve_failure_text(
+            store, record.run_reference.run_id, record.engine_name, tr.failure_reference
+        )
+        if not failure_text:
+            parse_warnings.append(
+                f"{tr.node_id}: failure_reference empty or unresolvable"
+            )
+            continue
+        tuples = parse_failure_log(record.engine_name, failure_text)
+        if not tuples:
+            parse_warnings.append(
+                f"{tr.node_id}: no parseable file:line references in failure log"
+            )
+            continue
+        for file_path, line in tuples:
+            file_to_failed_tests[file_path].add(tr.node_id)
+            file_to_evidence_lines[file_path].add(line)
+
+    # Step 2: per-file count vectors over the (covered-files ∪ failure-trace
+    # files) union.
+    covered_files = {f.file_path for f in coverage.files}
+    all_files = sorted(covered_files | set(file_to_failed_tests.keys()))
+
+    total_failing = len(failed_test_ids)
+    total_passing = sum(
+        1 for tr in record.test_results if tr.outcome == "passed"
+    )
+
+    n = len(all_files)
+    ef_array = np.zeros(n, dtype=np.int64)
+    ep_array = np.zeros(n, dtype=np.int64)
+    for j, file_path in enumerate(all_files):
+        ef_array[j] = len(file_to_failed_tests.get(file_path, set()))
+        # Brief approximation: ep ≈ total_passing if file is in aggregate
+        # coverage, else 0. Without per-test attribution we cannot do
+        # better than this binary "is this file ever-covered" gate.
+        ep_array[j] = total_passing if file_path in covered_files else 0
+    nf_array = total_failing - ef_array
+    np_array = total_passing - ep_array
+
+    # Step 3: apply all four formulas via the canonical helper. Re-uses
+    # the same numpy implementations as per-test mode — formulas are
+    # mode-agnostic.
+    scores = _compute_all_formula_scores((ef_array, ep_array, nf_array, np_array))
+
+    # Step 4: FLUCCS-style regression reweighting (Sohn & Yoo 2017).
+    changed_files = _changed_files_from_regression(regression_facts)
+    regression_reweighted = bool(changed_files) and any(
+        f in changed_files for f in all_files
+    )
+    if regression_reweighted:
+        boost_mask = np.array(
+            [1 + _REGRESSION_BOOST_ALPHA if f in changed_files else 1.0 for f in all_files],
+            dtype=np.float64,
+        )
+        for formula_name in ("ochiai", "op2", "dstar2", "tarantula"):
+            scores[formula_name] = scores[formula_name] * boost_mask
+
+    # Step 5: sort, filter unsuspicious entries, normalize, rank, truncate.
+    candidates: list[tuple[str, dict[str, float], frozenset[str], tuple[int, ...]]] = []
+    for j, file_path in enumerate(all_files):
+        per_formula = {
+            name: float(scores[name][j])
+            for name in ("ochiai", "op2", "dstar2", "tarantula")
+        }
+        evidence_lines = tuple(
+            sorted(file_to_evidence_lines.get(file_path, set()))
+        )[:_EVIDENCE_LINE_CAP]
+        candidates.append(
+            (
+                file_path,
+                per_formula,
+                frozenset(file_to_failed_tests.get(file_path, set())),
+                evidence_lines,
+            )
+        )
+
+    candidates.sort(key=lambda c: (-c[1][formula], c[0]))
+
+    # Drop non-positive-score candidates for the SELECTED formula —
+    # padding top_n with zero-Ochiai files defeats the point of the
+    # ranking. We keep candidates with score > 0 to preserve the
+    # "informative" signal. The per-test path doesn't filter because its
+    # candidates list is small by construction (one entry per covered
+    # symbol); aggregate mode's candidates list spans every covered file
+    # so unfiltered noise dominates.
+    candidates = [c for c in candidates if c[1][formula] > 0]
+
+    raw_scores_full = [c[1][formula] for c in candidates]
+    normalized_full = _min_max_normalize(raw_scores_full)
+    dense_ranks_full = _dense_ranks(raw_scores_full)
+
+    truncated = candidates[:top_n]
+    truncated_norm = normalized_full[:top_n]
+    truncated_ranks = dense_ranks_full[:top_n]
+
+    by_rank: dict[int, list[int]] = defaultdict(list)
+    for idx, rank in enumerate(truncated_ranks):
+        by_rank[rank].append(idx)
+
+    entries: list[LocalizationEntry] = []
+    for idx, ((file_path, per_formula, related, evidence_lines), norm_score, rank) in enumerate(
+        zip(truncated, truncated_norm, truncated_ranks, strict=True)
+    ):
+        peers = tuple(
+            f"entry_index_{p}" for p in by_rank[rank] if p != idx
+        )
+        primary_line = evidence_lines[0] if evidence_lines else 0
+        related_sorted = tuple(sorted(related))
+
+        citations: list[EvidenceCitation] = []
+        for nodeid in related_sorted:
+            citations.append(
+                EvidenceCitation(
+                    kind="test_result",
+                    run_reference=record.run_reference,
+                    selector={"test_id": nodeid, "outcome": "failed"},
+                )
+            )
+        citations.append(
+            EvidenceCitation(
+                kind="coverage_fact",
+                run_reference=record.run_reference,
+                selector={
+                    "file": file_path,
+                    "lines": list(evidence_lines),
+                },
+            )
+        )
+
+        entries.append(
+            LocalizationEntry(
+                rank=rank,
+                tied_with=peers,
+                code_location=CodeLocation(
+                    kind="file",
+                    file=file_path,
+                    symbol=None,
+                    line_range=None,
+                    primary_line=primary_line,
+                    evidence_lines=evidence_lines,
+                ),
+                score_raw=per_formula[formula],
+                score_normalized=norm_score,
+                formula=formula,
+                alternate_scores={
+                    name: per_formula[name]
+                    for name in ("ochiai", "op2", "dstar2", "tarantula")
+                    if name != formula
+                },
+                related_failed_tests=related_sorted,
+                evidence_citations=tuple(citations),
+            )
+        )
+
+    alternate_available = tuple(
+        sorted(
+            name
+            for name in ("ochiai", "op2", "dstar2", "tarantula")
+            if name != formula
+        )
+    )
+
+    metadata: dict[str, object] = {
+        "regression_reweighted": regression_reweighted,
+        "changed_files_count": len(changed_files),
+    }
+    if parse_warnings:
+        metadata["parse_warnings"] = parse_warnings
+
+    return LocalizationFinding(
+        run_reference=record.run_reference,
+        engine_name=record.engine_name,
+        ecosystem=record.ecosystem,
+        mode="sbfl_aggregate",
+        confidence="medium",
+        formula=formula,
+        alternate_scores_available=alternate_available,
+        top_n=top_n,
+        entries=tuple(entries),
+        derived_at=int(time.time() * 1000),
+        metadata=metadata,
+    )
+
+
+def _changed_files_from_regression(
+    regression_facts: RegressionFactSet | None,
+) -> frozenset[str]:
+    """Extract the FLUCCS-style "changed files" set from a RegressionFactSet.
+
+    Mirrors ``failure_proximity._changed_files_from_regression`` — both
+    modes consume the same regression prior. Duplicated here rather than
+    cross-imported so each mode module owns its own helper and there is
+    no circular-import temptation (failure_proximity is imported by
+    derive.py; derive importing failure_proximity for the helper would
+    be one-way and fine, but the duplication is trivially small and
+    keeps the two modes self-contained for unit-test reasoning).
+    """
+    if regression_facts is None:
+        return frozenset()
+    cc = regression_facts.coverage_change
+    if not isinstance(cc, dict):
+        return frozenset()
+    files: set[str] = set()
+    for key in ("files_added", "files_removed"):
+        raw = cc.get(key)
+        if isinstance(raw, list):
+            files.update(str(p) for p in raw if isinstance(p, str))
+    deltas_raw = cc.get("file_deltas")
+    if isinstance(deltas_raw, list):
+        for delta in deltas_raw:
+            if isinstance(delta, dict):
+                fp = delta.get("file_path")
+                if isinstance(fp, str):
+                    files.add(fp)
+    return frozenset(files)
+
+
+# ---------------------------------------------------------------------------
+# Regression-facts probe — best-effort, never raises, never derives
+# ---------------------------------------------------------------------------
+
+
+def try_get_latest_regression_facts(
+    store: ProjectStore,
+    record: RunRecord,
+) -> RegressionFactSet | None:
+    """Best-effort lookup of cached Regression Facts for ``record``.
+
+    Returns the ``RegressionFactSet`` whose ``target_run_reference``
+    matches this record AND whose ``baseline_run_reference`` is the
+    most-recent comparable prior run (same ``target_expression``).
+    Returns ``None`` when:
+
+    - No prior comparable run exists in the store (typical first run).
+    - The prior pair has no cached ``regression_facts.json`` (Regression
+      hasn't been derived yet for the pair).
+    - Any lookup operation raises — Localization should never abort due
+      to a Regression layer's failure mode.
+
+    **Pure read** — never invokes ``derive_regression_facts``. Mode
+    selection in ``derive_localization_findings`` treats the absence of
+    Regression Facts as normal: the FLUCCS reweighting is skipped and
+    the floor (failure-only Ochiai) is used instead, both at
+    ``confidence: "medium"``.
+
+    Sibling resolution follows Regression's ``resolve_latest_baseline``
+    pattern: ``find_runs_for_target`` returns newest-first, and we pick
+    the most recent entry STRICTLY older than ``record``. This matches
+    the Regression engine's pair semantics so any cached
+    ``regression_facts.json`` was derived from the same baseline pair we
+    just resolved.
+    """
+    try:
+        siblings = find_runs_for_target(
+            store, record.target_expression, include_tombstoned=False
+        )
+    except Exception:  # noqa: BLE001 - best-effort: never abort the caller.
+        return None
+
+    target_run_id = record.run_reference.run_id
+    target_created = record.run_reference.created_at
+    # ``find_runs_for_target`` is newest-first; iterate in that order
+    # and pick the first STRICTLY older non-self sibling.
+    baseline_ref: RunReference | None = None
+    for sibling in siblings:
+        sibling_ref = sibling.run_record.run_reference
+        if sibling_ref.run_id == target_run_id:
+            continue
+        if sibling_ref.created_at >= target_created:
+            continue
+        baseline_ref = sibling_ref
+        break
+    if baseline_ref is None:
+        return None
+
+    try:
+        result = get_regression_facts(store, baseline_ref, record.run_reference)
+    except Exception:  # noqa: BLE001 - same posture as above.
+        return None
+    if isinstance(result, RegressionUnavailable):
+        return None
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -692,4 +1068,5 @@ __all__: list[str] = [
     "derive_latest_localization",
     "derive_localization_findings",
     "resolve_latest_analyzable_run",
+    "try_get_latest_regression_facts",
 ]
