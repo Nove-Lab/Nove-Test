@@ -26,6 +26,7 @@ from novetest.run.adapters.cargo_adapter import (
     EVENTS_JSONL_FILENAME,
     STDERR_LOG_FILENAME,
     STDOUT_LOG_FILENAME,
+    _build_child_env,
     run_cargo,
 )
 from novetest.run.errors import AdapterInvocationError
@@ -879,3 +880,27 @@ async def test_engine_version_returns_none_on_unparseable_output(
     assert result.engine_version is None
     # nextest_version is also None when its probe fails.
     assert result.payload["nextest_version"] is None
+
+
+def test_build_child_env_pins_nextest_libtest_json_gate() -> None:
+    """`_build_child_env()` must set the env var nextest needs to accept
+    ``--message-format=libtest-json``.
+
+    `cargo-nextest` ≥ 0.9.50 (our supported floor — see
+    `decisions/2026-05-25-supported-engine-matrix.md`) gates the
+    ``--message-format=libtest-json`` flag behind
+    ``NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1``. Without it, nextest exits
+    95 with a runtime error, the adapter writes zero events, and the
+    build-failure heuristic misclassifies the failure as
+    ``adapter-unparseable-output``. Pin the env var's presence so the
+    gate cannot regress silently. The other three determinism env vars
+    (``CARGO_TERM_COLOR`` / ``RUST_BACKTRACE`` / ``NO_COLOR``) are
+    pinned in the same assertion block for symmetry.
+    """
+
+    env = _build_child_env()
+
+    assert env["NEXTEST_EXPERIMENTAL_LIBTEST_JSON"] == "1"
+    assert env["CARGO_TERM_COLOR"] == "never"
+    assert env["RUST_BACKTRACE"] == "1"
+    assert env["NO_COLOR"] == "1"
