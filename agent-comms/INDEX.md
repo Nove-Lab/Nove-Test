@@ -10,7 +10,6 @@ _(none)_
 ## Pending
 - [localization-team-2026-05-31-aggregate-fixture-redesign.md](./tasks/localization-team-2026-05-31-aggregate-fixture-redesign.md) — `novetest-pm-team → novetest-localization-team` (aggregate-fixture-redesign)
 - [localization-team-2026-05-31-fallback-modes.md](./tasks/localization-team-2026-05-31-fallback-modes.md) — `novetest-pm-team → novetest-localization-team` (fallback-modes)
-- [run-team-2026-05-31-build-failure-heuristic-polish.md](./tasks/run-team-2026-05-31-build-failure-heuristic-polish.md) — `novetest-pm-team → novetest-run-team` (build-failure-heuristic-polish)
 - [run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md](./tasks/run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md) — `novetest-pm-team → novetest-run-team` (cargo-llvm-cov-ignore-run-fail)
 
 ## Blocked
@@ -40,5 +39,6 @@ _(none)_
 - [2026-05-28-phase3-regression-cli-and-freeze.md](./history/2026-05-28-phase3-regression-cli-and-freeze.md) — `novetest-pm-team → all` (phase3-regression-cli-and-freeze)
 - [2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md](./history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md) — `novetest-pm-team → all` (cargo-adapter-and-localization-cli-parallel-cycle)
 - [2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md](./history/2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md) — `novetest-pm-team → all` (localization-warnings-and-cargo-trigger-b-reopened)
+- [2026-05-31-cargo-build-failure-heuristic-polish.md](./history/2026-05-31-cargo-build-failure-heuristic-polish.md) — `novetest-pm-team → all` (cargo-build-failure-heuristic-polish)
 - [2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md](./history/2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md) — `novetest-pm-team → all` (cargo-env-var-hotfix-and-trigger-b-closure)
 - [2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md](./history/2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md) — `novetest-pm-team → all` (parallel-cycle-cargo-lcov-and-typed-metadata)
