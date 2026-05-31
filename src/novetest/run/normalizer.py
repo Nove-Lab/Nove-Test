@@ -19,6 +19,9 @@ from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeEngineContext, NativeResult
 
 
+_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"native_exit_code"})
+
+
 def normalize_native_result(
     native_result: NativeResult,
     native_engine_context: NativeEngineContext,
@@ -32,6 +35,18 @@ def normalize_native_result(
     (empty ``run_id``, ``created_at=0``); `assign_run_reference` replaces
     it. We split the two steps so a caller (Replay, later) can normalize
     without committing to a Run Reference if it intends to reuse one.
+
+    **Metadata contract** (per
+    `decisions/2026-05-30-native-result-metadata-slot.md`): the returned
+    record's ``metadata`` starts with the normalizer-owned key
+    ``native_exit_code`` and then overlays every entry from
+    ``native_result.metadata``. Adapter authors MUST NOT pre-populate
+    ``native_exit_code`` in their ``NativeResult.metadata`` — that key
+    is reserved for the normalizer. The strict-raise guard below
+    catches the bug at write time rather than letting an adapter
+    silently override the canonical exit code (PM preference at the
+    decision; strict-over-lenient is also our project posture per
+    `CLAUDE.md` Coding Guidelines).
     """
 
     engine_name = native_engine_context.engine_name
@@ -56,6 +71,24 @@ def normalize_native_result(
     placeholder_reference = RunReference(run_id="", created_at=0)
     artifact_paths = {name: str(path) for name, path in native_result.artifact_paths.items()}
 
+    # Strict-raise guard on the reserved key. Picked over pop-and-warn
+    # because the project posture is "visible-not-silent": an adapter
+    # author who accidentally writes the reserved key wants to learn
+    # at test time, not have the normalizer silently swallow their
+    # value. The guard is one branch — cheap in steady state.
+    reserved_collisions = _RESERVED_METADATA_KEYS & native_result.metadata.keys()
+    if reserved_collisions:
+        offending = sorted(reserved_collisions)
+        raise ValueError(
+            f"NativeResult.metadata keys {offending!r} are reserved for "
+            f"the normalizer; adapter for engine={engine_name!r} MUST "
+            f"NOT pre-populate them. See "
+            f"decisions/2026-05-30-native-result-metadata-slot.md."
+        )
+
+    metadata: dict[str, Any] = {"native_exit_code": native_result.returncode}
+    metadata.update(native_result.metadata)
+
     return RunRecord(
         run_reference=placeholder_reference,
         target_expression=target_expression,
@@ -69,7 +102,7 @@ def normalize_native_result(
         summary_counts=summary,
         test_results=test_results,
         artifact_paths=artifact_paths,
-        metadata={"native_exit_code": native_result.returncode},
+        metadata=metadata,
     )
 
 
@@ -463,8 +496,11 @@ def _normalize_cargo_payload(
 
     ``{"events": [<event dict>...],
        "binaries": [<binary name>...],
-       "failure_logs": {"<name>": "<rel path>", ...},
-       "nextest_version": "<version>" | None}``
+       "failure_logs": {"<name>": "<rel path>", ...}}``
+
+    (``nextest_version`` lives on ``NativeResult.metadata`` since the
+    2026-05-30 typed-slot migration — payload now carries only
+    per-test parsing state.)
 
     Each event dict mirrors nextest's libtest-json shape
     (``type``, ``event``, ``name``, optional ``stdout`` / ``stderr``).

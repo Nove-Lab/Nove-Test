@@ -296,8 +296,20 @@ async def run_cargo(
         "events": events,
         "binaries": sorted(binaries_seen),
         "failure_logs": failure_logs,
-        "nextest_version": nextest_version,
     }
+
+    # Secondary-runner version surfaces on `RunRecord.metadata` via the
+    # typed slot (per `decisions/2026-05-30-native-result-metadata-slot.md`,
+    # which retired the lazy payload-stash convention). `engine_version`
+    # carries the *primary* engine (cargo itself); `nextest_version`
+    # identifies which runner produced the libtest-json events. Both
+    # matter for replay/regression; both must surface to AI consumers
+    # reading `record.json`. Skipped when the probe failed — the typed
+    # slot is `dict[str, str]` so `None` cannot be assigned, and the
+    # absence is more informative than a literal ``"None"`` string.
+    metadata: dict[str, str] = {}
+    if nextest_version is not None:
+        metadata["nextest_version"] = nextest_version
 
     artifact_paths: dict[str, Path] = {
         "cargo_events_jsonl": events_path,
@@ -318,6 +330,7 @@ async def run_cargo(
         started_at_ms=started_ms,
         completed_at_ms=completed_ms,
         engine_version=engine_version,
+        metadata=metadata,
     )
 
 

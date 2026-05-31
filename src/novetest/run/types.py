@@ -84,6 +84,20 @@ class NativeResult:
     `pytest-json-report` JSON object). ``artifact_paths`` are absolute paths
     on disk that the orchestration layer will later copy/move into the
     Project Store under `.novetest/run/artifacts/run_<ulid>/`.
+
+    ``metadata`` is the typed slot adapters use to stash per-engine
+    auxiliary strings that MUST surface on the persisted `RunRecord`
+    (e.g. secondary-runner versions like ``nextest_version`` distinct
+    from the primary ``engine_version``, or engine-specific
+    configuration flags an AI consumer might want to inspect). The
+    normalizer overlays this dict onto its own metadata at
+    `normalize_native_result` time; see that function's docstring for
+    the reserved-key contract. Per
+    `decisions/2026-05-30-native-result-metadata-slot.md` (option (b),
+    payload-stash convention retired): keys/values are strictly
+    ``str`` so the contract layer is type-checkable and IDE-visible.
+    Transient per-engine state that does NOT need to surface on
+    ``RunRecord`` stays in ``payload``.
     """
 
     engine_name: str
@@ -93,3 +107,4 @@ class NativeResult:
     started_at_ms: int
     completed_at_ms: int
     engine_version: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
