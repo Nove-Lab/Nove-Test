@@ -8,17 +8,13 @@ Last regenerated: 2026-06-01
 _(none)_
 
 ## Pending
-- [localization-team-2026-05-31-aggregate-fixture-redesign.md](./tasks/localization-team-2026-05-31-aggregate-fixture-redesign.md) — `novetest-pm-team → novetest-localization-team` (aggregate-fixture-redesign)
-- [localization-team-2026-05-31-fallback-modes.md](./tasks/localization-team-2026-05-31-fallback-modes.md) — `novetest-pm-team → novetest-localization-team` (fallback-modes)
-- [run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md](./tasks/run-team-2026-05-31-cargo-llvm-cov-ignore-run-fail.md) — `novetest-pm-team → novetest-run-team` (cargo-llvm-cov-ignore-run-fail)
+- [localization-team-2026-06-01-latest-aggregate-discovery-defect4.md](./tasks/localization-team-2026-06-01-latest-aggregate-discovery-defect4.md) — `novetest-pm-team → novetest-localization-team` (latest-aggregate-discovery-defect4)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-defect3-parser-stdlib-pollution)
-- [main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md](./questions/main-branch-team-2026-05-31-localization-aggregate-e2e-equipped-host-defect.md) — `novetest-main-branch-team → novetest-pm-team` (localization-aggregate-e2e-equipped-host-defect)
-- [main-branch-team-2026-06-01-localization-latest-aggregate-discovery.md](./questions/main-branch-team-2026-06-01-localization-latest-aggregate-discovery.md) — `novetest-main-branch-team → novetest-pm-team` (localization-latest-aggregate-discovery)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-25-supported-engine-matrix.md](./decisions/2026-05-25-supported-engine-matrix.md) — `novetest-pm-team → all` (supported-engine-matrix)
@@ -44,3 +40,4 @@ _(none)_
 - [2026-05-31-cargo-build-failure-heuristic-polish.md](./history/2026-05-31-cargo-build-failure-heuristic-polish.md) — `novetest-pm-team → all` (cargo-build-failure-heuristic-polish)
 - [2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md](./history/2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md) — `novetest-pm-team → all` (cargo-env-var-hotfix-and-trigger-b-closure)
 - [2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md](./history/2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md) — `novetest-pm-team → all` (parallel-cycle-cargo-lcov-and-typed-metadata)
+- [2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md](./history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md) — `novetest-pm-team → all` (localization-phase4-modes-and-cargo-defect-cascade)
