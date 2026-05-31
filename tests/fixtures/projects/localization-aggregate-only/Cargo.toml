@@ -1,0 +1,13 @@
+[package]
+name = "localization_aggregate_only"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+
+# Two source files under `src/` so the LCOV report carries multi-file
+# block structure. One of the modules (``arithmetic``) has a deliberate
+# bug; the corresponding test fails and its panic message points at the
+# buggy file via the cargo failure log. No external dependencies.
+
+[lib]
+path = "src/lib.rs"

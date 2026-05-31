@@ -16,7 +16,6 @@ from novetest.localization import derive
 from novetest.localization.derive import derive_localization_findings
 from novetest.localization.persistence import localization_findings_path
 from novetest.localization.results import (
-    REASON_NO_COVERAGE,
     REASON_NO_FAILED_TESTS,
     REASON_NO_RUN_EVIDENCE,
     REASON_RUN_NOT_ANALYZABLE,
@@ -143,28 +142,43 @@ def test_no_failed_tests(
     assert result.reason == REASON_NO_FAILED_TESTS
 
 
-def test_coverage_unavailable(
+def test_coverage_unavailable_routes_to_failure_proximity(
     tmp_path: Path,
     make_record: Callable[..., RunRecord],
     seed_store: Callable[..., object],
     default_ref: RunReference,
 ) -> None:
+    """No coverage + failed tests → Path C (``failure_proximity``).
+
+    Strategy doc §2 + §5: when failed tests exist but coverage does not,
+    return ``failure_proximity`` (with ``confidence: "low"``) rather than
+    Unavailable — that is the degraded fallback per the design's "one
+    nuance" rule.
+    """
     workspace = tmp_path / "ws"
     record = make_record(
         test_results=(
-            TestResult(node_id="tests/a.py::t", outcome="failed", duration_ms=1),
+            TestResult(
+                node_id="tests/a.py::t",
+                outcome="failed",
+                duration_ms=1,
+                # Pytest-style inline failure_reference so the parser can
+                # extract a (file, line) tuple for the ranking.
+                failure_reference="src/foo.py:42: AssertionError",
+            ),
         ),
     )
     seed_store(workspace, record=record, coverage=None)
     store = get_project_store_state(workspace / ".novetest")
     result = derive_localization_findings(store, default_ref)
-    assert isinstance(result, LocalizationUnavailable)
-    assert result.reason == REASON_NO_COVERAGE
-    assert result.detail is not None
-    assert "failure_proximity" in result.detail
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "failure_proximity"
+    assert result.confidence == "low"
+    # Brief §7 deviation: failure_proximity carries empty alternate_scores_available.
+    assert result.alternate_scores_available == ()
 
 
-def test_coverage_not_per_test_granularity(
+def test_coverage_aggregate_routes_to_sbfl_aggregate(
     tmp_path: Path,
     make_record: Callable[..., RunRecord],
     make_coverage: Callable[..., CoverageFactSet],
@@ -172,10 +186,23 @@ def test_coverage_not_per_test_granularity(
     seed_store: Callable[..., object],
     default_ref: RunReference,
 ) -> None:
+    """Aggregate coverage + failed tests → Path B (``sbfl_aggregate``).
+
+    Strategy doc §2: granularity in
+    {"aggregate", "per-test-file", "per-test-class"} routes to
+    sbfl_aggregate. Confidence is ``"medium"`` per the table; the
+    failure-only Ochiai floor is the default sub-variant (no Regression
+    Facts present in this fixture).
+    """
     workspace = tmp_path / "ws"
     record = make_record(
         test_results=(
-            TestResult(node_id="tests/a.py::t", outcome="failed", duration_ms=1),
+            TestResult(
+                node_id="tests/a.py::t",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:7: AssertionError",
+            ),
         ),
     )
     coverage = make_coverage(
@@ -185,10 +212,11 @@ def test_coverage_not_per_test_granularity(
     seed_store(workspace, record=record, coverage=coverage)
     store = get_project_store_state(workspace / ".novetest")
     result = derive_localization_findings(store, default_ref)
-    assert isinstance(result, LocalizationUnavailable)
-    assert result.reason == REASON_NO_COVERAGE
-    assert result.detail is not None
-    assert "sbfl_aggregate" in result.detail
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_aggregate"
+    assert result.confidence == "medium"
+    # All four formulas should be available (no deviation for sbfl_aggregate).
+    assert set(result.alternate_scores_available) == {"op2", "dstar2", "tarantula"}
 
 
 def test_per_test_happy_path_ranks_buggy_function_top(
