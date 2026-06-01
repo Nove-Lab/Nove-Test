@@ -10,6 +10,7 @@ _(none)_
 ## Pending
 - [orchestration-team-2026-06-01-phase6-entry-recommendation-synthesis.md](./tasks/orchestration-team-2026-06-01-phase6-entry-recommendation-synthesis.md) — `novetest-pm-team → novetest-orchestration-team` (phase6-entry-recommendation-synthesis)
 - [orchestration-team-2026-06-02-phase6-entry-recommendation-synthesis.md](./handoffs/orchestration-team-2026-06-02-phase6-entry-recommendation-synthesis.md) — `novetest-orchestration-team → novetest-main-branch-team` (phase6-entry-recommendation-synthesis)
+- [2026-06-02-phase6-entry-recommendation-synthesis.md](./verifications/2026-06-02-phase6-entry-recommendation-synthesis.md) — `novetest-main-branch-team → novetest-manual-test-team` (phase6-entry-recommendation-synthesis)
 
 ## Blocked
 _(none)_
