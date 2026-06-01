@@ -8,7 +8,7 @@ Last regenerated: 2026-06-01
 _(none)_
 
 ## Pending
-_(none)_
+- [orchestration-team-2026-06-01-phase6-entry-recommendation-synthesis.md](./tasks/orchestration-team-2026-06-01-phase6-entry-recommendation-synthesis.md) — `novetest-pm-team → novetest-orchestration-team` (phase6-entry-recommendation-synthesis)
 
 ## Blocked
 _(none)_
