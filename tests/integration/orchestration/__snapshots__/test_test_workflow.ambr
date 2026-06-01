@@ -1,0 +1,35 @@
+# serializer version: 1
+# name: test_pytest_basic_envelope_snapshot
+  dict({
+    'recommendation_schema_version': 1,
+    'recommendations': list([
+      dict({
+        'category': 'all_green',
+        'evidence_citations': list([
+          dict({
+            'kind': 'run_reference',
+            'run_reference': '<ref>',
+            'selector': dict({
+            }),
+          }),
+        ]),
+        'priority': 7,
+        'recommendation_id': '<rec_id>',
+        'slots': dict({
+          'passed': 3,
+          'run_reference': '<ref>',
+          'skipped': 0,
+          'total_tests': 3,
+        }),
+        'summary': 'All tests green; no action recommended (passed 3, skipped 0, total 3).',
+      }),
+    ]),
+    'run_reference': '<run_ref>',
+    'stage_eligibility': dict({
+      'coverage': 'available',
+      'localization': 'unavailable',
+      'regression': 'unavailable',
+      'replay': 'not_run',
+    }),
+  })
+# ---
