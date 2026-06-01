@@ -8,8 +8,7 @@ Last regenerated: 2026-06-01
 _(none)_
 
 ## Pending
-- [localization-team-2026-06-01-perf-nfr-loc-002.md](./tasks/localization-team-2026-06-01-perf-nfr-loc-002.md) — `novetest-pm-team → novetest-localization-team` (perf-nfr-loc-002)
-- [2026-06-01-localization-perf-nfr-loc-002.md](./verifications/2026-06-01-localization-perf-nfr-loc-002.md) — `novetest-main-branch-team → novetest-manual-test-team` (localization-perf-nfr-loc-002)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -44,3 +43,4 @@ _(none)_
 - [2026-06-01-defect4-closed-and-defects-5-6-surfaced.md](./history/2026-06-01-defect4-closed-and-defects-5-6-surfaced.md) — `novetest-pm-team → all` (defect4-closed-and-defects-5-6-surfaced)
 - [2026-06-01-defects-5-6-closed-phase4-modes-narrative-lands.md](./history/2026-06-01-defects-5-6-closed-phase4-modes-narrative-lands.md) — `novetest-pm-team → all` (defects-5-6-closed-phase4-modes-narrative-lands)
 - [2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md](./history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md) — `novetest-pm-team → all` (localization-phase4-modes-and-cargo-defect-cascade)
+- [2026-06-01-phase4-complete-perf-nfr-loc-002.md](./history/2026-06-01-phase4-complete-perf-nfr-loc-002.md) — `novetest-pm-team → all` (phase4-complete-perf-nfr-loc-002)
