@@ -9,6 +9,7 @@ _(none)_
 
 ## Pending
 - [localization-team-2026-06-01-perf-nfr-loc-002.md](./tasks/localization-team-2026-06-01-perf-nfr-loc-002.md) — `novetest-pm-team → novetest-localization-team` (perf-nfr-loc-002)
+- [2026-06-01-localization-perf-nfr-loc-002.md](./verifications/2026-06-01-localization-perf-nfr-loc-002.md) — `novetest-main-branch-team → novetest-manual-test-team` (localization-perf-nfr-loc-002)
 
 ## Blocked
 _(none)_
