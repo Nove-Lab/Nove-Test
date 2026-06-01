@@ -11,6 +11,8 @@ _(none)_
 - [localization-team-2026-06-01-localization-cache-flag-invalidation-defect5.md](./tasks/localization-team-2026-06-01-localization-cache-flag-invalidation-defect5.md) — `novetest-pm-team → novetest-localization-team` (localization-cache-flag-invalidation-defect5)
 - [orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md](./tasks/orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md) — `novetest-pm-team → novetest-orchestration-team` (status-sub-reports-staleness-defect6)
 - [orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md](./handoffs/orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md) — `novetest-orchestration-team → novetest-main-branch-team` (status-sub-reports-staleness-defect6)
+- [2026-06-01-localization-cache-rederive-defect5.md](./verifications/2026-06-01-localization-cache-rederive-defect5.md) — `novetest-main-branch-team → novetest-manual-test-team` (localization-cache-rederive-defect5)
+- [2026-06-01-status-sub-reports-staleness-defect6.md](./verifications/2026-06-01-status-sub-reports-staleness-defect6.md) — `novetest-main-branch-team → novetest-manual-test-team` (status-sub-reports-staleness-defect6)
 
 ## Blocked
 _(none)_
