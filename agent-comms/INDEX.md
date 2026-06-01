@@ -8,8 +8,8 @@ Last regenerated: 2026-06-01
 _(none)_
 
 ## Pending
-- [localization-team-2026-06-01-latest-aggregate-discovery-defect4.md](./tasks/localization-team-2026-06-01-latest-aggregate-discovery-defect4.md) — `novetest-pm-team → novetest-localization-team` (latest-aggregate-discovery-defect4)
-- [2026-06-01-localization-latest-discoverability-defect4.md](./verifications/2026-06-01-localization-latest-discoverability-defect4.md) — `novetest-main-branch-team → novetest-manual-test-team` (localization-latest-discoverability-defect4)
+- [localization-team-2026-06-01-localization-cache-flag-invalidation-defect5.md](./tasks/localization-team-2026-06-01-localization-cache-flag-invalidation-defect5.md) — `novetest-pm-team → novetest-localization-team` (localization-cache-flag-invalidation-defect5)
+- [orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md](./tasks/orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md) — `novetest-pm-team → novetest-orchestration-team` (status-sub-reports-staleness-defect6)
 
 ## Blocked
 _(none)_
@@ -41,4 +41,5 @@ _(none)_
 - [2026-05-31-cargo-build-failure-heuristic-polish.md](./history/2026-05-31-cargo-build-failure-heuristic-polish.md) — `novetest-pm-team → all` (cargo-build-failure-heuristic-polish)
 - [2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md](./history/2026-05-31-cargo-env-var-hotfix-and-trigger-b-closure.md) — `novetest-pm-team → all` (cargo-env-var-hotfix-and-trigger-b-closure)
 - [2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md](./history/2026-05-31-parallel-cycle-cargo-lcov-and-typed-metadata.md) — `novetest-pm-team → all` (parallel-cycle-cargo-lcov-and-typed-metadata)
+- [2026-06-01-defect4-closed-and-defects-5-6-surfaced.md](./history/2026-06-01-defect4-closed-and-defects-5-6-surfaced.md) — `novetest-pm-team → all` (defect4-closed-and-defects-5-6-surfaced)
 - [2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md](./history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md) — `novetest-pm-team → all` (localization-phase4-modes-and-cargo-defect-cascade)
