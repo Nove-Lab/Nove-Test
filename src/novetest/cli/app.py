@@ -8,6 +8,7 @@ from typing import Annotated, Any, Callable, NoReturn
 from cyclopts import App, Parameter
 
 from novetest import __version__
+from novetest.cli.handlers.test import build_test_envelope
 from novetest.cli.output import (
     EXIT_ENGINE_MISSING,
     EXIT_GENERIC,
@@ -58,6 +59,7 @@ from novetest.orchestration.workflows import (
     build_status_view,
     initialize_project_workspace,
     run_target_in_store,
+    test_target_in_store,
 )
 from novetest.regression import (
     RegressionFactSet,
@@ -1091,6 +1093,75 @@ def inspect_cmd(run_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Integrated `novetest test [target]` workflow (Phase 6 entry)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="test")
+def test_cmd(target: str = "") -> None:
+    """Execute the integrated `novetest test [target]` workflow.
+
+    Chains Run → Memory → Coverage → Regression → Localization →
+    Recommendation synthesis. Stage failures (no baseline, no coverage,
+    etc.) are surfaced via the ``data.stage_eligibility`` block — the
+    workflow does NOT abort on a single-engine outage (brief §5 — Error
+    policy). Run execution (step 2) is fatal; the handler maps the same
+    exception surface ``run_cmd`` does (``EngineNotReadyError`` +
+    ``AdapterInvocationError``) and re-uses the same envelope shape.
+
+    Recommendations are synthesized in-memory from the
+    ``FactBundle`` — never persisted (Open Q #9 / brief §2). Re-deriving
+    against the same evidence yields a byte-identical recommendation
+    list (determinism contract, design doc §4).
+
+    The ``data.run_reference`` / ``data.stage_eligibility`` /
+    ``data.recommendation_schema_version`` / ``data.recommendations``
+    fields are the wire surface AI agents pin against (brief §5).
+    """
+
+    store = _require_store("test")
+    try:
+        outcome = asyncio.run(test_target_in_store(target, store))
+    except EngineNotReadyError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="test",
+                ok=False,
+                data={"engine_readiness": _readiness_payload(exc.readiness)},
+                errors=(
+                    EnvelopeError(
+                        code=f"engine-{exc.readiness.state}",
+                        message=str(exc),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+    except AdapterInvocationError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="test",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code=f"adapter-{exc.kind}",
+                        message=str(exc),
+                        details=(
+                            {"install_hint": exc.install_hint}
+                            if exc.install_hint is not None
+                            else {}
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+
+    envelope, exit_code = build_test_envelope(outcome)
+    _emit_and_exit(envelope, exit_code)
+
+
+# ---------------------------------------------------------------------------
 # Remaining stubs (not in Phase 1 Run+Memory scope)
 # ---------------------------------------------------------------------------
 
@@ -1108,10 +1179,11 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-for _name in ("test", "replay"):
+for _name in ("replay",):
     _register_flat_stub(_name)
 # ``compare`` promoted to a real verb above.
 # ``regression`` promoted to a real sub-app above.
+# ``test`` promoted to a real verb below (Phase 6 entry).
 
 
 # ---------------------------------------------------------------------------
@@ -1162,6 +1234,47 @@ def _scan_top_level_intent(argv: list[str]) -> str | None:
     return None
 
 
+def _inject_default_verb_alias(argv: list[str]) -> list[str]:
+    """Inject ``"test"`` before the first positional when it is not a verb.
+
+    Implements the Phase 6 brief §6 default-verb alias:
+    ``novetest <target>`` ≡ ``novetest test <target>`` whenever
+    ``<target>`` is not in ``_SUBCOMMAND_TOKENS`` (the reserved verb set)
+    and not a flag.
+
+    Disambiguation rule: if the first positional token IS a reserved
+    verb, ALWAYS route to that verb's handler even when a directory of
+    the same name exists in the workspace. The reserved set wins
+    unconditionally (so a workspace with a directory literally named
+    ``inspect/`` cannot shadow ``novetest inspect <run_id>``).
+
+    This is called from ``main()`` AFTER ``_extract_output_flag``
+    (so ``--output`` and its value are already stripped) AND AFTER the
+    top-level intent scan (so ``-v`` / ``-h`` keep their precedence).
+    Bare ``novetest`` (empty argv after stripping) is handled separately
+    in ``main()`` — that surface emits the help envelope directly per
+    REQ-ORCH-006.
+
+    Pure function — no side effects. Returns the (possibly-augmented)
+    argv list; the original list is not mutated.
+    """
+
+    if not argv:
+        return argv
+    # Find the first positional (non-flag) token.
+    for tok in argv:
+        if tok.startswith("-"):
+            continue
+        # First positional. If it is a reserved verb, leave argv alone.
+        if tok in _SUBCOMMAND_TOKENS:
+            return argv
+        # Else, inject "test" as the verb. Prepending preserves any
+        # leading flags Cyclopts may consume at the top level.
+        return ["test", *argv]
+    # All tokens were flags — let Cyclopts handle (or reject) them.
+    return argv
+
+
 def _emit_version(mode: OutputMode) -> None:
     identity = report_cli_identity()
     emit_envelope(Envelope(command="version", ok=True, data=identity.to_dict()), mode)
@@ -1187,6 +1300,21 @@ def main(argv: list[str] | None = None) -> None:
     if intent == "help":
         _emit_help(mode)
         sys.exit(EXIT_OK)
+
+    # Bare ``novetest`` (no positional / no verb / no recognized flag) —
+    # per Phase 6 brief §6 + REQ-ORCH-006, emit the help envelope and
+    # exit 0. This MUST come before the alias injection: bare-novetest
+    # must NOT silently become ``novetest test`` (which would try to
+    # invoke the integrated workflow with an empty target).
+    if not args:
+        _emit_help(mode)
+        sys.exit(EXIT_OK)
+
+    # Default-verb alias: ``novetest <target>`` → ``novetest test <target>``
+    # when ``<target>`` is not in the reserved verb set. Pure-function
+    # transformation; the alias hook itself is testable in isolation
+    # (see ``tests/unit/cli/test_default_verb_alias.py``).
+    args = _inject_default_verb_alias(args)
 
     try:
         app(args)
