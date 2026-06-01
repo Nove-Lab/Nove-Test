@@ -9,8 +9,22 @@ the matrix.
 
 Dense representation only at this slice. A sparse fallback is Open
 Question #11 (``design/implementation-plan/localization-strategy.md``
-Open Items / engine-adapters.md) — revisit when a real fixture exceeds
-the threshold; for Phase 4 entry the dense path satisfies NFR-LOC-002.
+Open Items §3 / engine-adapters.md) — revisit when a real fixture
+exceeds the threshold; for Phase 4 entry the dense path satisfies
+NFR-LOC-002.
+
+**Empirically validated 2026-06-01** at the NFR-LOC-002 scale (500
+failed-test references × 50,000 covered locations, per-test spectra
+of shape 3500 × 50000) via
+``tests/perf/localization/test_perf_derive_per_test.py``: median
+1.33 s on the reference dev host vs the 8.0 s NFR ceiling — comfortably
+under the 5.0 s internal budget. Open Q #11 (sparse repr threshold) is
+**not** the binding NFR constraint at this scale; the hot paths the
+perf slice surfaced were in ``derive.py`` (per-location
+``Path.resolve`` and per-failed-row ``.sum()`` calls in
+``_aggregate_by_symbol``) and were addressed there. Sparse
+representation stays a forward-looking concern for
+**larger-than-NFR** suites (post-MVP).
 
 Preconditions enforced by the caller (``derive_localization_findings``):
 - ``coverage_facts.mapping_granularity == "per-test"``

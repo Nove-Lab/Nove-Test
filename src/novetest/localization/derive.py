@@ -727,21 +727,26 @@ def _count_vectors(
     - ``nf`` = number of failing tests that did NOT execute the location.
     - ``np_`` = number of passing tests that did NOT execute the location.
 
-    ``matrix.astype(np.int64)`` is needed because uint8 sums saturate at
-    255 with overflow semantics on large suites; int64 stays exact.
+    The two ``sum(axis=0, dtype=np.int64)`` calls accumulate directly in
+    int64 without materializing a full int64 copy of the uint8 matrix —
+    a naive ``matrix.astype(np.int64)`` upfront would allocate 8x the
+    matrix bytes (e.g. 1.4 GB on a 3500 × 50000 spectra) and is the
+    pattern this code used to follow before the NFR-LOC-002 perf slice
+    (2026-06-01) profiled it. Passing ``dtype=np.int64`` to ``.sum``
+    yields the same numerically-exact result with zero intermediate.
     """
-    matrix = spectra.matrix.astype(np.int64)
-    outcomes = spectra.test_outcomes.astype(np.int64)
-
-    failed_mask = outcomes == 1
-    passed_mask = outcomes == 0
+    failed_mask = spectra.test_outcomes == 1
+    passed_mask = spectra.test_outcomes == 0
 
     total_failed = int(failed_mask.sum())
     total_passed = int(passed_mask.sum())
 
     # Per-location column sums restricted to failed / passed rows.
-    ef = matrix[failed_mask].sum(axis=0).astype(np.int64)
-    ep = matrix[passed_mask].sum(axis=0).astype(np.int64)
+    # ``dtype=np.int64`` makes numpy promote each addition into int64
+    # accumulators while reading the uint8 cells in place, so no large
+    # intermediate copy is allocated.
+    ef = spectra.matrix[failed_mask].sum(axis=0, dtype=np.int64)
+    ep = spectra.matrix[passed_mask].sum(axis=0, dtype=np.int64)
     nf = total_failed - ef
     np_ = total_passed - ep
     return ef, ep, nf, np_
@@ -830,8 +835,21 @@ def _aggregate_by_symbol(
         tuple[str, str | None, tuple[int, int] | None], list[int]
     ] = defaultdict(list)
 
+    # File-path → absolute-path memo. ``spectra.locations`` typically
+    # carries 50k–100k entries with ≤1k distinct file paths (one entry
+    # per covered line); calling ``_resolve_repo_path`` per entry runs
+    # ``Path.resolve()``'s realpath + lstat syscall chain 50k times even
+    # though every call for the same ``file_path`` returns the same Path.
+    # Memoizing collapses that to one resolve per distinct file (the
+    # NFR-LOC-002 perf slice (2026-06-01) profiled this loop at ~2.7 s
+    # before the fix and ~0.01 s after).
+    absolute_path_cache: dict[str, Path] = {}
+
     for j, (file_path, line) in enumerate(spectra.locations):
-        absolute = _resolve_repo_path(store, file_path)
+        absolute = absolute_path_cache.get(file_path)
+        if absolute is None:
+            absolute = _resolve_repo_path(store, file_path)
+            absolute_path_cache[file_path] = absolute
         qualname, line_range = resolve_python_symbol(absolute, line)
         key = (file_path, qualname, line_range)
         groups[key].append(j)
@@ -902,16 +920,33 @@ def _resolve_repo_path(store: ProjectStore, file_path: str) -> Path:
 def _related_failed_tests(
     spectra: Spectra, col_indices: list[int]
 ) -> tuple[str, ...]:
-    """Return the sorted-unique nodeids of failed tests touching any column."""
+    """Return the sorted-unique nodeids of failed tests touching any column.
+
+    Vectorized: one matrix slice + one ``np.any(axis=1)`` per call. The
+    previous shape (a Python-level for-loop over failed-row indices
+    calling ``row.sum()`` per iteration) was the NFR-LOC-002 hot path
+    pre-2026-06-01 — at NFR scale it cost ~7 s of cumulative time because
+    each ``.sum()`` on a tiny uint8 slice spent more time in the numpy
+    dispatch boilerplate than on the actual reduction. The vectorized
+    form lifts that ~500x.
+    """
     failed_mask = spectra.test_outcomes == 1
     failed_row_indices = np.flatnonzero(failed_mask)
-    matched_tests: set[str] = set()
-    for i in failed_row_indices:
-        # Any (i, j) with j in col_indices = the test touched some line
-        # in this symbol.
-        row = spectra.matrix[i, col_indices]
-        if int(row.sum()) > 0:
-            matched_tests.add(spectra.test_ids[i])
+    if failed_row_indices.size == 0 or not col_indices:
+        return ()
+    # Slice once across all failed rows and the group's columns; ``np.any``
+    # along axis=1 yields a boolean per failed row indicating "this test
+    # touched at least one of the group's lines". No Python-side per-row
+    # loop, no per-iteration .sum() call.
+    #
+    # ``np.asarray(..., dtype=np.intp)`` materializes a typed integer
+    # array — ``np.ix_`` rejects bare ``list[int]`` under strict typing
+    # (numpy stubs require an integer-dtype array-like).
+    col_indices_arr = np.asarray(col_indices, dtype=np.intp)
+    submatrix = spectra.matrix[np.ix_(failed_row_indices, col_indices_arr)]
+    touched_mask = np.any(submatrix != 0, axis=1)
+    touched_rows = failed_row_indices[touched_mask]
+    matched_tests = {spectra.test_ids[int(i)] for i in touched_rows}
     return tuple(sorted(matched_tests))
 
 
