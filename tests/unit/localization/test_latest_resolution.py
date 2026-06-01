@@ -124,11 +124,29 @@ def _seed_unanalyzable_run(
     run_reference: RunReference,
     make_record: Callable[..., RunRecord],
 ) -> None:
-    """Seed a run with a failed test but NO coverage facts → unanalyzable."""
+    """Seed a run with NO failed tests → unanalyzable under the post-2026-06-01 gate.
+
+    Before the Defect 4 fix, "failing test + no coverage" was sufficient
+    to drop a run from the resolver because the gate insisted on
+    per-test coverage. After Defect 4 relaxed the gate to match the
+    3-mode dispatcher in ``derive_localization_findings``, that same
+    seed becomes ``failure_proximity``-analyzable. The only structural
+    "unanalyzable" cases left for the resolver are:
+
+    - No run evidence at all (tested separately).
+    - Tombstoned run (tested separately).
+    - **Passing-only run** — no failed tests, so nothing to localize.
+
+    This helper now seeds the third case so the
+    ``test_resolve_all_non_analyzable_returns_run_not_analyzable_with_count``
+    and ``test_derive_latest_all_non_analyzable_returns_run_not_analyzable``
+    tests still exercise the "all candidates skipped → run_not_analyzable"
+    code path the resolver guarantees.
+    """
     record = make_record(
         test_results=(
             TestResult(
-                node_id="tests/a.py::t", outcome="failed", duration_ms=1
+                node_id="tests/a.py::t", outcome="passed", duration_ms=1
             ),
         ),
         run_reference=run_reference,

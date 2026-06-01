@@ -15,8 +15,6 @@ to ``compare_runs`` in ``compare.py``.
 
 from __future__ import annotations
 
-from novetest.coverage.retrieval import get_coverage_facts
-from novetest.coverage.results import CoverageUnavailable
 from novetest.localization.persistence import read_localization_findings_raw
 from novetest.localization.results import (
     REASON_MISSING_DERIVED_FACTS,
@@ -66,17 +64,31 @@ def check_localization_availability(
 ) -> bool:
     """Cheap precondition probe for Orchestration eligibility evaluation.
 
-    Returns ``True`` iff ALL three preconditions for the per-test SBFL
-    path are satisfied:
+    Returns ``True`` iff the run has SOMETHING the Localization engine
+    can analyze:
 
     1. ``retrieve_run_evidence`` succeeds AND the entry is not tombstoned.
     2. The Run Record has at least one failed test result.
-    3. Coverage Facts exist for the run AND
-       ``mapping_granularity == "per-test"``.
 
-    Does NOT derive. The Localization engine's ``derive_localization_findings``
-    is the only function that actually computes scores; this helper is
-    the cheap "is the derivation even worth attempting" gate.
+    Coverage shape is NOT gated here — ``derive_localization_findings``
+    dispatches across all three modes (per-test / aggregate /
+    failure_proximity) based on ``CoverageFactSet.mapping_granularity``
+    or its absence (see ``design/implementation-plan/localization-strategy.md``
+    §2). Pre-2026-06-01 this function rejected non-per-test coverage,
+    which made ``novetest localization latest`` return
+    ``run_not_analyzable`` for cargo / go / jest runs and for any
+    coverage-less run — even though the explicit ``<run_id>`` path
+    handled them correctly via the mode dispatcher.
+
+    Per ``agent-comms/history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md``
+    §"Defect 4" the gate was relaxed to match the mode dispatcher's
+    contract: at this layer the only structural requirements are a
+    non-tombstoned entry with at least one failed test result.
+
+    Does NOT derive. The Localization engine's
+    ``derive_localization_findings`` is the only function that actually
+    computes scores; this helper is the cheap "is the derivation even
+    worth attempting" gate.
 
     Returns ``False`` on any precondition failure — missing-tolerant by
     design (mirrors ``check_regression_availability`` / Coverage's
@@ -88,12 +100,6 @@ def check_localization_availability(
         return False
     if entry.tombstoned_at is not None:
         return False
-    has_failed = any(
+    return any(
         tr.outcome in _FAILED_OUTCOMES for tr in entry.run_record.test_results
     )
-    if not has_failed:
-        return False
-    coverage = get_coverage_facts(store, entry.run_record.run_reference)
-    if isinstance(coverage, CoverageUnavailable):
-        return False
-    return coverage.mapping_granularity == "per-test"
