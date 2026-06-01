@@ -1,18 +1,46 @@
-"""``novetest status`` workflow — Phase 1 simplified view.
+"""``novetest status`` workflow — Project Store summary view.
 
 Returns the latest Run Reference and Run History readiness, plus
-per-sub-report availability flags. In Phase 1 the derived facts (Coverage,
-Regression, Localization, Replay) are not produced, so every sub-report is
-reported as ``unavailable``. Phase 2+ slices replace the constants with
-real ``check_*_availability`` calls without changing this shape.
+per-sub-report availability flags. The four sub-report flags (coverage,
+regression, localization, replay) are computed by **cache-only reads** of
+each engine's previously-derived facts: ``status`` MUST NOT trigger a
+derivation as a side effect (the verb is the "what is cached?" gate,
+not a derive-on-read action).
+
+The availability path mirrors ``inspect.py``'s ``_resolve_inspect_*``
+helpers — same retrieval functions, same discriminator-based decision —
+so ``status.sub_reports.X == "available"`` and
+``inspect.X_outcome.kind == "fact-set"`` MUST agree for any given run.
+Pre-Defect-6 this file left every flag hard-defaulted to ``False`` from
+the Phase 1 stub, which made ``status`` lie about availability for
+coverage / localization / regression even when the on-disk facts were
+present AND ``inspect`` correctly reported them as ``fact-set``. The
+post-Defect-6 contract: three sources of truth (``status``, ``inspect``,
+on-disk file) agree by construction because they all read the same
+underlying cache (see
+``agent-comms/tasks/orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md``
+for the empirical reproduction).
+
+Replay stays ``False`` until Phase 5: the ``replay/`` module is empty
+(see ``src/novetest/replay/__init__.py``) so there is no ``get_*`` API
+to call. Once Replay ships, the corresponding line below switches to a
+cache-only retrieval call without touching this file's shape.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from novetest.memory import ProjectStore, list_run_history
+from novetest.coverage import get_coverage_facts
+from novetest.localization import LocalizationFinding, get_localization_findings
+from novetest.memory import (
+    ProjectStore,
+    find_runs_for_target,
+    list_run_history,
+)
 from novetest.models import MemoryEntry
+from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.regression import RegressionFactSet, get_regression_facts
 
 
 @dataclass(slots=True, frozen=True)
@@ -46,8 +74,99 @@ class StatusView:
 
 
 def build_status_view(store: ProjectStore) -> StatusView:
-    """Aggregate the current Memory state into a Status view."""
+    """Aggregate the current Memory state into a Status view.
+
+    The four ``*_available`` flags are computed by cache-only retrieval
+    against the **latest** Memory Entry — the same run that surfaces as
+    ``latest_run_reference`` on the envelope. When ``list_run_history``
+    returns an empty list (fresh store, no runs yet), every flag stays
+    ``False`` because there is no run to probe against.
+
+    Each flag is a pure ``isinstance(result, FactSet)`` check against the
+    relevant engine's ``get_*`` cache-read helper:
+
+    - Coverage: ``get_coverage_facts(store, latest_ref)`` →
+      ``CoverageFactSet`` means
+      ``<store>/coverage/facts/run_<latest_id>/coverage_facts.json``
+      exists and parses cleanly. Granularity-independent: per-test,
+      per-test-class, per-test-file, AND aggregate all surface as
+      ``available`` (the Defect-6 reproduction was a cargo aggregate run
+      whose facts were on disk but reported as ``unavailable``).
+    - Localization: ``get_localization_findings(store, latest_ref)`` →
+      ``LocalizationFinding`` means
+      ``<store>/localization/findings/run_<latest_id>/localization_findings.json``
+      exists. Mode-independent: per-test SBFL, aggregate SBFL, and
+      failure-proximity all surface as ``available``.
+    - Regression: see ``_latest_regression_available`` — needs a prior
+      comparable sibling AND a cached pair file.
+    - Replay: pinned ``False`` (Phase 5 not yet shipped — the engine
+      module is empty).
+
+    The cache-only contract is load-bearing: ``status`` must be cheap and
+    side-effect-free. We deliberately do NOT call ``compare_runs`` here
+    (which would derive on cache miss) — the regression flag is computed
+    via ``get_regression_facts`` so a pair that has never been compared
+    surfaces as ``unavailable`` even when both runs exist.
+    """
 
     history = list_run_history(store)
     latest = history[0] if history else None
-    return StatusView(latest_entry=latest, run_history_size=len(history))
+    if latest is None:
+        return StatusView(latest_entry=None, run_history_size=0)
+
+    latest_ref = latest.run_record.run_reference
+    coverage_available = isinstance(
+        get_coverage_facts(store, latest_ref), CoverageFactSet
+    )
+    localization_available = isinstance(
+        get_localization_findings(store, latest_ref), LocalizationFinding
+    )
+    regression_available = _latest_regression_available(store, latest)
+    return StatusView(
+        latest_entry=latest,
+        run_history_size=len(history),
+        coverage_available=coverage_available,
+        regression_available=regression_available,
+        localization_available=localization_available,
+        # Replay stays False — the engine ships post-MVP (Phase 5).
+    )
+
+
+def _latest_regression_available(
+    store: ProjectStore, latest_entry: MemoryEntry
+) -> bool:
+    """Return True iff a cached ``regression_facts.json`` exists for the
+    natural ``(prior_sibling, latest_entry)`` pair on the same target.
+
+    Mirrors ``inspect.py::_resolve_inspect_regression``'s pair-selection
+    logic — the most-recent strictly-older sibling on the same
+    ``target_expression`` (tombstones excluded). The difference is the
+    final read: ``inspect`` calls ``compare_runs`` (which derives on
+    cache miss); ``status`` calls ``get_regression_facts`` (cache-only)
+    because ``status`` MUST NOT derive as a side effect.
+
+    A run with no prior siblings (fresh store, single run on the target)
+    returns ``False`` — the natural "no comparable baseline" answer.
+    Two runs on the same target without a prior ``regression compare`` /
+    ``compare`` invocation also return ``False`` because the pair file
+    has never been written.
+    """
+
+    siblings = find_runs_for_target(
+        store,
+        latest_entry.run_record.target_expression,
+        include_tombstoned=False,
+    )
+    latest_ref = latest_entry.run_record.run_reference
+    prior = [
+        s
+        for s in siblings
+        if s.run_record.run_reference.created_at < latest_ref.created_at
+    ]
+    if not prior:
+        return False
+    prior.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
+    baseline_ref = prior[0].run_record.run_reference
+    return isinstance(
+        get_regression_facts(store, baseline_ref, latest_ref), RegressionFactSet
+    )
