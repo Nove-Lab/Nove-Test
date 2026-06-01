@@ -9,6 +9,7 @@ _(none)_
 
 ## Pending
 - [localization-team-2026-06-01-latest-aggregate-discovery-defect4.md](./tasks/localization-team-2026-06-01-latest-aggregate-discovery-defect4.md) — `novetest-pm-team → novetest-localization-team` (latest-aggregate-discovery-defect4)
+- [2026-06-01-localization-latest-discoverability-defect4.md](./verifications/2026-06-01-localization-latest-discoverability-defect4.md) — `novetest-main-branch-team → novetest-manual-test-team` (localization-latest-discoverability-defect4)
 
 ## Blocked
 _(none)_
