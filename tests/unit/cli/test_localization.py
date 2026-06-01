@@ -15,7 +15,8 @@ the Phase-4 CLI task brief before running.
 from __future__ import annotations
 
 import json
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -498,43 +499,107 @@ def test_localization_run_top_n_zero_returns_invalid_flag(
 
 
 # ---------------------------------------------------------------------------
-# Cache-args-ignored warning suite (six scenarios from
-# `agent-comms/tasks/orchestration-team-2026-05-30-localization-cache-mismatch-warnings.md`
-# scope §4). The detection model is "peek-after-derive": the returned
-# ``LocalizationFinding`` carries the cached formula/top_n when the engine
-# served from cache (the engine ignores the kwargs in that path), so an
-# explicit user flag that differs from the returned finding's value is the
-# precise signal that the cache was honored and the user's arg ignored.
+# Cache-rederived warning suite (Defect 5 fix, 2026-06-01).
+#
+# Pre-Defect-5 the CLI emitted a ``localization-cache-args-ignored`` warning
+# and returned the stale cached finding when explicit ``--formula`` /
+# ``--top-n`` differed from the cached values. Post-Defect-5 the same
+# condition INVALIDATES the cache, re-invokes ``derive_localization_findings``
+# at the requested flags, and surfaces a ``localization-cache-rederived``
+# warning carrying the previous (formula, top_n) for audit.
+#
+# Test pattern: monkeypatch ``derive_localization_findings`` with a
+# side-effecting callable that returns the CACHED finding on first call,
+# the FRESH finding on subsequent calls. The CLI's first call hits the
+# cached payload; ``_rederive_if_cache_overrode_flags`` then unlinks the
+# (fake) cache path and re-calls the engine — that second call returns the
+# fresh finding. ``localization_findings_path`` is monkeypatched onto a
+# real ``tmp_path`` file so ``.unlink(missing_ok=True)`` is a real no-op.
 # ---------------------------------------------------------------------------
 
 
-_CACHE_WARN_CODE = "localization-cache-args-ignored"
+_CACHE_WARN_CODE = "localization-cache-rederived"
 
 
-def test_localization_run_emits_warning_on_formula_only_mismatch(
+@pytest.fixture
+def stub_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Wire ``app_module.localization_findings_path`` onto a tmp_path file.
+
+    The post-Defect-5 invalidation calls ``localization_findings_path(...).
+    unlink(missing_ok=True)``. Unit tests don't have a real store on disk,
+    so this fixture redirects the path computation onto a real tmp file
+    that ``unlink`` can safely operate against (idempotently after the
+    first call).
+    """
+    from pathlib import Path as _Path
+
+    fake_cache = tmp_path / "fake_localization_findings.json"
+    fake_cache.touch()
+    monkeypatch.setattr(
+        app_module,
+        "localization_findings_path",
+        lambda *_a, **_k: fake_cache,
+    )
+    return fake_cache
+
+
+def _two_phase_derive(
+    cached: LocalizationFinding,
+    fresh: LocalizationFinding,
+) -> Callable[..., LocalizationFinding]:
+    """Return a callable that yields ``cached`` on call 1, ``fresh`` thereafter.
+
+    Mirrors the engine's cache-aware behavior under test: the first call
+    serves from cache (stale args baked in), the orchestration layer
+    invalidates the cache file, and the second call runs a fresh derive
+    at the user's requested flags. ``call_count`` is tracked on the
+    returned callable's ``__closure__`` for assertion.
+    """
+    calls: list[int] = []
+
+    def _derive(*_a: Any, **_k: Any) -> LocalizationFinding:
+        calls.append(1)
+        return cached if len(calls) == 1 else fresh
+
+    _derive.calls = calls  # type: ignore[attr-defined]
+    return _derive
+
+
+def test_localization_run_rederives_on_formula_only_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
     """Case (a) — cache stored ``ochiai``; user passes ``--formula=dstar2``
-    (only ``--formula`` explicit). Returned finding is the cached
-    ``ochiai`` one. Warning fires with full requested/cached payload and
-    ``formula_explicit=True``, ``top_n_explicit=False``."""
+    (only ``--formula`` explicit). Post-Defect-5: cache file is unlinked,
+    engine re-invoked, fresh ``dstar2`` finding returned. One
+    ``localization-cache-rederived`` warning with ``previous`` carrying
+    ``ochiai`` / ``top_n=10`` and ``requested`` carrying ``dstar2`` /
+    ``top_n=10`` (defaulted)."""
 
     cached_finding = _make_finding(formula="ochiai", top_n=10)
-    monkeypatch.setattr(
-        app_module,
-        "derive_localization_findings",
-        lambda *_a, **_k: cached_finding,
-    )
+    fresh_finding = _make_finding(formula="dstar2", top_n=10)
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="dstar2")
     assert exc_info.value.code == 0
 
+    # Engine called twice — once for cache hit, once for fresh derive.
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
+    # Cache file is gone after invalidation (idempotent unlink).
+    assert not stub_cache_path.exists()
+
     payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    # Fresh finding's args reflect the user's request, not the cached state.
+    assert outcome["formula"] == "dstar2"
+    assert outcome["top_n"] == 10
+
     warnings = payload["warnings"]
     assert isinstance(warnings, list)
     assert len(warnings) == 1
@@ -543,41 +608,46 @@ def test_localization_run_emits_warning_on_formula_only_mismatch(
     assert "--formula='dstar2'" in warning["message"]
     assert "--formula='ochiai'" in warning["message"]
     details = warning["details"]
+    assert details["previous"]["formula"] == "ochiai"
+    assert details["previous"]["top_n"] == 10
     assert details["requested"]["formula"] == "dstar2"
     assert details["requested"]["formula_explicit"] is True
+    assert details["requested"]["top_n"] == DEFAULT_TOP_N
     assert details["requested"]["top_n_explicit"] is False
-    assert details["cached"]["formula"] == "ochiai"
-    assert details["cached"]["top_n"] == 10
     assert details["cache_path"].endswith(
         f"run_{_RUN_ID}/localization_findings.json"
     )
 
 
-def test_localization_run_emits_warning_on_top_n_only_mismatch(
+def test_localization_run_rederives_on_top_n_only_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
     """Case (b) — cache stored ``top_n=10``; user passes ``--top-n=5``
-    (only ``--top-n`` explicit, ``--formula`` defaulted). Warning fires
-    with ``top_n_explicit=True`` and ``formula_explicit=False`` while the
-    requested ``formula`` field still reflects the engine's actual value
-    (the Cyclopts default)."""
+    (only ``--top-n`` explicit, ``--formula`` defaulted). Re-derive at
+    ``top_n=5`` returns fresh finding; warning fires with
+    ``top_n_explicit=True`` / ``formula_explicit=False``; ``requested.
+    formula`` field carries the Cyclopts default."""
 
     cached_finding = _make_finding(formula="ochiai", top_n=10)
-    monkeypatch.setattr(
-        app_module,
-        "derive_localization_findings",
-        lambda *_a, **_k: cached_finding,
-    )
+    fresh_finding = _make_finding(formula="ochiai", top_n=5)
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, top_n=5)
     assert exc_info.value.code == 0
 
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
     payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["top_n"] == 5
+    assert outcome["formula"] == "ochiai"
+
     warnings = payload["warnings"]
     assert len(warnings) == 1
     warning = warnings[0]
@@ -585,46 +655,50 @@ def test_localization_run_emits_warning_on_top_n_only_mismatch(
     assert "--top-n=5" in warning["message"]
     assert "--top-n=10" in warning["message"]
     details = warning["details"]
+    assert details["previous"]["top_n"] == 10
     assert details["requested"]["top_n"] == 5
     assert details["requested"]["top_n_explicit"] is True
     assert details["requested"]["formula"] == DEFAULT_FORMULA
     assert details["requested"]["formula_explicit"] is False
-    assert details["cached"]["top_n"] == 10
 
 
-def test_localization_run_emits_warning_on_both_flag_mismatch(
+def test_localization_run_rederives_on_both_flag_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
-    """Case (c) — both ``--formula`` and ``--top-n`` differ from the
-    cached values. Single warning emitted with both ``_explicit`` flags
-    True; message lists all four (requested/cached × formula/top_n)."""
+    """Case (c) — both ``--formula`` and ``--top-n`` differ from cache.
+    Single re-derive + warning emitted with both ``_explicit`` flags
+    True; ``previous`` and ``requested`` both populated."""
 
     cached_finding = _make_finding(formula="ochiai", top_n=10)
-    monkeypatch.setattr(
-        app_module,
-        "derive_localization_findings",
-        lambda *_a, **_k: cached_finding,
-    )
+    fresh_finding = _make_finding(formula="op2", top_n=3)
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="op2", top_n=3)
     assert exc_info.value.code == 0
 
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
     payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["formula"] == "op2"
+    assert outcome["top_n"] == 3
+
     warnings = payload["warnings"]
     assert len(warnings) == 1
     warning = warnings[0]
     details = warning["details"]
+    assert details["previous"]["formula"] == "ochiai"
+    assert details["previous"]["top_n"] == 10
     assert details["requested"]["formula"] == "op2"
     assert details["requested"]["formula_explicit"] is True
     assert details["requested"]["top_n"] == 3
     assert details["requested"]["top_n_explicit"] is True
-    assert details["cached"]["formula"] == "ochiai"
-    assert details["cached"]["top_n"] == 10
 
 
 def test_localization_run_no_warning_when_request_matches_cache(
@@ -633,24 +707,26 @@ def test_localization_run_no_warning_when_request_matches_cache(
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
     """Case (d) — user passes ``--formula=dstar2 --top-n=5`` and the
     returned finding also reports ``dstar2`` / ``5`` (cache match, OR
-    fresh derive). No warning."""
+    fresh derive). No re-derive, no warning. Regression-pin for the
+    cache-hit-no-mismatch path (engine called exactly once)."""
 
     matching_finding = _make_finding(formula="dstar2", top_n=5)
-    monkeypatch.setattr(
-        app_module,
-        "derive_localization_findings",
-        lambda *_a, **_k: matching_finding,
-    )
+    fake_derive = _two_phase_derive(matching_finding, matching_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="dstar2", top_n=5)
     assert exc_info.value.code == 0
 
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
+    # Cache file was NOT unlinked.
+    assert stub_cache_path.exists()
 
 
 def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
@@ -659,25 +735,30 @@ def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
     """Case (e) — cache stored ``dstar2 / top_n=3`` but the user passes
     NEITHER flag (both default in effect). Per brief scope §1, a
-    defaulted flag never produces a warning even when it differs from
-    the cache. No warning."""
+    defaulted flag never triggers re-derive even when it differs from
+    the cache. Cache returned verbatim; no warning. Regression-pin for
+    the "no explicit signal → keep cache" path."""
 
     cached_finding = _make_finding(formula="dstar2", top_n=3)
-    monkeypatch.setattr(
-        app_module,
-        "derive_localization_findings",
-        lambda *_a, **_k: cached_finding,
-    )
+    fake_derive = _two_phase_derive(cached_finding, cached_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
     assert exc_info.value.code == 0
 
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
+    # User saw the cached finding verbatim (no re-derive).
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["formula"] == "dstar2"
+    assert outcome["top_n"] == 3
+    assert stub_cache_path.exists()
 
 
 def test_localization_run_no_warning_when_outcome_is_unavailable(
@@ -686,20 +767,22 @@ def test_localization_run_no_warning_when_outcome_is_unavailable(
     force_json_mode: None,
     stub_store: object,
     stub_history: None,
+    stub_cache_path: Path,
 ) -> None:
-    """Case (f) — engine returns ``LocalizationUnavailable`` (no cache
-    to mismatch against; nothing was returned from cache because there
-    is no cache). No warning."""
+    """Case (f) — engine returns ``LocalizationUnavailable``. No cache to
+    invalidate; pass through unchanged. No warning even when the user
+    passed explicit flags."""
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
+    unavailable = LocalizationUnavailable(
+        run_reference=ref,
+        reason=REASON_NO_FAILED_TESTS,
+        detail="no failures",
+    )
     monkeypatch.setattr(
         app_module,
         "derive_localization_findings",
-        lambda *_a, **_k: LocalizationUnavailable(
-            run_reference=ref,
-            reason=REASON_NO_FAILED_TESTS,
-            detail="no failures",
-        ),
+        lambda *_a, **_k: unavailable,
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -707,8 +790,7 @@ def test_localization_run_no_warning_when_outcome_is_unavailable(
     assert exc_info.value.code == 0
 
     payload = _captured_envelope(capsys)
-    # Even though the user passed explicit flags that differ from the
-    # default, the unavailable outcome means there's no cache to mismatch.
     assert payload["warnings"] == []
     outcome = payload["data"]["localization_outcome"]
     assert outcome["kind"] == "unavailable"
+    assert stub_cache_path.exists()

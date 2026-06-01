@@ -116,9 +116,19 @@ def derive_localization_findings(
 
     Cache-aware: when a ``localization_findings.json`` already exists for
     this run, read and return it without re-deriving. Otherwise compute
-    fresh and persist atomically. A future re-derivation (e.g. after a
-    schema bump) bypasses the cache by deleting the cached file out of
-    band — this slice does NOT auto-invalidate.
+    fresh and persist atomically.
+
+    The cache layer is intentionally policy-free: this entry returns the
+    cached payload verbatim when present, regardless of how ``top_n`` /
+    ``formula`` compare against the cached values. Cache invalidation is
+    the orchestration layer's responsibility — the CLI handlers
+    (``localization_run`` / ``localization_latest``) delete the on-disk
+    findings file via ``localization_findings_path(store, run_id).unlink()``
+    BEFORE re-invoking this entry when the user's explicit flags differ
+    from the cached state (Defect 5 fix, 2026-06-01). Engine-API consumers
+    that want the same override semantics call ``localization_findings_path
+    (...).unlink(missing_ok=True)`` themselves before this entry. A future
+    schema bump uses the same out-of-band deletion pattern.
 
     ``top_n`` defaults to 10 (design-of-record §4). ``formula`` defaults
     to ``"ochiai"`` and selects which formula's score drives ``rank``;

@@ -246,27 +246,45 @@ def test_inspect_after_localization_derive_shows_fact_set(
 
 
 # ---------------------------------------------------------------------------
-# E2E Test 4: cache-args-ignored warning on re-inspection with --formula change.
-# Reproduces the Manual Test §2 cache-hit silent-ignore scenario end-to-end.
+# E2E Test 4: cache-rederived warning + behavioral re-derive on --formula change
+# (Defect 5 fix, 2026-06-01).
+#
+# Pre-Defect-5: ``--formula=dstar2`` against an Ochiai cache silently
+# returned the stale Ochiai finding + a ``localization-cache-args-ignored``
+# warning (the warning disclosed the bug; the behavior was still wrong).
+# Post-Defect-5: the cache is invalidated, the engine re-derives at
+# ``dstar2``, the fresh ``dstar2`` finding is returned, and the warning
+# becomes ``localization-cache-rederived`` carrying the previous (formula,
+# top_n) for audit.
+#
+# Reproduces the Manual Test 2026-06-01 §"Defect 5 surfaced" reproduction
+# end-to-end against the localization-branch fixture.
 # ---------------------------------------------------------------------------
 
 
-def test_localization_latest_warns_when_cached_flags_ignored(
+def test_localization_latest_rederives_when_explicit_flag_overrides_cache(
     seeded_workspace: dict[str, object],
 ) -> None:
     """``novetest localization latest --formula dstar2`` against a store
     whose cache was derived with the default ``ochiai`` formula:
 
-    - The cached ``ochiai`` findings are returned unchanged
-      (``outcome.formula == "ochiai"``; entries[0] is still ``divide``
-      with score 1.0 — Ochiai's value).
+    - The cache is invalidated and ``derive_localization_findings`` runs
+      fresh at ``dstar2``. The returned envelope reports
+      ``outcome.formula == "dstar2"`` (top-1 is still ``divide`` — the
+      bug site is formula-invariant for this fixture — but the
+      ``alternate_scores_available`` field NO LONGER lists ``dstar2``
+      since it is now the primary formula).
+    - The on-disk ``localization_findings.json`` is overwritten with the
+      fresh payload — a follow-up ``localization`` call with no flags
+      would now return ``dstar2`` (cache-as-source-of-truth).
     - The envelope-level ``warnings`` tuple carries exactly one
-      ``localization-cache-args-ignored`` warning with the full
-      requested/cached payload pinned by the task brief.
+      ``localization-cache-rederived`` warning with
+      ``details.previous.formula == "ochiai"`` /
+      ``details.previous.top_n == 10`` and ``details.requested.formula ==
+      "dstar2"`` / ``details.requested.formula_explicit == True``.
 
-    Mirrors the Manual Test §2 finding from
-    ``findings/manual-test-team-2026-05-29-orchestration-localization-cli.md``,
-    closed by Option B (warning, do not re-derive)."""
+    Mirrors the Manual Test 2026-06-01 §"Defect 5 surfaced" reproduction;
+    closes Defect 5 task brief §"Empirical reproduction" end-to-end."""
 
     workspace = seeded_workspace["workspace"]
     run_id = seeded_workspace["run_id"]
@@ -282,34 +300,68 @@ def test_localization_latest_warns_when_cached_flags_ignored(
     assert isinstance(data, dict)
     outcome = data.get("localization_outcome")
     assert isinstance(outcome, dict)
-    # Cached findings returned unchanged — formula stays "ochiai" despite
-    # the user's --formula=dstar2 request.
+    # Fresh findings returned — formula reflects the user's --formula=dstar2
+    # request, NOT the previously-cached ochiai.
     assert outcome["kind"] == "fact-set"
-    assert outcome["formula"] == "ochiai"
+    assert outcome["formula"] == "dstar2", (
+        f"Expected re-derived dstar2 formula, got: {outcome.get('formula')!r}"
+    )
+    # ``dstar2`` is now the primary formula and thus drops out of the
+    # ``alternate_scores_available`` set (it always lists the OTHER three).
+    assert "dstar2" not in outcome["alternate_scores_available"]
+    assert set(outcome["alternate_scores_available"]) == {
+        "ochiai",
+        "op2",
+        "tarantula",
+    }
+
     entries = outcome.get("entries")
     assert isinstance(entries, list)
+    assert len(entries) >= 1
     top = entries[0]
     assert top["rank"] == 1
-    assert top["score_raw"] == 1.0
-    assert top["code_location"]["symbol"] == "divide"
+    assert top["formula"] == "dstar2", (
+        f"Each entry's primary formula must reflect the re-derive selection; "
+        f"got {top.get('formula')!r}"
+    )
+    # The top suspect lives in the fixture under test (``calculator.py``).
+    # We intentionally do NOT pin the symbol name here — DStar2 weighs
+    # ef^2 differently from Ochiai and may surface a symbol other than
+    # ``divide`` at rank 1 for ties. The Defect-5 invariant under test is
+    # "re-derive happened with the new formula", not "DStar2 picks divide".
+    assert top["code_location"]["file"].endswith("calculator.py")
+
+    # The on-disk cache file is overwritten — a follow-up call with no
+    # flags would now return dstar2 (cache-as-source-of-truth post-rederive).
+    follow_up_code, follow_up_envelope, follow_up_stderr = _run_cli(
+        workspace, ["localization", "latest"]
+    )
+    assert follow_up_code == 0, (
+        f"Follow-up call failed: stderr={follow_up_stderr!r}"
+    )
+    follow_up_outcome = follow_up_envelope["data"]["localization_outcome"]
+    assert follow_up_outcome["formula"] == "dstar2", (
+        "Cache should have been overwritten with the re-derived dstar2 finding; "
+        f"follow-up reads back {follow_up_outcome.get('formula')!r}"
+    )
 
     warnings = envelope.get("warnings")
     assert isinstance(warnings, list)
     assert len(warnings) == 1, (
-        f"Expected exactly one cache-args-ignored warning, got {warnings!r}"
+        f"Expected exactly one cache-rederived warning, got {warnings!r}"
     )
     warning = warnings[0]
-    assert warning["code"] == "localization-cache-args-ignored"
+    assert warning["code"] == "localization-cache-rederived"
     assert "--formula='dstar2'" in warning["message"]
     assert "--formula='ochiai'" in warning["message"]
-    assert "delete cache" in warning["message"]
+    assert "cache overwritten" in warning["message"]
 
     details = warning["details"]
+    assert details["previous"]["formula"] == "ochiai"
+    assert details["previous"]["top_n"] == 10  # engine default
     assert details["requested"]["formula"] == "dstar2"
     assert details["requested"]["formula_explicit"] is True
     assert details["requested"]["top_n_explicit"] is False
-    assert details["cached"]["formula"] == "ochiai"
-    assert details["cached"]["top_n"] == 10  # engine default
     expected_path = (
         f".novetest/localization/findings/run_{run_id}/localization_findings.json"
     )

@@ -15,6 +15,7 @@ per the Phase-4 CLI task brief before running.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -311,33 +312,68 @@ def test_localization_latest_uninitialized_workspace_exits_2(
 
 
 # ---------------------------------------------------------------------------
-# Cache-args-ignored warning suite (latest verb). The detection logic lives
-# in the shared ``_build_localization_cache_mismatch_warning`` helper —
-# these tests only confirm the latest-verb path wires up the warning slot
-# the same way as the explicit-run verb. The full six-scenario matrix is
-# covered in ``test_localization.py``.
+# Cache-rederived warning suite (latest verb, Defect 5 fix). The detection
+# + re-derive logic lives in the shared ``_rederive_if_cache_overrode_flags``
+# helper — these tests only confirm the latest-verb path wires up the
+# warning slot the same way as the explicit-run verb. The full six-scenario
+# matrix is covered in ``test_localization.py``.
+#
+# Test pattern: ``derive_latest_localization`` is monkeypatched to return
+# the cached finding on the first (initial) call; the post-call
+# ``_rederive_if_cache_overrode_flags`` then unlinks the (fake) cache path
+# and re-invokes ``derive_localization_findings`` directly (NOT
+# ``derive_latest_localization`` — the run_reference is already resolved),
+# which is monkeypatched to return the fresh finding.
 # ---------------------------------------------------------------------------
 
 
-_CACHE_WARN_CODE = "localization-cache-args-ignored"
+_CACHE_WARN_CODE = "localization-cache-rederived"
 
 
-def test_localization_latest_emits_warning_on_explicit_formula_mismatch(
+@pytest.fixture
+def stub_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Wire ``app_module.localization_findings_path`` onto a tmp_path file.
+
+    The post-Defect-5 invalidation calls ``localization_findings_path(...).
+    unlink(missing_ok=True)``. Unit tests don't have a real store on disk,
+    so this fixture redirects the path computation onto a real tmp file
+    that ``unlink`` can safely operate against.
+    """
+    fake_cache = tmp_path / "fake_localization_findings.json"
+    fake_cache.touch()
+    monkeypatch.setattr(
+        app_module,
+        "localization_findings_path",
+        lambda *_a, **_k: fake_cache,
+    )
+    return fake_cache
+
+
+def test_localization_latest_rederives_on_explicit_formula_mismatch(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
+    stub_cache_path: Path,
 ) -> None:
-    """``latest`` resolves to a cached run; the engine's
-    ``derive_latest_localization`` returns the cached finding (formula
-    ``ochiai``); user passed ``--formula=dstar2``. Warning fires; same
-    code and details schema as the explicit-run verb."""
+    """``latest`` resolves to a cached run; ``derive_latest_localization``
+    returns the cached finding (formula ``ochiai``); user passed
+    ``--formula=dstar2``. Post-Defect-5: cache file unlinked,
+    ``derive_localization_findings`` re-invoked at ``dstar2``, fresh
+    finding returned. One ``localization-cache-rederived`` warning with
+    ``previous.formula == "ochiai"`` and ``requested.formula == "dstar2"``."""
 
     cached_finding = _make_finding(formula="ochiai", top_n=10)
+    fresh_finding = _make_finding(formula="dstar2", top_n=10)
     monkeypatch.setattr(
         app_module,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: cached_finding,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "derive_localization_findings",
+        lambda *_a, **_k: fresh_finding,
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -345,14 +381,23 @@ def test_localization_latest_emits_warning_on_explicit_formula_mismatch(
     assert exc_info.value.code == 0
 
     payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    # Fresh finding's formula reflects the user's explicit request.
+    assert outcome["formula"] == "dstar2"
+    assert not stub_cache_path.exists()  # invalidated
+
     warnings = payload["warnings"]
     assert len(warnings) == 1
     warning = warnings[0]
     assert warning["code"] == _CACHE_WARN_CODE
     details = warning["details"]
+    assert details["previous"]["formula"] == "ochiai"
+    assert details["previous"]["top_n"] == 10
     assert details["requested"]["formula"] == "dstar2"
     assert details["requested"]["formula_explicit"] is True
-    assert details["cached"]["formula"] == "ochiai"
+    assert details["cache_path"].endswith(
+        f"run_{_RUN_ID}/localization_findings.json"
+    )
 
 
 def test_localization_latest_no_warning_on_match(
@@ -360,9 +405,11 @@ def test_localization_latest_no_warning_on_match(
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
+    stub_cache_path: Path,
 ) -> None:
     """When ``latest`` returns a finding whose flags match the user's
-    explicit request, no warning."""
+    explicit request, no re-derive triggered; no warning. Cache file
+    untouched."""
 
     matching = _make_finding(formula="tarantula", top_n=5)
     monkeypatch.setattr(
@@ -377,6 +424,7 @@ def test_localization_latest_no_warning_on_match(
 
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
+    assert stub_cache_path.exists()
 
 
 def test_localization_latest_no_warning_when_outcome_unavailable(
@@ -384,9 +432,11 @@ def test_localization_latest_no_warning_when_outcome_unavailable(
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
     stub_store: object,
+    stub_cache_path: Path,
 ) -> None:
     """``latest`` against an empty store: ``LocalizationUnavailable`` —
-    no warning even when the user passed explicit flags."""
+    no cache to invalidate, no re-derive, no warning even when the user
+    passed explicit flags."""
 
     monkeypatch.setattr(
         app_module,
@@ -404,3 +454,4 @@ def test_localization_latest_no_warning_when_outcome_unavailable(
 
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
+    assert stub_cache_path.exists()
