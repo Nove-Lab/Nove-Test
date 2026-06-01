@@ -1006,9 +1006,12 @@ def resolve_latest_analyzable_run(
     """Return the most-recent ``RunReference`` for which Localization is derivable.
 
     "Analyzable" = ``check_localization_availability(store, ref)`` returns
-    ``True`` — the cheap precondition probe in ``retrieval.py`` (per-test
-    coverage path: not-tombstoned ∧ has-failed-tests ∧ has-coverage ∧
-    ``mapping_granularity == "per-test"``).
+    ``True`` — the cheap precondition probe in ``retrieval.py``: the
+    entry is not tombstoned and the Run Record has at least one failed
+    test result. Coverage shape is intentionally NOT gated here; the
+    downstream ``derive_localization_findings`` dispatcher routes
+    per-test / aggregate / no-coverage runs to the right mode (see
+    ``design/implementation-plan/localization-strategy.md`` §2).
 
     Walks ``list_run_history`` newest-first (Memory's guarantee) and
     returns the first matching ``RunReference``. The probe is cheap —

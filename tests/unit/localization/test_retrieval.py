@@ -99,12 +99,21 @@ def test_availability_no_failed_tests_returns_false(
     assert check_localization_availability(store, default_ref) is False
 
 
-def test_availability_no_coverage_returns_false(
+def test_availability_no_coverage_returns_true_post_defect4(
     tmp_path: Path,
     make_record: Callable[..., RunRecord],
     seed_store: Callable[..., object],
     default_ref: RunReference,
 ) -> None:
+    """Defect 4 (2026-06-01) relaxed the gate so coverage-less runs are
+    analyzable via the ``failure_proximity`` mode dispatcher path.
+
+    Pre-2026-06-01 this returned ``False`` (the gate rejected anything
+    without per-test coverage). Per ``history/2026-06-01-localization-
+    phase4-modes-and-cargo-defect-cascade.md`` §"Defect 4" the gate now
+    matches the 3-mode dispatch in ``derive_localization_findings``:
+    a non-tombstoned entry with at least one failed test is analyzable
+    regardless of coverage shape."""
     workspace = tmp_path / "ws"
     record = make_record(
         test_results=(
@@ -113,10 +122,10 @@ def test_availability_no_coverage_returns_false(
     )
     seed_store(workspace, record=record, coverage=None)
     store = get_project_store_state(workspace / ".novetest")
-    assert check_localization_availability(store, default_ref) is False
+    assert check_localization_availability(store, default_ref) is True
 
 
-def test_availability_coverage_not_per_test_returns_false(
+def test_availability_aggregate_coverage_returns_true_post_defect4(
     tmp_path: Path,
     make_record: Callable[..., RunRecord],
     make_coverage: Callable[..., CoverageFactSet],
@@ -124,6 +133,15 @@ def test_availability_coverage_not_per_test_returns_false(
     seed_store: Callable[..., object],
     default_ref: RunReference,
 ) -> None:
+    """Defect 4 (2026-06-01) relaxed the gate so aggregate-granularity
+    runs are analyzable via the ``sbfl_aggregate`` mode dispatcher path.
+
+    Pre-2026-06-01 this returned ``False`` (the gate accepted only
+    ``mapping_granularity == "per-test"``), which made
+    ``novetest localization latest`` return ``run_not_analyzable`` for
+    cargo / go / jest runs. Per ``history/2026-06-01-localization-
+    phase4-modes-and-cargo-defect-cascade.md`` §"Defect 4" the gate
+    now matches the dispatcher's contract."""
     workspace = tmp_path / "ws"
     record = make_record(
         test_results=(
@@ -136,7 +154,7 @@ def test_availability_coverage_not_per_test_returns_false(
     )
     seed_store(workspace, record=record, coverage=coverage)
     store = get_project_store_state(workspace / ".novetest")
-    assert check_localization_availability(store, default_ref) is False
+    assert check_localization_availability(store, default_ref) is True
 
 
 def test_availability_tombstoned_returns_false(

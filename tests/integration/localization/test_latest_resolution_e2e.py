@@ -120,17 +120,24 @@ _BUGGY_SOURCE = (
 )
 
 
-def test_resolve_latest_picks_failing_with_coverage_over_failing_without(
+def test_resolve_latest_walks_past_passing_only_to_first_with_failed_tests(
     tmp_path: Path,
 ) -> None:
-    """Three runs in the store, newest-first:
+    """Three runs in the store, newest-first (post-Defect-4 semantics):
 
-    1. PASSING_ONLY (newest)            — no failed tests, has coverage   → skip
-    2. FAILING_NO_COVERAGE (middle)     — has failed tests, no coverage   → skip
-    3. FAILING_WITH_COVERAGE (oldest)   — has failed tests + coverage     → RETURNED
+    1. PASSING_ONLY (newest)            — no failed tests                 → skip
+    2. FAILING_NO_COVERAGE (middle)     — has failed tests, no coverage   → RETURNED
+    3. FAILING_WITH_COVERAGE (oldest)   — has failed tests + coverage     → not reached
 
     Memory orders newest-first, so the resolver probes them in this order
-    and must walk past the first two before returning the third.
+    and must walk past the passing-only newest before returning the
+    middle one. Pre-2026-06-01 the resolver would have walked past the
+    middle candidate too (coverage-less ⇒ unanalyzable under the
+    per-test-only gate); per ``history/2026-06-01-localization-
+    phase4-modes-and-cargo-defect-cascade.md`` §"Defect 4" the gate now
+    matches the 3-mode dispatcher in ``derive_localization_findings``
+    so the middle candidate is ``failure_proximity``-analyzable and
+    wins (oldest is never probed).
     """
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -227,7 +234,9 @@ def test_resolve_latest_picks_failing_with_coverage_over_failing_without(
     handle = get_project_store_state(workspace / ".novetest")
     result = resolve_latest_analyzable_run(handle)
     assert isinstance(result, RunReference)
-    assert result.run_id == failing_with_cov_ref.run_id
+    # Post-Defect-4: failing-no-coverage IS analyzable (failure_proximity)
+    # so the resolver returns it without reaching failing_with_cov.
+    assert result.run_id == failing_no_cov_ref.run_id
 
 
 def test_derive_latest_writes_findings_to_canonical_path_and_flips_memory_flag(
