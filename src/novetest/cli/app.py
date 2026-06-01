@@ -39,6 +39,7 @@ from novetest.localization import (
     derive_latest_localization,
     derive_localization_findings,
 )
+from novetest.localization.persistence import localization_findings_path
 from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
@@ -770,9 +771,19 @@ def localization_run(
 
     ``--formula`` defaults to ``"ochiai"``; ``--top-n`` defaults to ``10``.
     Both flags use ``None`` sentinels here so the handler can distinguish
-    "user explicitly passed this value" from "Cyclopts default in effect" —
-    the cache-args-ignored warning fires only on explicit-and-different
-    (see ``_build_localization_cache_mismatch_warning`` below).
+    "user explicitly passed this value" from "Cyclopts default in effect".
+
+    Cache-invalidation policy (Defect 5 fix, 2026-06-01): when the engine
+    serves from cache AND the user explicitly passed ``--formula`` /
+    ``--top-n`` differing from the cached values, the orchestration layer
+    invalidates the cache and re-derives at the requested flags
+    (``_rederive_if_cache_overrode_flags`` below). The audit signal
+    surfaces as the ``localization-cache-rederived`` envelope warning;
+    pre-Defect-5 the same condition surfaced as
+    ``localization-cache-args-ignored`` and the stale cached result was
+    returned. See task brief / history at
+    ``agent-comms/history/2026-06-01-defect4-closed-and-defects-5-6-surfaced.md``
+    §"Defect 5 surfaced".
     """
 
     store = _require_store("localization")
@@ -785,10 +796,11 @@ def localization_run(
     outcome = derive_localization_findings(
         store, ref, top_n=resolved_top_n, formula=resolved_formula
     )
-    warning = _build_localization_cache_mismatch_warning(
+    outcome, warning = _rederive_if_cache_overrode_flags(
+        store=store,
         outcome=outcome,
-        requested_formula=resolved_formula,
-        requested_top_n=resolved_top_n,
+        resolved_formula=resolved_formula,
+        resolved_top_n=resolved_top_n,
         formula_explicit=formula_explicit,
         top_n_explicit=top_n_explicit,
     )
@@ -818,9 +830,12 @@ def localization_latest(
     runs are all non-analyzable surfaces ``run_not_analyzable``. Flag
     validation mirrors the explicit-run verb.
 
-    Cache-args-ignored warning semantics match the explicit-run verb: the
-    ``None`` sentinel defaults let the handler distinguish "user explicitly
-    passed this value" from "Cyclopts default in effect".
+    Cache-invalidation policy matches the explicit-run verb (Defect 5 fix):
+    the ``None`` sentinel defaults let the handler distinguish "user
+    explicitly passed this value" from "Cyclopts default in effect", and an
+    explicit-flag mismatch against the cached findings triggers a re-derive
+    + ``localization-cache-rederived`` warning via
+    ``_rederive_if_cache_overrode_flags``.
     """
 
     store = _require_store("localization.latest")
@@ -834,10 +849,11 @@ def localization_latest(
     outcome = derive_latest_localization(
         store, formula=resolved_formula, top_n=resolved_top_n
     )
-    warning = _build_localization_cache_mismatch_warning(
+    outcome, warning = _rederive_if_cache_overrode_flags(
+        store=store,
         outcome=outcome,
-        requested_formula=resolved_formula,
-        requested_top_n=resolved_top_n,
+        resolved_formula=resolved_formula,
+        resolved_top_n=resolved_top_n,
         formula_explicit=formula_explicit,
         top_n_explicit=top_n_explicit,
     )
@@ -852,75 +868,151 @@ def localization_latest(
     )
 
 
-def _build_localization_cache_mismatch_warning(
+def _rederive_if_cache_overrode_flags(
     *,
+    store: ProjectStore,
     outcome: LocalizationFinding | LocalizationUnavailable,
-    requested_formula: str,
-    requested_top_n: int,
+    resolved_formula: str,
+    resolved_top_n: int,
     formula_explicit: bool,
     top_n_explicit: bool,
-) -> EnvelopeWarning | None:
-    """Return the cache-args-ignored warning, or ``None`` when no warning is due.
+) -> tuple[
+    LocalizationFinding | LocalizationUnavailable,
+    EnvelopeWarning | None,
+]:
+    """Cache-invalidation policy gate (Defect 5 fix, 2026-06-01).
 
-    Detection model — "peek-after-derive" via the returned ``LocalizationFinding``:
+    Pre-Defect-5 behavior: when the engine served from cache while the user
+    explicitly passed ``--formula`` / ``--top-n`` differing from the cached
+    values, the CLI surfaced a ``localization-cache-args-ignored`` warning
+    AND returned the stale cached finding (so the AI agent saw a wire
+    envelope claiming ``formula: "ochiai"`` while their request said
+    ``--formula=op2``). The warning disclosed the bug; the behavior was
+    still wrong.
+
+    Post-Defect-5: same detection model — explicit-and-different becomes
+    the trigger — but instead of returning stale + warning, we INVALIDATE
+    the cache (unlink the on-disk ``localization_findings.json``) and
+    invoke ``derive_localization_findings`` again. The second call sees a
+    cache miss and runs the full pipeline at the requested flags,
+    persisting the fresh result. The audit signal is preserved via a new
+    warning code ``localization-cache-rederived`` whose details carry the
+    PREVIOUS cached (formula, top_n) pair plus the resolved request — so
+    AI agents know they paid the re-compute cost and what the cache used
+    to be.
+
+    Detection model — "peek-after-call" via the returned
+    ``LocalizationFinding``:
 
     - A fresh derive (no prior cache) always returns a finding whose
       ``formula`` / ``top_n`` match the values passed to the engine
       (because the engine writes them straight onto the payload). So if
-      ``outcome.formula == requested_formula`` AND
-      ``outcome.top_n == requested_top_n``, either there was no prior
+      ``outcome.formula == resolved_formula`` AND
+      ``outcome.top_n == resolved_top_n``, either there was no prior
       cache OR the prior cache's stored flags happened to match — both
-      cases are non-warning per the brief (scope §3 + §4 + §6).
+      cases require no re-derive.
     - A cache hit returns the cached finding verbatim, so its
       ``formula`` / ``top_n`` reflect the FLAGS the cache was originally
       derived with. A mismatch on either field — combined with the user
-      having explicitly passed that flag — is the precise condition the
-      warning is meant to surface.
+      having explicitly passed that flag — is the precise condition for
+      cache invalidation + re-derive.
     - When the outcome is ``LocalizationUnavailable``, there's nothing
-      cached to warn about; return ``None``.
+      cached to honor (or the engine pre-empted with an error reason);
+      pass through.
 
-    Per scope §1, the ``*_explicit`` gating means a defaulted flag that
-    happens to differ from the cache produces NO warning for that flag —
-    the user did not ask for a specific value. The message format still
-    lists BOTH flags' requested/cached values whenever ANY mismatch
-    triggers (scope brief §134-139).
+    Per scope §1 of the task brief, the ``*_explicit`` gating means a
+    defaulted flag that happens to differ from the cache produces NO
+    re-derive for that flag — the user did not ask for a specific value
+    so the cached choice stands.
+
+    The on-disk path layout is pinned by ``localization/persistence.py``;
+    we use the canonical ``localization_findings_path`` helper to compute
+    the file to unlink so the invalidation point stays load-bearing-
+    aligned with Memory's availability probe and the persistence layer's
+    write path.
+    """
+    if not isinstance(outcome, LocalizationFinding):
+        return outcome, None
+    cached_formula = outcome.formula
+    cached_top_n = outcome.top_n
+    formula_mismatch = formula_explicit and resolved_formula != cached_formula
+    top_n_mismatch = top_n_explicit and resolved_top_n != cached_top_n
+    if not (formula_mismatch or top_n_mismatch):
+        return outcome, None
+
+    # Cache hit served stale-vs-explicit-flags. Invalidate the persisted
+    # findings file so the second derive call sees a cache miss and runs
+    # the full pipeline at the requested flags.
+    run_reference = outcome.run_reference
+    previous_cached_args = (cached_formula, cached_top_n)
+    localization_findings_path(store, run_reference.run_id).unlink(missing_ok=True)
+    fresh = derive_localization_findings(
+        store,
+        run_reference,
+        top_n=resolved_top_n,
+        formula=resolved_formula,
+    )
+    warning = _build_localization_cache_rederived_warning(
+        run_id=run_reference.run_id,
+        previous_cached_args=previous_cached_args,
+        resolved_formula=resolved_formula,
+        resolved_top_n=resolved_top_n,
+        formula_explicit=formula_explicit,
+        top_n_explicit=top_n_explicit,
+    )
+    return fresh, warning
+
+
+def _build_localization_cache_rederived_warning(
+    *,
+    run_id: str,
+    previous_cached_args: tuple[str, int],
+    resolved_formula: str,
+    resolved_top_n: int,
+    formula_explicit: bool,
+    top_n_explicit: bool,
+) -> EnvelopeWarning:
+    """Format the ``localization-cache-rederived`` warning payload.
+
+    The caller (``_rederive_if_cache_overrode_flags``) has already
+    determined that a re-derive happened, so this helper always emits a
+    warning — its job is just payload construction. The ``details`` shape
+    is the symmetric counterpart of the pre-Defect-5
+    ``localization-cache-args-ignored`` warning: ``previous`` (what the
+    cache held), ``requested`` (what the user asked for), ``cache_path``
+    (where the fresh derive was just persisted). AI consumers can diff
+    ``previous`` vs ``requested`` to know what changed and learn that the
+    re-compute cost was paid.
 
     The ``cache_path`` is computed by template — the on-disk layout is
     pinned by ``localization/persistence.py`` and Memory's availability
-    probe both reference the exact ``<store>/localization/findings/run_<id>/localization_findings.json``
+    probe both reference the exact
+    ``<store>/localization/findings/run_<id>/localization_findings.json``
     path. Hardcoding the template here avoids a redundant disk read and
     keeps the orchestration layer self-contained.
     """
-    if not isinstance(outcome, LocalizationFinding):
-        return None
-    cached_formula = outcome.formula
-    cached_top_n = outcome.top_n
-    formula_mismatch = formula_explicit and requested_formula != cached_formula
-    top_n_mismatch = top_n_explicit and requested_top_n != cached_top_n
-    if not (formula_mismatch or top_n_mismatch):
-        return None
-    run_id = outcome.run_reference.run_id
+    prev_formula, prev_top_n = previous_cached_args
     cache_path = (
         f".novetest/localization/findings/run_{run_id}/localization_findings.json"
     )
     message = (
-        f"requested --formula='{requested_formula}' --top-n={requested_top_n} "
-        f"but cached findings were derived with --formula='{cached_formula}' "
-        f"--top-n={cached_top_n}; delete cache ({cache_path}) and re-run to override"
+        f"cached findings (--formula='{prev_formula}' --top-n={prev_top_n}) "
+        f"were re-derived at requested --formula='{resolved_formula}' "
+        f"--top-n={resolved_top_n}; cache overwritten at {cache_path}"
     )
     return EnvelopeWarning(
-        code="localization-cache-args-ignored",
+        code="localization-cache-rederived",
         message=message,
         details={
+            "previous": {
+                "formula": prev_formula,
+                "top_n": prev_top_n,
+            },
             "requested": {
-                "formula": requested_formula,
-                "top_n": requested_top_n,
+                "formula": resolved_formula,
+                "top_n": resolved_top_n,
                 "formula_explicit": formula_explicit,
                 "top_n_explicit": top_n_explicit,
-            },
-            "cached": {
-                "formula": cached_formula,
-                "top_n": cached_top_n,
             },
             "cache_path": cache_path,
         },
