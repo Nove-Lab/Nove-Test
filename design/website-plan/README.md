@@ -1,30 +1,24 @@
-# Nove Test — Promotional Website Plan
+# novetest — Promotional Website Requirements
 
-This folder is the **single home** for all requirements and discussion records for the Nove Test
-promotional website. It is maintained by the `novetest-marketing-pm-team` agent together with the CEO.
+**The deliverable is the self-contained package in [`handoff/`](./handoff/).** Hand that folder to
+the external website team — it stands alone. No source-code, tooling, or internal-discussion access
+is required to build from it.
 
-Purpose: assemble a **self-contained** requirements package that a *separate* website-building
-project can pick up and build from — with no access to this codebase or to internal discussions.
+**Status: ready to ship.** Every decision made with the CEO is reflected in the bundle, which is the
+**single source of truth** for the website.
 
-> Scope note: this folder describes the *marketing website*, not the Nove Test product itself.
-> Nothing here changes product code, engineering plans, or the agent-comms delivery harness.
+## What to hand over — `handoff/`
 
-## Contents
+| File | Contents |
+|---|---|
+| `handoff/README.md` | Product overview, the Novetest family, target audience, the website's goal, brand/legal constraints, optional confirmations. |
+| `handoff/site-requirements.md` | Positioning & messaging, the hero, the page sections (with draft copy), the status-badge system, functional + non-functional requirements. |
+| `handoff/assets-and-links.md` | Confirmed links, the assets we provide (with owners), and constraints. |
 
-_(nothing captured yet — discussion has not started)_
+> Scope note: this describes the *marketing website*, not the novetest product itself. Nothing here
+> changes product code or engineering plans.
 
-| Artifact | Purpose | Status |
-|---|---|---|
-| `product-brief.md` | Marketing-facing summary of what Nove Test is and who it's for | not started |
-| `requirements/` | Website requirements: pages, sections, messaging, functional + non-functional needs | not started |
-| `assets-needed.md` | Copy, screenshots, diagrams, logos the website team will need | not started |
-| `open-questions.md` | Decisions still pending from the CEO | not started |
-| `handoff/` | Packaged, self-contained bundle ready to ship to the external website project | not started |
+## Still pending from us (optional — does not block the build)
 
-## Status
-
-- [ ] Product brief drafted and confirmed
-- [ ] Audience + positioning agreed
-- [ ] Website requirements captured
-- [ ] Assets list compiled
-- [ ] Handoff bundle assembled and verified self-contained
+Visual identity (logo, color palette, typography), plus minor confirmations (docs URL, analytics
+choice, secondary CTA, launch deadline) — all flagged inside the bundle.
