@@ -218,9 +218,9 @@ The phase boundaries follow the original 6-phase roadmap. This doc converts each
 
 **Definition-of-done:**
 
-- [ ] `novetest replay <run_id_of_flaky>` with `--reruns=5` produces `inconsistent` classification.
-- [ ] `novetest replay <run_id_of_basic>` produces `reproducible`.
-- [ ] A run whose target no longer exists produces `unable_to_replay`.
+- [x] `novetest replay <run_id_of_flaky>` with `--reruns=5` produces `inconsistent` classification. *(closed 2026-06-03 via Phase 5 entry slice `4e81d53` — `novetest replay <flaky_run_id> --reruns=5` against `tests/fixtures/projects/flaky-python/` produces `classification: inconsistent`, `reruns_total: 5`, `reruns_failed >= 1`, `test_id: tests/test_flaky_behavior.py::test_flaky_outcome_is_even_invocation` (the divergent test); on-disk parity counter at `.flaky_invocations` flips outcome each subprocess. Manual Test verified Scenario B byte-by-byte against merged tip. See history/2026-06-03-phase5-complete-replay-engine.md.)*
+- [x] `novetest replay <run_id_of_basic>` produces `reproducible`. *(closed 2026-06-03 via Phase 5 entry slice `4e81d53` — `novetest replay <pytest_basic_run_id> --reruns=3` produces `classification: reproducible`, `reruns_failed: 0`, `test_id: null`, `per_rerun_outcomes: ["passed", "passed", "passed"]`. Manual Test verified Scenario C byte-by-byte. Default `--reruns` is 1 per §6.1 (Replay team's construction judgment); the e2e test uses `--reruns=3` to pin no-divergence-over-N semantic.)*
+- [x] A run whose target no longer exists produces `unable_to_replay`. *(closed 2026-06-03 via Phase 5 entry slice `4e81d53` — `novetest replay <basic_id> --reruns=3` after deleting the test files from the workspace produces `classification: unable_to_replay`, `reason: "replay-run-errored"`, `per_rerun_outcomes: ["errored", "errored", "errored"]`, **exit 0** (REQ-REP-003 discipline: `unable_to_replay` is a valid classification, NOT an error). Manual Test verified Scenario D. Distinct closed `ReplayResult.reason` enum `{no-replayed-runs, replay-run-errored}` covers the two unable_to_replay sub-causes; Edge 2 (`--reruns=0`) exercises the `no-replayed-runs` branch.)*
 
 **Risks:**
 
