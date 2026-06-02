@@ -25,6 +25,7 @@ _(none)_
 - [2026-05-29-cargo-adapter-v1-without-rust-e2e.md](./decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md) — `novetest-pm-team → all` (cargo-adapter-v1-without-rust-e2e)
 - [2026-05-30-localization-outcome-envelope-shape.md](./decisions/2026-05-30-localization-outcome-envelope-shape.md) — `novetest-pm-team → all` (localization-outcome-envelope-shape)
 - [2026-05-30-native-result-metadata-slot.md](./decisions/2026-05-30-native-result-metadata-slot.md) — `novetest-pm-team → all` (native-result-metadata-slot)
+- [2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md](./decisions/2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md) — `novetest-pm-team → all` (phase5-sqlite-deferred-until-cross-run-verb)
 
 ## Recent history (last 7 days)
 - [2026-05-26-phase3-entry.md](./history/2026-05-26-phase3-entry.md) — `novetest-pm-team → all` (phase3-entry)
