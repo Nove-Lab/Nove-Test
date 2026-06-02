@@ -8,7 +8,7 @@ Last regenerated: 2026-06-02
 _(none)_
 
 ## Pending
-_(none)_
+- [replay-team-2026-06-02-phase5-entry-replay-engine.md](./tasks/replay-team-2026-06-02-phase5-entry-replay-engine.md) — `novetest-pm-team → novetest-replay-team` (phase5-entry-replay-engine)
 
 ## Blocked
 _(none)_
