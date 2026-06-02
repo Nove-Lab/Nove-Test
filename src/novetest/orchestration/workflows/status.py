@@ -21,10 +21,14 @@ underlying cache (see
 ``agent-comms/tasks/orchestration-team-2026-06-01-status-sub-reports-staleness-defect6.md``
 for the empirical reproduction).
 
-Replay stays ``False`` until Phase 5: the ``replay/`` module is empty
-(see ``src/novetest/replay/__init__.py``) so there is no ``get_*`` API
-to call. Once Replay ships, the corresponding line below switches to a
-cache-only retrieval call without touching this file's shape.
+Replay (Phase 5 entry) is now a cache-only probe like the other three:
+``replay_available`` flips ``True`` when
+``<store>/replay/results/run_<latest_id>/replay_result.json`` exists and
+parses (``get_replay_result`` returns a ``ReplayResult``). ``status`` reports
+"a Replay Attempt has already produced a result for the latest run" — NOT "a
+replay could be attempted" (that eligibility question is
+``check_replay_availability``). Like the others, this read NEVER executes a
+replay.
 """
 
 from __future__ import annotations
@@ -38,9 +42,10 @@ from novetest.memory import (
     find_runs_for_target,
     list_run_history,
 )
-from novetest.models import MemoryEntry
+from novetest.models import MemoryEntry, ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.regression import RegressionFactSet, get_regression_facts
+from novetest.replay import get_replay_result
 
 
 @dataclass(slots=True, frozen=True)
@@ -99,8 +104,12 @@ def build_status_view(store: ProjectStore) -> StatusView:
       failure-proximity all surface as ``available``.
     - Regression: see ``_latest_regression_available`` — needs a prior
       comparable sibling AND a cached pair file.
-    - Replay: pinned ``False`` (Phase 5 not yet shipped — the engine
-      module is empty).
+    - Replay: ``get_replay_result(store, latest_ref)`` → ``ReplayResult``
+      means
+      ``<store>/replay/results/run_<latest_id>/replay_result.json`` exists
+      (a Replay Attempt has been made). Classification-independent:
+      ``reproducible`` / ``inconsistent`` / ``unable_to_replay`` all surface
+      as ``available`` (the result exists either way).
 
     The cache-only contract is load-bearing: ``status`` must be cheap and
     side-effect-free. We deliberately do NOT call ``compare_runs`` here
@@ -122,13 +131,16 @@ def build_status_view(store: ProjectStore) -> StatusView:
         get_localization_findings(store, latest_ref), LocalizationFinding
     )
     regression_available = _latest_regression_available(store, latest)
+    replay_available = isinstance(
+        get_replay_result(store, latest_ref), ReplayResult
+    )
     return StatusView(
         latest_entry=latest,
         run_history_size=len(history),
         coverage_available=coverage_available,
         regression_available=regression_available,
         localization_available=localization_available,
-        # Replay stays False — the engine ships post-MVP (Phase 5).
+        replay_available=replay_available,
     )
 
 

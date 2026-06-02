@@ -17,18 +17,16 @@ byte-identical ``list[Recommendation]`` out. Builder helpers below avoid
 any time- or randomness-dependent inputs — every output field is sourced
 from the engine outcomes the caller passed in.
 
-Replay placeholder
-------------------
+ReplayResult re-export
+----------------------
 
-Phase 5 has not landed yet (``src/novetest/replay/__init__.py`` is empty),
-so this file owns a transient ``ReplayResult`` dataclass that the
-synthesizer's ``flaky_suspected`` trigger can pattern-match. Phase 5 will
-introduce the canonical ``ReplayResult`` model under ``src/novetest/models/``;
-when that happens, this file's ``ReplayResult`` is replaced with an import
-and the placeholder is deleted (the wire shape — ``classification``,
-``reruns_total``, ``reruns_failed``, ``run_reference`` — is pinned by the
-recommendation taxonomy §1, so the migration is a re-export, not a
-behavior change).
+The canonical ``ReplayResult`` model lives at ``models/replay_result.py`` and
+was promoted by the Phase 5 entry slice; this module re-imports it so existing
+callers of ``from ...fact_bundle import ReplayResult`` (the recommendation
+package ``__init__`` and the synthesizer's ``flaky_suspected`` matcher)
+continue to work. The five binding fields (``run_reference`` /
+``classification`` / ``reruns_total`` / ``reruns_failed`` / ``test_id``) are
+unchanged, so this is a re-export, not a behavior change.
 """
 
 from __future__ import annotations
@@ -36,11 +34,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from novetest.models import LocalizationFinding, RunRecord
+from novetest.models import LocalizationFinding, ReplayResult, RunRecord
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.localization_finding import LOCALIZATION_MODES
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_reference import RunReference
+
+
+__all__ = [
+    "FactBundle",
+    "ReplayResult",
+    "StageEligibility",
+    "build_fact_bundle",
+    "has_failed_tests",
+    "passed_count",
+    "skipped_count",
+    "total_count",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -154,39 +164,6 @@ class StageEligibility:
         if self.replay == "unavailable":
             out.append("replay")
         return out
-
-
-# ---------------------------------------------------------------------------
-# Replay placeholder — see module docstring.
-# ---------------------------------------------------------------------------
-
-
-REPLAY_CLASSIFICATIONS: Final[frozenset[str]] = frozenset(
-    {"reproducible", "inconsistent", "unable_to_replay"}
-)
-
-
-@dataclass(slots=True, frozen=True)
-class ReplayResult:
-    """Phase 5 placeholder. See module docstring.
-
-    Carries the minimal shape the ``flaky_suspected`` trigger needs:
-    ``classification == "inconsistent"`` plus the rerun counters used in
-    the recommendation slot payload.
-    """
-
-    run_reference: RunReference
-    classification: str
-    reruns_total: int
-    reruns_failed: int
-    test_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.classification not in REPLAY_CLASSIFICATIONS:
-            raise ValueError(
-                f"Invalid ReplayResult.classification={self.classification!r}; "
-                f"expected one of {sorted(REPLAY_CLASSIFICATIONS)!r}"
-            )
 
 
 # ---------------------------------------------------------------------------

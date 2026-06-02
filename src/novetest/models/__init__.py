@@ -20,6 +20,7 @@ from novetest.models.localization_finding import (
     LocalizationFinding,
 )
 from novetest.models.memory_entry import MemoryEntry
+from novetest.models.replay_result import ReplayResult
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 from novetest.models.test_result import TestResult
@@ -34,6 +35,7 @@ __all__ = [
     "LocalizationEntry",
     "LocalizationFinding",
     "MemoryEntry",
+    "ReplayResult",
     "RunRecord",
     "RunReference",
     "TestResult",

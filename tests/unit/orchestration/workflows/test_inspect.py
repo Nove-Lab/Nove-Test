@@ -136,6 +136,23 @@ def _patch_memory(
         ),
     )
 
+    # Replay section — default to unavailable so existing Coverage-section
+    # tests stay focused and don't hit the filesystem.
+    from novetest.replay import (
+        REASON_MISSING_DERIVED_FACTS as REPLAY_REASON_MISSING,
+        ReplayUnavailable,
+    )
+
+    monkeypatch.setattr(
+        inspect_module,
+        "get_replay_result",
+        lambda _store, ref: ReplayUnavailable(
+            run_reference=ref,
+            reason=REPLAY_REASON_MISSING,
+            detail="no replay attempt has been made for this run",
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # build_inspect_view — lookup + not-found
