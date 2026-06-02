@@ -32,7 +32,7 @@ from novetest.memory import (
     list_run_history,
     retrieve_run_evidence,
 )
-from novetest.models import MemoryEntry
+from novetest.models import MemoryEntry, ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.regression import (
     REASON_NO_COMPARABLE_BASELINE,
@@ -40,6 +40,7 @@ from novetest.regression import (
     RegressionUnavailable,
     compare_runs,
 )
+from novetest.replay import ReplayUnavailable, get_replay_result
 
 
 @dataclass(slots=True, frozen=True)
@@ -57,21 +58,23 @@ class InspectView:
     a ``RegressionFactSet`` (kind ``fact-set``) or a
     ``RegressionUnavailable`` (kind ``unavailable``).
 
-    Localization / Replay engines are not yet wired, so ``to_dict`` reports
-    them as ``unavailable`` sub-reports — the same string-marker convention
-    ``StatusView`` uses.
+    Localization (Phase 4) and Replay (Phase 5) are now wired: ``to_dict``
+    reports each sub-report ``available`` when its evidence resolved on disk,
+    ``unavailable`` otherwise.
     """
 
     entry: MemoryEntry
     coverage_outcome: CoverageFactSet | CoverageUnavailable
     regression_outcome: RegressionFactSet | RegressionUnavailable
     localization_outcome: LocalizationFinding | LocalizationUnavailable
+    replay_outcome: ReplayResult | ReplayUnavailable
 
     def to_dict(self) -> dict[str, object]:
         record = self.entry.run_record
         coverage_present = isinstance(self.coverage_outcome, CoverageFactSet)
         regression_present = isinstance(self.regression_outcome, RegressionFactSet)
         localization_present = isinstance(self.localization_outcome, LocalizationFinding)
+        replay_present = isinstance(self.replay_outcome, ReplayResult)
         return {
             "run_reference": record.run_reference.to_dict(),
             "run_summary": {
@@ -88,11 +91,12 @@ class InspectView:
             "localization_outcome": _localization_outcome_section(
                 self.localization_outcome
             ),
+            "replay_outcome": _replay_outcome_section(self.replay_outcome),
             "sub_reports": {
                 "coverage": "available" if coverage_present else "unavailable",
                 "regression": "available" if regression_present else "unavailable",
                 "localization": "available" if localization_present else "unavailable",
-                "replay": "unavailable",
+                "replay": "available" if replay_present else "unavailable",
             },
         }
 
@@ -134,6 +138,7 @@ def build_inspect_view(store: ProjectStore, run_id: str) -> InspectView | None:
         coverage_outcome=get_coverage_facts(store, ref),
         regression_outcome=_resolve_inspect_regression(store, entry),
         localization_outcome=_resolve_inspect_localization(store, entry),
+        replay_outcome=get_replay_result(store, ref),
     )
 
 
@@ -291,4 +296,26 @@ def _localization_outcome_section(
         body = outcome.to_dict()
         body.pop("schema_version", None)
         return {"kind": "fact-set", **body}
+    return {"kind": "unavailable", **outcome.to_dict()}
+
+
+def _replay_outcome_section(
+    outcome: ReplayResult | ReplayUnavailable,
+) -> dict[str, object]:
+    """Project a Replay outcome onto the frozen ``replay_outcome`` shape.
+
+    Identical wire shape to ``cli/app.py::_replay_outcome_payload`` — the same
+    orchestration↔cli import-cycle reason the Coverage / Regression /
+    Localization analogs duplicate their projections. A ``ReplayResult``
+    surfaces as ``kind: "replay-result"`` with the full classification block
+    (the original ``run_reference`` is omitted from the inner block — the
+    inspect view already carries it at the top level); a ``ReplayUnavailable``
+    surfaces as the 3-key ``kind: "unavailable"`` block.
+    """
+
+    if isinstance(outcome, ReplayResult):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        body.pop("run_reference", None)
+        return {"kind": "replay-result", **body}
     return {"kind": "unavailable", **outcome.to_dict()}

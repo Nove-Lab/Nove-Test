@@ -38,7 +38,7 @@ from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_DERIVED_FACTS as COV_REASON_MISSING
 from novetest.localization import LocalizationUnavailable
 from novetest.localization.results import REASON_MISSING_DERIVED_FACTS as LOC_REASON_MISSING
-from novetest.models import MemoryEntry, RunRecord, RunReference
+from novetest.models import MemoryEntry, ReplayResult, RunRecord, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet, CoverageSummary
 from novetest.models.localization_finding import (
     CodeLocation,
@@ -52,6 +52,10 @@ from novetest.orchestration.workflows.status import StatusView, build_status_vie
 from novetest.regression import (
     REASON_MISSING_DERIVED_FACTS as REG_REASON_MISSING,
     RegressionUnavailable,
+)
+from novetest.replay import (
+    REASON_MISSING_DERIVED_FACTS as REPLAY_REASON_MISSING,
+    ReplayUnavailable,
 )
 
 
@@ -190,6 +194,7 @@ def _patch_seams(
     coverage_result: CoverageFactSet | CoverageUnavailable | None = None,
     localization_result: LocalizationFinding | LocalizationUnavailable | None = None,
     regression_result: RegressionFactSet | RegressionUnavailable | None = None,
+    replay_result: ReplayResult | ReplayUnavailable | None = None,
 ) -> dict[str, list[Any]]:
     """Stub every Memory + engine seam at the ``status`` module.
 
@@ -267,10 +272,27 @@ def _patch_seams(
 
     monkeypatch.setattr(status_module, "get_regression_facts", fake_get_regression)
 
+    replay_calls: list[RunReference] = []
+
+    def fake_get_replay(
+        _store: Any, ref: RunReference
+    ) -> ReplayResult | ReplayUnavailable:
+        replay_calls.append(ref)
+        if replay_result is not None:
+            return replay_result
+        return ReplayUnavailable(
+            run_reference=ref,
+            reason=REPLAY_REASON_MISSING,
+            detail="no replay attempt has been made for this run",
+        )
+
+    monkeypatch.setattr(status_module, "get_replay_result", fake_get_replay)
+
     return {
         "coverage_calls": coverage_calls,
         "localization_calls": localization_calls,
         "regression_calls": regression_calls,
+        "replay_calls": replay_calls,
     }
 
 
@@ -637,17 +659,33 @@ def test_regression_only_tombstoned_priors_returns_unavailable(
 
 
 # ---------------------------------------------------------------------------
-# Replay pinned False — Phase 5 has not shipped; the engine module is empty.
-# Regression-pin to catch accidental flip when Phase 5 wiring lands without
-# updating the status workflow.
+# Replay (Phase 5 entry) — cache-only probe, mirroring the other three.
 # ---------------------------------------------------------------------------
 
 
-def test_replay_pinned_unavailable_until_phase5(
+def _make_replay_result(ref: RunReference) -> ReplayResult:
+    return ReplayResult(
+        run_reference=ref,
+        classification="inconsistent",
+        reruns_total=5,
+        reruns_failed=2,
+        test_id="tests/test_flaky.py::test_flaky",
+        per_rerun_outcomes=("passed", "failed", "passed", "passed", "failed"),
+        consistency_summary={
+            "original_passed": 1,
+            "replay_passed": 3,
+            "replay_failed": 2,
+        },
+        attempted_at=1_748_800_000_000,
+    )
+
+
+def test_replay_no_cached_result_keeps_replay_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Even with coverage + localization + regression all cached, replay
-    stays ``unavailable`` until the Phase 5 engine ships."""
+    """With coverage + localization + regression cached but NO replay result
+    on disk, replay stays ``unavailable`` (cache-only probe returns
+    Unavailable). Pins that the flag tracks the cache, not the other three."""
 
     prior = _make_entry("01PRIORALL000000000000A", created_at=1_300)
     latest = _make_entry("01LATESTALL00000000000A", created_at=1_400)
@@ -658,7 +696,7 @@ def test_replay_pinned_unavailable_until_phase5(
     regression_fact_set = _make_regression_fact_set(
         prior.run_record.run_reference, latest.run_record.run_reference
     )
-    _patch_seams(
+    call_log = _patch_seams(
         monkeypatch,
         history=[latest, prior],
         siblings=[latest, prior],
@@ -673,6 +711,10 @@ def test_replay_pinned_unavailable_until_phase5(
     assert view.regression_available is True
     assert view.replay_available is False
 
+    # Replay cache was probed exactly once with the latest run's ref.
+    assert len(call_log["replay_calls"]) == 1
+    assert call_log["replay_calls"][0].run_id == "01LATESTALL00000000000A"
+
     payload = view.to_dict()
     sub_reports = payload["sub_reports"]
     assert isinstance(sub_reports, dict)
@@ -682,6 +724,25 @@ def test_replay_pinned_unavailable_until_phase5(
         "localization": "available",
         "replay": "unavailable",
     }
+
+
+def test_replay_result_persisted_marks_replay_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached ``replay_result.json`` for the latest run →
+    ``sub_reports.replay == 'available'`` (classification-independent)."""
+
+    entry = _make_entry("01REPLAY00000000000000A", created_at=1_600)
+    result = _make_replay_result(entry.run_record.run_reference)
+    _patch_seams(monkeypatch, history=[entry], replay_result=result)
+
+    view = build_status_view(object())  # type: ignore[arg-type]
+    assert view.replay_available is True
+    assert view.coverage_available is False
+
+    sub_reports = view.to_dict()["sub_reports"]
+    assert isinstance(sub_reports, dict)
+    assert sub_reports["replay"] == "available"
 
 
 # ---------------------------------------------------------------------------

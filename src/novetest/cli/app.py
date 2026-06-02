@@ -50,7 +50,7 @@ from novetest.memory import (
     locate_project_store,
     retrieve_run_evidence,
 )
-from novetest.models import RunReference
+from novetest.models import ReplayResult, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
@@ -66,6 +66,13 @@ from novetest.regression import (
     RegressionUnavailable,
     compare_runs,
     derive_latest_regression,
+)
+from novetest.replay import (
+    REASON_ENGINE_NOT_READY,
+    REASON_ORIGINAL_NOT_FOUND,
+    REASON_TARGET_MISSING,
+    ReplayUnavailable,
+    replay_run,
 )
 from novetest.run import AdapterInvocationError, EngineNotReadyError
 
@@ -1162,6 +1169,107 @@ def test_cmd(target: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
+# `novetest replay <run_id>` verb (Phase 5 entry)
+# ---------------------------------------------------------------------------
+
+
+def _replay_outcome_payload(
+    outcome: ReplayResult | ReplayUnavailable,
+) -> dict[str, Any]:
+    """Project a Replay outcome onto the frozen ``replay_outcome`` block.
+
+    Identical wire shape to ``workflows/inspect.py::_replay_outcome_section``
+    (the two cannot share without an orchestration↔cli import cycle). A
+    ``ReplayResult`` surfaces as ``kind: "replay-result"`` with the full
+    classification block (the original ``run_reference`` is dropped — the
+    envelope carries it as ``data.original_run_reference``); a
+    ``ReplayUnavailable`` surfaces as the 3-key ``kind: "unavailable"`` block.
+    """
+    if isinstance(outcome, ReplayResult):
+        body = outcome.to_dict()
+        body.pop("schema_version", None)
+        body.pop("run_reference", None)
+        return {"kind": "replay-result", **body}
+    return {"kind": "unavailable", **outcome.to_dict()}
+
+
+def _build_replay_envelope(
+    original_ref: RunReference, outcome: ReplayResult | ReplayUnavailable
+) -> tuple[Envelope, int]:
+    """Map a Replay outcome onto an ``(Envelope, exit_code)`` pair.
+
+    Exit-code split (rationale in the handoff §5.3): a classify-able outcome
+    (``ReplayResult`` of any classification, including the valid
+    ``unable_to_replay``) is a success at exit 0. A ``ReplayUnavailable`` is
+    a user/engine error: ``engine-not-ready`` / ``target-missing`` map to
+    exit 4 (``EXIT_ENGINE_MISSING``, mirroring ``run`` / ``test``);
+    ``original-not-found`` maps to exit 2 (``EXIT_USAGE``, mirroring
+    ``inspect``); the remaining "structured unavailable" reasons
+    (``tombstoned-original`` / ``context-reconstruction-failed`` /
+    ``missing-derived-facts``) are non-error data outcomes at exit 0.
+    """
+    data: dict[str, Any] = {
+        "original_run_reference": original_ref.to_dict(),
+        "replay_outcome": _replay_outcome_payload(outcome),
+    }
+    if isinstance(outcome, ReplayResult):
+        return Envelope(command="replay", ok=True, data=data), EXIT_OK
+
+    reason = outcome.reason
+    if reason in (REASON_ENGINE_NOT_READY, REASON_TARGET_MISSING):
+        exit_code = EXIT_ENGINE_MISSING
+    elif reason == REASON_ORIGINAL_NOT_FOUND:
+        exit_code = EXIT_USAGE
+    else:
+        # tombstoned-original / context-reconstruction-failed /
+        # missing-derived-facts — structured outcome, not an error.
+        return Envelope(command="replay", ok=True, data=data), EXIT_OK
+
+    return (
+        Envelope(
+            command="replay",
+            ok=False,
+            data=data,
+            errors=(
+                EnvelopeError(
+                    code=f"replay-{reason}",
+                    message=outcome.detail or reason,
+                ),
+            ),
+        ),
+        exit_code,
+    )
+
+
+@app.command(name="replay")
+def replay_cmd(run_id: str, *, reruns: int = 1, timeout: float = 600.0) -> None:
+    """Replay a prior run and classify its reproducibility.
+
+    Reconstructs the original run's context from stored evidence, re-executes
+    it ``--reruns`` times through the SAME governed native engine path
+    (``run/execute_with_engine_context``), and classifies the result as
+    ``reproducible`` / ``inconsistent`` / ``unable_to_replay`` (REQ-REP-003).
+
+    ``<run_id>`` is the ORIGINAL run's id; a stale/fake id surfaces a
+    structured ``not-found`` error (exit 2), mirroring ``inspect``. The
+    replay-execution runs are persisted as first-class Memory Entries (they
+    appear in ``memory list``); the Replay Result is cached at
+    ``<store>/replay/results/run_<id>/replay_result.json``.
+
+    ``--reruns`` defaults to 1 (cheap single replay). Investigating flakiness
+    typically wants ``--reruns 5``. ``unable_to_replay`` is a VALID
+    classification (exit 0), not an error.
+    """
+    store = _require_store("replay")
+    original_ref = _resolve_run_reference(store, "replay", run_id)
+    outcome = asyncio.run(
+        replay_run(store, original_ref, reruns=reruns, timeout=timeout)
+    )
+    envelope, exit_code = _build_replay_envelope(original_ref, outcome)
+    _emit_and_exit(envelope, exit_code)
+
+
+# ---------------------------------------------------------------------------
 # Remaining stubs (not in Phase 1 Run+Memory scope)
 # ---------------------------------------------------------------------------
 
@@ -1179,11 +1287,10 @@ def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
         sub.command(stub, name=verb)
 
 
-for _name in ("replay",):
-    _register_flat_stub(_name)
 # ``compare`` promoted to a real verb above.
 # ``regression`` promoted to a real sub-app above.
-# ``test`` promoted to a real verb below (Phase 6 entry).
+# ``test`` promoted to a real verb (Phase 6 entry).
+# ``replay`` promoted to a real verb above (Phase 5 entry).
 
 
 # ---------------------------------------------------------------------------

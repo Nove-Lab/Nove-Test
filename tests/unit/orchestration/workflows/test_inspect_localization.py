@@ -162,6 +162,23 @@ def _patch_all_seams(
         return localization_result
 
     monkeypatch.setattr(inspect_module, "get_localization_findings", fake_get_localization)
+
+    # Replay section: default to unavailable so the Localization-section tests
+    # stay focused and don't hit the filesystem.
+    from novetest.replay import (
+        REASON_MISSING_DERIVED_FACTS as REPLAY_REASON_MISSING,
+        ReplayUnavailable,
+    )
+
+    monkeypatch.setattr(
+        inspect_module,
+        "get_replay_result",
+        lambda _store, ref: ReplayUnavailable(
+            run_reference=ref,
+            reason=REPLAY_REASON_MISSING,
+            detail="no replay attempt has been made for this run",
+        ),
+    )
     return seen
 
 
@@ -407,6 +424,21 @@ def test_inspect_never_calls_derive_localization_findings(
     )
     monkeypatch.setattr(inspect_module, "compare_runs", lambda *_a, **_k: None)
     monkeypatch.setattr(inspect_module, "get_localization_findings", fake_get)
+
+    from novetest.replay import (
+        REASON_MISSING_DERIVED_FACTS as REPLAY_REASON_MISSING,
+        ReplayUnavailable,
+    )
+
+    monkeypatch.setattr(
+        inspect_module,
+        "get_replay_result",
+        lambda _s, r: ReplayUnavailable(
+            run_reference=r,
+            reason=REPLAY_REASON_MISSING,
+            detail="no replay attempt has been made for this run",
+        ),
+    )
 
     # Verify derive_localization_findings is not accessible via the inspect module
     assert not hasattr(inspect_module, "derive_localization_findings"), (

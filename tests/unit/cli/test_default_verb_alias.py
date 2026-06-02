@@ -43,6 +43,18 @@ class TestInjectDefaultVerbAlias:
         result = _inject_default_verb_alias(["tests/test_x.py"])
         assert result == ["test", "tests/test_x.py"]
 
+    def test_replay_run_id_routes_to_replay_verb_not_test(self) -> None:
+        """``novetest replay <run_id>`` routes to the ``replay`` verb (§5.4).
+
+        ``replay`` is in ``_SUBCOMMAND_TOKENS`` so the alias must NOT inject
+        ``test`` before it — even when the following token looks like a path.
+        Regression-pin against the reserved-verb disambiguation being lost
+        when the Phase 5 verb landed.
+        """
+
+        argv = ["replay", "/tmp/some_nonsense_path"]
+        assert _inject_default_verb_alias(argv) == argv
+
     def test_target_directory_gets_alias(self) -> None:
         result = _inject_default_verb_alias(["tests/"])
         assert result == ["test", "tests/"]
