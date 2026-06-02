@@ -8,7 +8,7 @@ Last regenerated: 2026-06-03
 _(none)_
 
 ## Pending
-- [replay-team-2026-06-02-phase5-entry-replay-engine.md](./tasks/replay-team-2026-06-02-phase5-entry-replay-engine.md) — `novetest-pm-team → novetest-replay-team` (phase5-entry-replay-engine)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -41,3 +41,4 @@ _(none)_
 - [2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md](./history/2026-06-01-localization-phase4-modes-and-cargo-defect-cascade.md) — `novetest-pm-team → all` (localization-phase4-modes-and-cargo-defect-cascade)
 - [2026-06-01-phase4-complete-perf-nfr-loc-002.md](./history/2026-06-01-phase4-complete-perf-nfr-loc-002.md) — `novetest-pm-team → all` (phase4-complete-perf-nfr-loc-002)
 - [2026-06-02-phase1-and-phase6-complete-recommendation-synthesis-lands.md](./history/2026-06-02-phase1-and-phase6-complete-recommendation-synthesis-lands.md) — `novetest-pm-team → all` (phase1-and-phase6-complete-recommendation-synthesis-lands)
+- [2026-06-03-phase5-complete-replay-engine.md](./history/2026-06-03-phase5-complete-replay-engine.md) — `novetest-pm-team → all` (phase5-complete-replay-engine)
