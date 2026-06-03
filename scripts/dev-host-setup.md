@@ -265,38 +265,174 @@ floor bump warranted at this firing.
 
 ---
 
-## 5. Java (JDK) — placeholder, JUnit adapter pending
+## 5. Java (JDK + Maven) — for JUnit 5 adapter
 
-**Floor:** TBD (set when the JUnit adapter task brief is written).
-Likely JDK 17+ (LTS).
+**Floor:** JDK 17 (LTS) + Maven 3.9 (or Gradle 7.6) per matrix rows added
+2026-06-03.
 
-**Status:** the JUnit adapter is blocked on
-`delivery-phasing.md` Open Question #4. This section will be filled in
-with concrete `apt-get` / `brew` commands when the adapter lands.
-Until then, no Java is required for the test gate.
+**Floor source:** `decisions/2026-05-25-supported-engine-matrix.md` rows
+"JDK" / "Maven (Surefire) OR Gradle (`useJUnitPlatform()`)"; pinned by
+`decisions/2026-06-03-junit-console-launcher-vendor.md`.
 
-When this section is finalized, add:
-- JDK install commands (`apt-get install openjdk-17-jdk` /
-  `brew install openjdk@17`).
-- Maven or Gradle install (depending on Q#4 resolution).
-- A floor row to the supported-engine-matrix decision.
+**Why:** the JUnit adapter's integration tests probe a real `mvn -B test`
+(or `./gradlew test --no-daemon`) invocation. They skip via
+`shutil.which("java") is None or (shutil.which("mvn") is None and
+shutil.which("gradle") is None)`. The JUnit Platform Console Launcher
+itself is **vendored** inside our distribution at
+`src/novetest/run/adapters/_vendor/junit-platform-console-standalone-1.11.4.jar`
+— the user does NOT install it. Only the JDK + build tool are required.
+
+### Linux / WSL2
+
+```sh
+# JDK 17 (LTS) — Adoptium Temurin via apt
+sudo apt-get update && sudo apt-get install -y openjdk-17-jdk maven
+
+# Optional alternative: Gradle (use one or the other; both is fine)
+sudo apt-get install -y gradle
+```
+
+### macOS
+
+```sh
+brew install openjdk@17 maven
+
+# Symlink the JDK so /usr/libexec/java_home finds it
+sudo ln -sfn $(brew --prefix)/opt/openjdk@17/libexec/openjdk.jdk \
+  /Library/Java/JavaVirtualMachines/openjdk-17.jdk
+
+# Optional alternative: Gradle
+brew install gradle
+```
+
+### Smoke probe
+
+After install, validate that the bundled Console Launcher extracts and
+runs cleanly (this is the load-bearing check that PyApp binary blob
+extraction works on the host):
+
+```sh
+# From a clean tmp directory
+cd /tmp && mvn archetype:generate -B \
+  -DgroupId=test -DartifactId=junit-smoke \
+  -DarchetypeArtifactId=maven-archetype-quickstart \
+  -DarchetypeVersion=1.4 -DinteractiveMode=false
+cd junit-smoke && mvn -B test
+```
+
+The archetype generates a project with JUnit 4; for JUnit 5 you must edit
+the generated `pom.xml` to depend on `junit-jupiter` and add
+`maven-surefire-plugin` 3.0+. Detailed migration steps live in the JUnit
+adapter task brief at handoff time.
+
+### Verify
+
+```sh
+java -version            # openjdk version "17" or newer
+mvn -version             # Apache Maven 3.9.x or newer (or gradle -version)
+```
+
+### Per-floor-bump maintenance
+
+If JUnit 5.12 ships and we move the JUnit Platform floor to 1.12, mirror
+that bump here AND in `decisions/2026-05-25-supported-engine-matrix.md` in
+the same commit (per the maintenance protocol at the top of this file).
+
+
 
 ---
 
-## 6. .NET SDK — placeholder, dotnet adapter pending
+## 6. .NET SDK + Coverlet — for `dotnet test` adapter
 
-**Floor:** TBD (set when the dotnet adapter task brief is written).
-Likely .NET 8 SDK (LTS).
+**Floor:** .NET SDK 8.0 (LTS) + `coverlet.collector` 6.0.2 per matrix rows
+added 2026-06-03.
 
-**Status:** the dotnet adapter is blocked on
-`delivery-phasing.md` Open Question #5. This section will be filled in
-when the adapter lands. Until then, no .NET is required for the test
-gate.
+**Floor source:** `decisions/2026-05-25-supported-engine-matrix.md` rows
+".NET SDK" / "coverlet.collector"; pinned by
+`decisions/2026-06-03-coverlet-pertestcoverage-key.md`.
 
-When this section is finalized, add:
-- Microsoft package install (`apt-get install dotnet-sdk-8.0` /
-  `brew install --cask dotnet-sdk`).
-- A floor row to the supported-engine-matrix decision.
+**Why:** the .NET adapter's integration tests probe a real `dotnet test`
+invocation against an xUnit v2 project. They skip via `shutil.which("dotnet")
+is None`. The Coverlet 6.0.2+ floor is enforced at adapter runtime via
+`dotnet list <project> package --include-transitive` parsing; if the user's
+project resolves a lower version, the adapter degrades to aggregate
+coverage with an `engine-misconfigured` warning.
+
+xUnit v3 / Microsoft.Testing.Platform coverage is **deferred from MVP** —
+the adapter detects v3 and emits `xunit-v3-coverage-deferred` warning,
+running tests without coverage collection.
+
+### Linux / WSL2
+
+```sh
+# Microsoft package feed for Ubuntu 22.04 (adjust for other distros)
+wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O /tmp/ms.deb
+sudo dpkg -i /tmp/ms.deb && rm /tmp/ms.deb
+sudo apt-get update
+sudo apt-get install -y dotnet-sdk-8.0
+```
+
+### macOS
+
+```sh
+brew install --cask dotnet-sdk          # latest stable (currently .NET 8)
+```
+
+### Smoke probe (validates Coverlet floor)
+
+After install, validate that `coverlet.collector >= 6.0.2` is resolvable
+from NuGet and that `dotnet test` emits per-test Cobertura under the
+expected glob:
+
+```sh
+cd /tmp
+dotnet new xunit -n dotnet-smoke -o dotnet-smoke && cd dotnet-smoke
+dotnet add package coverlet.collector --version 6.0.2
+
+# Generate a probe runsettings (mirrors what the adapter will generate)
+cat > coverlet.runsettings <<RUNSETTINGS
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <PerTestCoverage>true</PerTestCoverage>
+          <SingleHit>false</SingleHit>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
+RUNSETTINGS
+
+dotnet test --collect:"XPlat Code Coverage" --settings coverlet.runsettings \
+  --results-directory ./TestResults
+
+# Expect per-test files (NOT a single coverage.cobertura.xml):
+ls TestResults/**/coverage.*.cobertura.xml
+```
+
+If the `ls` returns the per-test glob, the host is correctly equipped for
+the .NET adapter's per-test mode. If only `coverage.cobertura.xml` (no
+slug) appears, the user's resolved Coverlet version is below 6.0.2 or the
+runsettings was not picked up — re-check both.
+
+### Verify
+
+```sh
+dotnet --version         # 8.0.x or newer
+dotnet --list-sdks       # 8.0.x present
+```
+
+### Per-floor-bump maintenance
+
+If Coverlet 7.x ships with a stable `PerTestCoverage` form, mirror the
+ceiling bump here AND in `decisions/2026-05-25-supported-engine-matrix.md`
+in the same commit. The xUnit v3 / MTP coverage deferred decision reopens
+when a separate v3 coverage adapter slice is scoped.
+
+
 
 ---
 
@@ -321,7 +457,9 @@ and dotnet pending):
 | + Node (jest fixtures `npm install` done) | -3 skips (3 jest cases run) |
 | + Go | -2 skips (2 gotest cases run) |
 | + Rust (with cargo-llvm-cov) | -2 skips (2 cargo cases run) |
-| All four | **0 skips** (when JUnit + dotnet adapters land, this count grows but should still reach 0 after equipping all six) |
+| + Java (JDK + Maven) | -N skips (count established at JUnit adapter cycle) |
+| + .NET (SDK + Coverlet) | -N skips (count established at .NET adapter cycle) |
+| All six | **0 skips** target |
 
 If the skip count does not drop as expected, re-check the relevant
 "Verify" block — a `shutil.which()` guard is finding a non-functional
