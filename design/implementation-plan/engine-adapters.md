@@ -182,7 +182,14 @@ Available as an alternate adapter (`vitest.py` parallel to `jest.py`). Force `--
 The user must already use Maven or Gradle with JUnit 5 (Jupiter). Our adapter does not modify the build file; it expects:
 - Surefire (Maven) or `useJUnitPlatform()` (Gradle)
 - JaCoCo plugin if coverage is requested
-- Optionally the JUnit Platform Console Launcher (we vendor a copy as a fallback for discovery)
+
+The JUnit Platform Console Launcher is **vendored inside our distribution**
+at `src/novetest/run/adapters/_vendor/junit-platform-console-standalone-1.11.4.jar`
+(the only supported strategy — no download-on-first-use, no network at
+runtime). The user does NOT install it. See
+[`decisions/2026-06-03-junit-console-launcher-vendor.md`](../../agent-comms/decisions/2026-06-03-junit-console-launcher-vendor.md)
+(closes Open Question #5) for the EPL 2.0 attribution + binary-blob extraction
+contract.
 
 ### Discovery
 
@@ -460,6 +467,8 @@ dotnet test <project> \
       <DataCollector friendlyName="XPlat code coverage">
         <Configuration>
           <Format>cobertura,opencover,json,lcov</Format>
+          <PerTestCoverage>true</PerTestCoverage>
+          <SingleHit>false</SingleHit>
         </Configuration>
       </DataCollector>
     </DataCollectors>
@@ -467,9 +476,29 @@ dotnet test <project> \
 </RunSettings>
 ```
 
-Output lands under `TestResults/<guid>/coverage.cobertura.xml`. Glob the directory.
+For per-test attribution we pin `coverlet.collector >= 6.0.2, < 7.0.0`
+(6.0.0/6.0.1 had a non-Windows GUID-subdirectory path bug that prevented
+per-test files from being surfaced to the VSTest data collector pipe). The
+`<PerTestCoverage>` element is a direct child of `<Configuration>`, PascalCase,
+and the sibling `<SingleHit>false</SingleHit>` is **mandatory** — without it,
+Coverlet's `SingleHit=true` default records only the first hit per line and
+produces misleading zero-hit lines in per-test output when tests share
+coverage paths. The element name has been stable throughout the shipped 6.x
+line; the early `EnablePerTestCoverage` form was a pre-release name that did
+not ship. See [`decisions/2026-06-03-coverlet-pertestcoverage-key.md`](../../agent-comms/decisions/2026-06-03-coverlet-pertestcoverage-key.md)
+(closes Open Question #4).
 
-For per-test attribution, add `<PerTestCoverage>true</PerTestCoverage>` (Coverlet 6+). **Confirm the exact key name during Phase 2 implementation** - this property has drifted across Coverlet 6.x minor versions.
+**Output filename pattern depends on mode:**
+- Aggregate mode (no `<PerTestCoverage>`): single file at
+  `TestResults/<guid>/coverage.cobertura.xml`. Glob `TestResults/**/coverage.cobertura.xml`.
+- Per-test mode (with `<PerTestCoverage>true</PerTestCoverage>`): one file
+  per test method at `TestResults/<guid>/coverage.<test-slug>.cobertura.xml`
+  where `<test-slug>` is a slugified form of the test's display name. Glob
+  `TestResults/**/coverage.*.cobertura.xml`. The adapter MUST correlate slugified
+  filenames back to test identities — parametrized xUnit test names contain
+  `[`, `]`, `(`, `)`, `,`, and Unicode which Coverlet slugifies inconsistently
+  across OS path-safety rules; the correlation logic is load-bearing and
+  warrants a fixture probe before commit.
 
 ### Test-to-code mapping
 
@@ -478,11 +507,13 @@ For per-test attribution, add `<PerTestCoverage>true</PerTestCoverage>` (Coverle
 ### Edge cases
 
 - Multiple TFMs: `dotnet test` runs once per target framework; aggregate per-TFM TRX files.
-- Coverlet collector writes to a randomly-named GUID directory; glob `TestResults/**/coverage.cobertura.xml`.
+- Coverlet collector writes to a randomly-named GUID directory; glob `TestResults/**/coverage.cobertura.xml` (aggregate) or `TestResults/**/coverage.*.cobertura.xml` (per-test).
 - TRX paths use backslash on Windows even from cross-platform builds; normalize.
 - Solution files with multiple test projects parallelize per project; merge coverage with `dotnet-coverage merge` rather than concatenating XML.
-- xUnit v2 vs v3: detect from project file (`<PackageReference Include="xunit" Version="3.*" />` indicates v3).
+- xUnit v2 vs v3: detect from project file (`<PackageReference Include="xunit" Version="3.*" />` indicates v3). v3 runs on Microsoft.Testing.Platform, which does NOT use VSTest data collectors — `coverlet.collector` is inert on the v3 path. v3 coverage support is **deferred from MVP**; the v3 adapter path emits `xunit-v3-coverage-deferred` warning and runs tests without coverage. See [`decisions/2026-06-03-coverlet-pertestcoverage-key.md`](../../agent-comms/decisions/2026-06-03-coverlet-pertestcoverage-key.md) §6.
 - `--blame` mode (crash diagnostics) writes additional artifacts; capture but don't conflate with normal failures.
+- Per-test mode performance: writes one Cobertura XML per test method, so a 10k-test suite produces 10k files. `NFR-COV-002` (50k locations <5s) was measured against single aggregate files; per-test mode against large suites needs separate validation. If the adapter fails NFR, expose `--coverage-granularity=aggregate` opt-down and default large suites to aggregate.
+- User's resolved Coverlet version is detected via `dotnet list <project> package --include-transitive` (use `--format json` when SDK >= 7.0; tabular parse otherwise). Resolved version below 6.0.2 → `engine-misconfigured` warning + aggregate fallback.
 
 ---
 

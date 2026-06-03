@@ -90,6 +90,16 @@ propose floor/ceiling movements via `agent-comms/questions/`.
 | cargo (Rust toolchain) | 1.74 | TBD (pending CI Rust cell; Release adds) | matches edition 2021 + nextest 0.9.50 baseline; floor pinned by `decisions/2026-05-29-cargo-adapter-nextest-primary.md`. Added 2026-05-29 (amendment) for the cargo adapter that landed 2026-05-29 (`6d9f463`). |
 | cargo-nextest | 0.9.50 | TBD | floor pinned by `libtest-json --message-format` stability per `decisions/2026-05-29-cargo-adapter-nextest-primary.md` §1. Absence surfaces as `engine-misconfigured`. |
 | llvm-tools-preview (rustup component) | — | — | required by `cargo-llvm-cov` for coverage; absence surfaces as `engine-misconfigured` via the LCOV-not-emitted check. |
+| JDK | 17 (LTS) | 21 (LTS) | matches JUnit Platform 1.10+ minimum bytecode level. Added 2026-06-03 (amendment) for the JUnit adapter pending Phase 2.5; floor pinned by `decisions/2026-06-03-junit-console-launcher-vendor.md`. |
+| JUnit Platform | 1.10 | 1.11.x | user-project dependency; floor matches the vendored Console Launcher's API contract. Added 2026-06-03. |
+| junit-jupiter | 5.10 | 5.11.x | user-project dependency; absence surfaces as `engine-misconfigured`. Added 2026-06-03. |
+| Maven (Surefire) OR Gradle (`useJUnitPlatform()`) | Surefire 3.0 / Gradle 7.6 | latest | one of the two MUST be present. Added 2026-06-03. |
+| JaCoCo | 0.8.11 | 0.8.x | coverage path; absence surfaces as `mapping_granularity: aggregate` (no coverage). Added 2026-06-03. |
+| junit-platform-console-standalone (vendored by us) | 1.11.4 (pinned) | 1.11.4 (pinned) | shipped inside the binary at `src/novetest/run/adapters/_vendor/`; user does not install. Pinned by `decisions/2026-06-03-junit-console-launcher-vendor.md`. Added 2026-06-03. |
+| .NET SDK | 8.0 (LTS) | TBD (.NET 9 STS, after CI cell) | xUnit v2 + Coverlet path; xUnit v3 / MTP coverage deferred from MVP per `decisions/2026-06-03-coverlet-pertestcoverage-key.md` §6. Added 2026-06-03 (amendment) for the .NET adapter pending Phase 2.5. |
+| coverlet.collector | 6.0.2 | 6.0.x | floor pinned by `decisions/2026-06-03-coverlet-pertestcoverage-key.md`; sibling `<SingleHit>false</SingleHit>` required in generated runsettings. Added 2026-06-03. |
+| xunit (v2) | 2.6 | 2.9.x | v3 detected and routed to `xunit-v3-coverage-deferred` warning per `decisions/2026-06-03-coverlet-pertestcoverage-key.md` §6. Added 2026-06-03. |
+| Microsoft.NET.Test.Sdk | 17.6 | 17.x | bundled with .NET 8 SDK; absence surfaces as `engine-misconfigured`. Added 2026-06-03. |
 
 This matrix is the contract surface for engine readiness probes and
 adapter version negotiation. When a probe sees an engine below floor it

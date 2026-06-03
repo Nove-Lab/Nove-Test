@@ -25,6 +25,8 @@ _(none)_
 - [2026-05-30-localization-outcome-envelope-shape.md](./decisions/2026-05-30-localization-outcome-envelope-shape.md) — `novetest-pm-team → all` (localization-outcome-envelope-shape)
 - [2026-05-30-native-result-metadata-slot.md](./decisions/2026-05-30-native-result-metadata-slot.md) — `novetest-pm-team → all` (native-result-metadata-slot)
 - [2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md](./decisions/2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md) — `novetest-pm-team → all` (phase5-sqlite-deferred-until-cross-run-verb)
+- [2026-06-03-coverlet-pertestcoverage-key.md](./decisions/2026-06-03-coverlet-pertestcoverage-key.md) — `novetest-pm-team → all` (coverlet-pertestcoverage-key)
+- [2026-06-03-junit-console-launcher-vendor.md](./decisions/2026-06-03-junit-console-launcher-vendor.md) — `novetest-pm-team → all` (junit-console-launcher-vendor)
 
 ## Recent history (last 7 days)
 - [2026-05-27-phase3-regression-engine-complete.md](./history/2026-05-27-phase3-regression-engine-complete.md) — `novetest-pm-team → all` (phase3-regression-engine-complete)
