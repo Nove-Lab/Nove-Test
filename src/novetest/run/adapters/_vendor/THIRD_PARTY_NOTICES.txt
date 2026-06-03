@@ -1,0 +1,21 @@
+Nove Test Third-Party Notices
+
+This file lists third-party software distributed inside the Nove Test
+binary. Each entry includes the artifact identification, license, source
+URL, and pinned SHA-256.
+
+------------------------------------------------------------------------
+
+JUnit Platform Console Launcher (Standalone)
+  Artifact:  org.junit.platform:junit-platform-console-standalone
+  Version:   1.11.4
+  Source:    https://github.com/junit-team/junit5
+  License:   Eclipse Public License 2.0 (EPL-2.0)
+  License URL: https://www.eclipse.org/legal/epl-2.0/
+  SHA-256:   b016ef6b1c3454d6d7c2c88ce081dabf289699686af6622d6e4e2e1b54b4a2fc
+
+The Console Launcher is distributed unmodified per EPL 2.0 §3.3 (Larger
+Work allowance). Nove Test makes no modifications to the jar. Source
+code is available at the URL above under the same license.
+
+------------------------------------------------------------------------

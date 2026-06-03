@@ -28,10 +28,17 @@ All surfaces are pure inspection. **Nothing is ever installed.**
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
 
+from novetest.run.adapters.junit_adapter import (
+    _detect_build_tool,
+    _detects_junit4_in_manifest,
+    _detects_jupiter_in_manifest,
+    _detects_testng_in_manifest,
+)
 from novetest.run.engine_selector import list_supported_engine_pairs
 from novetest.run.types import (
     EngineCandidate,
@@ -189,8 +196,19 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     if cargo_candidate is not None:
         return await _assess_cargo_readiness(project_workspace, cargo_candidate)
 
+    junit_candidate = next(
+        (
+            c
+            for c in relevant
+            if c.ecosystem == "java" and c.engine_name == "junit"
+        ),
+        None,
+    )
+    if junit_candidate is not None:
+        return await _assess_junit_readiness(project_workspace, junit_candidate)
+
     # A supported candidate was detected, but no adapter implementation
-    # exists yet (java / dotnet) — surface as misconfigured so the CLI
+    # exists yet (dotnet) — surface as misconfigured so the CLI
     # can name the ecosystem without pretending it is ready.
     chosen = relevant[0]
     return EngineReadinessResult(
@@ -628,6 +646,260 @@ async def _assess_cargo_readiness(
         evidence=candidate.evidence,
         issues=(),
     )
+
+
+# ---------------------------------------------------------------------------
+# junit readiness (Phase 2.5 fifth-ecosystem slice)
+# ---------------------------------------------------------------------------
+
+
+async def _assess_junit_readiness(
+    project_workspace: Path,
+    candidate: EngineCandidate,
+) -> EngineReadinessResult:
+    """Decide JUnit 5's readiness state for a Java workspace.
+
+    Sequence (per task brief §5 + §10 doctor probe table):
+    1. OS gate — Windows is unsupported until the PyApp Windows binary
+       pipeline ships (Open Question #16). Surface ``os-unsupported``.
+    2. Detect the build tool from manifest files (pom.xml /
+       build.gradle{,.kts}). The marker detector already saw at least
+       one — re-resolve which one here so we know whether to probe
+       ``mvn`` or ``gradle`` next.
+    3. JDK on PATH? If absent → ``engine-misconfigured`` /
+       ``missing-jdk`` with install hint.
+    4. Build tool binary on PATH (or ``./gradlew`` wrapper for Gradle)?
+       If absent → ``engine-misconfigured`` / ``missing-build-tool``.
+    5. JUnit Jupiter declared in manifest? If absent → ``engine-
+       misconfigured`` / ``missing-jupiter`` (with specific JUnit 4 /
+       TestNG diagnostics when those are detected as the actual blocker).
+    6. JUnit 4 declared alongside Jupiter? → ``engine-misconfigured`` /
+       ``junit-4-not-supported`` (D5).
+    7. TestNG declared alongside Jupiter? → ``engine-misconfigured`` /
+       ``testng-not-supported``.
+    8. Best-effort Jupiter version capture; informational metadata on
+       the returned context.
+    """
+
+    # Step 1: OS gate (per decision §"Windows" in
+    # 2026-06-03-junit-console-launcher-vendor.md).
+    if sys.platform.startswith("win"):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "JUnit adapter requires a non-Windows host until the "
+                "Windows binary pipeline ships (Open Question #16)",
+            ),
+        )
+
+    # Step 2: build tool detection.
+    build_tool = _detect_build_tool(project_workspace)
+    if build_tool is None:
+        # Marker detector saw at least one of pom.xml / build.gradle{,.kts}
+        # but neither resolves now — TOCTOU. Surface as misconfigured
+        # rather than crash the workflow.
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "Java workspace markers were detected but neither pom.xml "
+                "nor build.gradle{,.kts} is readable at the workspace root",
+            ),
+        )
+
+    # Step 3: JDK on PATH.
+    if shutil.which("java") is None:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "`java` not found on PATH; install JDK 17+ (see "
+                "scripts/dev-host-setup.md §5)",
+            ),
+        )
+
+    # Step 4: build tool binary on PATH (or gradlew wrapper).
+    if build_tool == "maven":
+        if shutil.which("mvn") is None:
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="java", engine_name="junit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "`mvn` not found on PATH; install Maven 3.9+ (see "
+                    "scripts/dev-host-setup.md §5)",
+                ),
+            )
+    else:  # gradle
+        has_wrapper = (project_workspace / "gradlew").is_file()
+        if shutil.which("gradle") is None and not has_wrapper:
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="java", engine_name="junit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "`gradle` not found on PATH and no `./gradlew` wrapper "
+                    "in workspace; install Gradle 7.6+ (see "
+                    "scripts/dev-host-setup.md §5) or commit the wrapper",
+                ),
+            )
+
+    # Step 5: Jupiter declared.
+    if not _detects_jupiter_in_manifest(project_workspace, build_tool):
+        # JUnit 4 / TestNG diagnostic specificity: when Jupiter is
+        # missing AND the manifest carries JUnit 4 or TestNG, surface
+        # the specific framework rather than the generic
+        # `missing-jupiter` so the user knows the actual blocker.
+        if _detects_junit4_in_manifest(project_workspace, build_tool):
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="java", engine_name="junit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "JUnit 4 detected (artifactId=junit, version=4.x); "
+                    "Nove Test supports JUnit 5 (Jupiter) only — migrate "
+                    "via the JUnit Vintage Engine or upgrade tests to "
+                    "Jupiter",
+                ),
+            )
+        if _detects_testng_in_manifest(project_workspace, build_tool):
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="java", engine_name="junit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "TestNG detected (artifactId=testng); Nove Test "
+                    "currently supports JUnit 5 only — TestNG support is "
+                    "deferred to a future cycle",
+                ),
+            )
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "JUnit Jupiter (junit-jupiter) is not declared in the "
+                "project's dependencies; add it to the build manifest",
+            ),
+        )
+
+    # Step 6/7: JUnit 4 / TestNG present alongside Jupiter — surface a
+    # specific reject so the user knows the conflict, even though
+    # Jupiter would technically run. (D5 + §10 row 6/7.)
+    if _detects_junit4_in_manifest(project_workspace, build_tool):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "JUnit 4 detected alongside Jupiter; Nove Test supports "
+                "JUnit 5 only — remove the JUnit 4 dependency (or run "
+                "tests under JUnit Vintage Engine explicitly)",
+            ),
+        )
+    if _detects_testng_in_manifest(project_workspace, build_tool):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="java", engine_name="junit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "TestNG detected alongside Jupiter; Nove Test currently "
+                "supports JUnit 5 only — remove the TestNG dependency",
+            ),
+        )
+
+    # Step 8: ready. Best-effort version capture.
+    engine_version = _detect_jupiter_version_for_readiness(
+        project_workspace, build_tool
+    )
+    return EngineReadinessResult(
+        state="ready",
+        engine_context=NativeEngineContext(
+            ecosystem="java",
+            engine_name="junit",
+            engine_version=engine_version,
+        ),
+        evidence=candidate.evidence,
+        issues=(),
+    )
+
+
+_JUPITER_INLINE_VERSION_MAVEN_RE = re.compile(
+    r"<artifactId>\s*junit-jupiter(?:-[a-z]+)?\s*</artifactId>\s*"
+    r"<version>\s*([\d\.]+)\s*</version>",
+    re.IGNORECASE | re.DOTALL,
+)
+_JUPITER_PROPERTY_VERSION_MAVEN_RE = re.compile(
+    r"<junit\.jupiter\.version>\s*([\d\.]+)\s*</junit\.jupiter\.version>",
+    re.IGNORECASE,
+)
+_JUPITER_VERSION_GRADLE_PROBE_RE = re.compile(
+    r"org\.junit\.jupiter[:.\s]junit-jupiter[^\"']*['\"]\s*[,:]?\s*['\"]?"
+    r"([0-9][\d\.]*)",
+    re.IGNORECASE,
+)
+
+
+def _detect_jupiter_version_for_readiness(
+    workspace: Path, build_tool: str,
+) -> str | None:
+    """Mirrors the adapter's `_detect_jupiter_version_*` for readiness use.
+
+    Duplicated rather than imported to avoid circular import (readiness
+    already imports detection helpers from the adapter; the version
+    parse here uses regexes specific to the readiness context).
+    """
+
+    if build_tool == "maven":
+        content = ""
+        path = workspace / "pom.xml"
+        if path.is_file():
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+        match = _JUPITER_PROPERTY_VERSION_MAVEN_RE.search(content)
+        if match:
+            return match.group(1)
+        inline = _JUPITER_INLINE_VERSION_MAVEN_RE.search(content)
+        return inline.group(1) if inline else None
+    if build_tool == "gradle":
+        content = ""
+        for fname in ("build.gradle", "build.gradle.kts"):
+            path = workspace / fname
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    break
+                except OSError:
+                    continue
+        match = _JUPITER_VERSION_GRADLE_PROBE_RE.search(content)
+        return match.group(1) if match else None
+    return None
 
 
 def _parse_cargo_version(cargo_version_output: str) -> str | None:

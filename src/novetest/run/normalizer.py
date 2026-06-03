@@ -62,6 +62,10 @@ def normalize_native_result(
         status, summary, test_results = _normalize_cargo_payload(
             native_result.payload, returncode=native_result.returncode
         )
+    elif engine_name == "junit":
+        status, summary, test_results = _normalize_junit_payload(
+            native_result.payload, returncode=native_result.returncode
+        )
     else:
         raise AdapterInvocationError(
             f"normalize_native_result has no handler for engine={engine_name!r}",
@@ -613,6 +617,139 @@ def _aggregate_cargo_status(
     """
 
     failures = sum(1 for tr in test_results if tr.outcome == "failed")
+    if failures:
+        return "failed"
+    if returncode == 0:
+        return "passed"
+    return "errored"
+
+
+# ---------------------------------------------------------------------------
+# JUnit payload normalization (Maven Surefire / Gradle JUnit XML)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_junit_payload(
+    payload: Mapping[str, Any],
+    *,
+    returncode: int,
+) -> tuple[str, dict[str, int], tuple[TestResult, ...]]:
+    """Normalize the junit adapter's payload into Run Record components.
+
+    Payload shape (set by `junit_adapter.run_junit` per task brief §1.4):
+
+    ``{"build_tool": "maven"|"gradle",
+       "build_tool_version": "<mvn -v or gradle --version>",
+       "jupiter_version": "<5.10.x | 5.11.x | ...>",
+       "jdk_version": "<java -version major>",
+       "reports": [{"path": ..., "format": ..., "module": ...}, ...],
+       "tests": [{"identity", "unique_id", "status", "duration_ms",
+                  "failure": {message, type, stack} | None,
+                  "stdout", "stderr", "module"?}, ...],
+       "summary": {"total", "passed", "failed", "skipped", "errored"},
+       "failure_logs": {"<identity>": "<rel path>"},
+       "warnings": [{"kind", "message"}, ...]}``
+
+    Status aggregation mirrors gotest/cargo:
+    - Any failing OR errored test → ``"failed"``.
+    - No failing/errored tests, returncode == 0 → ``"passed"``.
+    - No failing/errored tests, returncode != 0 → ``"errored"`` (build
+      / harness failure after some tests ran).
+    """
+
+    tests_raw = payload.get("tests")
+    if not isinstance(tests_raw, list):
+        raise AdapterInvocationError(
+            "junit payload missing 'tests' array",
+            kind="unparseable-output",
+        )
+
+    failure_logs_raw = payload.get("failure_logs")
+    failure_logs: Mapping[str, str] = (
+        {str(k): str(v) for k, v in failure_logs_raw.items() if isinstance(v, str)}
+        if isinstance(failure_logs_raw, Mapping)
+        else {}
+    )
+
+    test_results: list[TestResult] = []
+    summary: dict[str, int] = {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errored": 0,
+    }
+    for entry in tests_raw:
+        if not isinstance(entry, Mapping):
+            continue
+        identity = str(entry.get("identity", ""))
+        if not identity:
+            continue
+        status = str(entry.get("status", "unknown"))
+
+        # `errored` and `failed` are normalized to the run record's
+        # outcome vocabulary `"errored"` / `"failed"` directly — JUnit
+        # XML's <error> vs <failure> distinction is preserved.
+        if status in summary:
+            summary[status] += 1
+
+        duration_raw = entry.get("duration_ms")
+        duration_ms = duration_raw if isinstance(duration_raw, int) else None
+
+        failure_reference: str | None = None
+        if status in ("failed", "errored"):
+            failure_reference = failure_logs.get(identity)
+            if failure_reference is None:
+                # Adapter elected not to write a per-test log (e.g.
+                # the <failure> element was empty). Surface the
+                # failure message inline for parity with pytest's
+                # inline failure_reference.
+                failure_payload = entry.get("failure")
+                if isinstance(failure_payload, Mapping):
+                    message = failure_payload.get("message")
+                    type_ = failure_payload.get("type")
+                    parts: list[str] = []
+                    if isinstance(type_, str) and type_:
+                        parts.append(type_)
+                    if isinstance(message, str) and message:
+                        parts.append(message)
+                    if parts:
+                        failure_reference = ": ".join(parts)
+
+        test_results.append(
+            TestResult(
+                node_id=identity,
+                outcome=status,
+                duration_ms=duration_ms,
+                failure_reference=failure_reference,
+            )
+        )
+
+    summary["total"] = len(test_results)
+
+    status_agg = _aggregate_junit_status(
+        returncode=returncode,
+        test_results=tuple(test_results),
+    )
+    return status_agg, summary, tuple(test_results)
+
+
+def _aggregate_junit_status(
+    *,
+    returncode: int,
+    test_results: tuple[TestResult, ...],
+) -> str:
+    """Decide passed / failed / errored from JUnit signals.
+
+    Maven/Gradle exit non-zero whenever a test failed OR a build step
+    after compile crashed. The split:
+    - Any failing/errored TestResult → ``"failed"``.
+    - No failing tests, returncode == 0 → ``"passed"``.
+    - No failing tests, returncode != 0 → ``"errored"``.
+    """
+
+    failures = sum(
+        1 for tr in test_results if tr.outcome in ("failed", "errored")
+    )
     if failures:
         return "failed"
     if returncode == 0:
