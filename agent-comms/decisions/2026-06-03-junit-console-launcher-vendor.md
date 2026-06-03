@@ -207,6 +207,68 @@ When PM writes the JUnit adapter task brief, it MUST:
    future adapter vendored assets follow this directory + NOTICE + package-data
    shape.
 
+## Future intent — vendoring removal as the ultimate target (CEO direction 2026-06-04)
+
+Per CEO direction on 2026-06-04, vendoring the Console Launcher is the
+**pragmatic v1 choice but NOT the desired end state**. The other five
+ecosystems (Python, JavaScript/TypeScript, Go, Rust, .NET) follow a
+consistent policy: Nove Test does not bundle any native tooling; the
+user installs the toolchain themselves, and absence surfaces as a
+structured `engine-misconfigured` warning with install guidance. JUnit
+currently deviates because the JUnit 5 ecosystem uniquely lacks a
+`--list-only` CLI surface in Maven Surefire / Gradle (only the JUnit
+Platform `discover` API exists, exposed solely by the Console
+Launcher).
+
+### Endgame
+
+Drop the `_vendor/` jar; route the absence of a user-installed Console
+Launcher into a JUnit-specific **feature degradation**, not a vendored
+workaround. The relevant degradation:
+
+- `novetest run --list` on a JUnit project where the user has not
+  installed `junit-platform-console-standalone` (on PATH or as a
+  Maven/Gradle dependency) emits `engine-misconfigured` of kind
+  `junit-list-unavailable` with the message "JUnit list-only mode
+  requires `junit-platform-console-standalone`; install or invoke
+  `novetest run` without `--list`."
+- `novetest run` (full execution) MUST remain unaffected — it already
+  routes through user Maven Surefire / Gradle and never touches the
+  Console Launcher.
+
+This re-aligns JUnit with the **fail-with-specific-message** pattern
+used in all other ecosystems (e.g. cargo's `cargo-nextest missing`
+warning, gotest's `go binary missing` warning) instead of vendoring
+around the gap.
+
+### Triggers to scope the removal cycle
+
+The vendoring stays in place until ALL of:
+
+1. `novetest run --list` verb has been formally designed (not yet in
+   any brief; today's vendoring carries the verb's contract implicitly).
+2. Real user feedback indicates `--list` is in actual use AND users
+   are willing to install Console Launcher when they need it.
+3. (Alternative) A Phase-2.5-era hardening cycle scopes the removal as
+   part of a broader "policy consistency" sweep across all ecosystems.
+
+### What does NOT change before removal
+
+- The hotfix cycle (`tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md`)
+  MUST NOT touch the vendoring — out of hotfix scope; re-opening the
+  vendoring surface would expand the cycle and re-introduce decision
+  risk during a defect-fix cycle.
+- The vendored-asset *pattern* (`_vendor/` directory convention,
+  `THIRD_PARTY_NOTICES.txt` attribution, `importlib.resources`
+  resolution, Hatchling force-include) remains established and may be
+  re-used by future cycles that DO need vendored helpers — the
+  removal removes only the JUnit Console Launcher specifically, not
+  the pattern.
+
+### Open Question tracking
+
+Tracked as `delivery-phasing.md` Open Question #21 (Post-MVP polish).
+
 ## Effective date
 
 2026-06-03.
