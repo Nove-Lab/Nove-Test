@@ -21,8 +21,10 @@ operation total at the engine boundary.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from novetest.coverage.istanbul_parser import parse_istanbul_json
+from novetest.coverage.jacoco_parser import parse_jacoco_xml
 from novetest.coverage.lcov_parser import parse_lcov
 from novetest.coverage.parser import CoverageJsonParseError, parse_coverage_json
 from novetest.coverage.persistence import write_coverage_facts
@@ -53,11 +55,22 @@ COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
 # ``src/novetest/run/adapters/cargo_adapter.py:311`` for the registration.
 COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
 
+# JUnit's adapter registers JaCoCo XML at yet another distinct key.
+# `coverage_xml` is shared with no other engine (pytest/jest also write
+# Cobertura XML alongside JSON but we always prefer the JSON path for
+# those engines). The junit branch in ``derive_coverage_facts``
+# dispatches on ``engine_name == "junit"`` and resolves THIS key.
+# Multi-module Maven workspaces register the FIRST module's XML on the
+# RunRecord and the derive branch re-globs siblings via the
+# ``metadata["multi_module"] == "true"`` flag.
+COVERAGE_JACOCO_XML_ARTIFACT_KEY = "coverage_xml"
+
 # Engine name the cargo adapter sets on its ``NativeResult`` /
 # ``RunRecord.engine_name``. The literal value is contractual — Run
 # team pins it in ``cargo_adapter.py``; the dispatch here matches
 # against it.
 _CARGO_ENGINE_NAME = "cargo-test"
+_JUNIT_ENGINE_NAME = "junit"
 
 
 def derive_coverage_facts(
@@ -91,6 +104,11 @@ def derive_coverage_facts(
     # the simple "JSON payload at coverage_json key" mental model.
     if record.engine_name == _CARGO_ENGINE_NAME:
         return _derive_cargo_lcov(store, record)
+    # JUnit uses JaCoCo XML at a third distinct key. Multi-module Maven
+    # workspaces re-glob siblings under the workspace root from inside
+    # the branch.
+    if record.engine_name == _JUNIT_ENGINE_NAME:
+        return _derive_junit_jacoco(store, record)
 
     rel_path = record.artifact_paths.get(COVERAGE_JSON_ARTIFACT_KEY)
     if not rel_path:
@@ -204,6 +222,98 @@ def _derive_cargo_lcov(
             # the same convention `derive_coverage_facts` uses to convert
             # Istanbul's absolute paths in the jest branch.
             workspace_root=store.path.parent,
+        )
+    except CoverageJsonParseError as exc:
+        return CoverageUnavailable(
+            reason=REASON_NATIVE_PAYLOAD_CORRUPT,
+            detail=str(exc),
+            run_reference=record.run_reference,
+        )
+
+    write_coverage_facts(store, fact_set)
+    return fact_set
+
+
+def _derive_junit_jacoco(
+    store: ProjectStore, record: RunRecord,
+) -> CoverageFactSet | CoverageUnavailable:
+    """Junit branch: parse the JaCoCo XML artifact(s) and persist facts.
+
+    Single-module Maven / Gradle: parse the one XML pointed to by
+    ``artifact_paths["coverage_xml"]``.
+
+    Multi-module Maven (``metadata["multi_module"] == "true"``): re-glob
+    ``<workspace_root>/*/target/site/jacoco/jacoco.xml`` so every
+    module's XML contributes a per-module-prefixed FileCoverage entry
+    to the shared CoverageFactSet. The per-module prefix matches the
+    module directory name relative to the workspace root, mirroring
+    brief §6 D2 ratification.
+
+    Same total-at-the-boundary contract as the LCOV / JSON paths:
+    ``CoverageUnavailable(missing-native-payload)`` for absent /
+    unregistered artifact, ``CoverageUnavailable(native-payload-corrupt)``
+    for malformed XML.
+    """
+
+    rel_path = record.artifact_paths.get(COVERAGE_JACOCO_XML_ARTIFACT_KEY)
+    if not rel_path:
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"RunRecord.artifact_paths has no "
+                f"{COVERAGE_JACOCO_XML_ARTIFACT_KEY!r} entry; this junit "
+                "run was executed without coverage collection, or the "
+                "user's project did not declare a JaCoCo plugin"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    primary_xml = store.path / rel_path
+    if not primary_xml.is_file():
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=f"Native JaCoCo XML payload not found on disk at {primary_xml}",
+            run_reference=record.run_reference,
+        )
+
+    workspace_root = store.path.parent
+    xml_paths: list[Path] = [primary_xml]
+    module_prefix_for: dict[str, str] = {}
+
+    multi_module_flag = record.metadata.get("multi_module")
+    if multi_module_flag == "true":
+        # Re-glob siblings. The workspace_root contains module subdirs;
+        # each holds target/site/jacoco/jacoco.xml. The primary_xml
+        # itself is one of these — re-discover all so the per-module
+        # prefix mapping is uniform.
+        xml_paths = []
+        for module_xml in sorted(
+            workspace_root.glob("*/target/site/jacoco/jacoco.xml")
+        ):
+            xml_paths.append(module_xml)
+            # target/site/jacoco/jacoco.xml → 4 levels up is the module dir
+            module_dir = module_xml.parents[3]
+            module_prefix_for[str(module_xml)] = module_dir.name
+        if not xml_paths:
+            # Multi-module flag set but no XMLs found — TOCTOU?
+            return CoverageUnavailable(
+                reason=REASON_MISSING_NATIVE_PAYLOAD,
+                detail=(
+                    f"multi_module=true on RunRecord but no per-module "
+                    f"jacoco.xml found under {workspace_root}/*/target/"
+                    f"site/jacoco/"
+                ),
+                run_reference=record.run_reference,
+            )
+
+    try:
+        fact_set = parse_jacoco_xml(
+            xml_paths,
+            run_reference=record.run_reference,
+            engine_name=record.engine_name,
+            ecosystem=record.ecosystem,
+            workspace_root=workspace_root,
+            module_prefix_for=module_prefix_for or None,
         )
     except CoverageJsonParseError as exc:
         return CoverageUnavailable(

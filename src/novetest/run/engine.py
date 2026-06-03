@@ -15,6 +15,7 @@ from novetest.models import RunRecord
 from novetest.run.adapters.cargo_adapter import run_cargo
 from novetest.run.adapters.gotest_adapter import run_gotest
 from novetest.run.adapters.jest_adapter import run_jest
+from novetest.run.adapters.junit_adapter import run_junit
 from novetest.run.adapters.pytest_adapter import run_pytest
 from novetest.run.engine_selector import select_native_engine
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
@@ -137,6 +138,13 @@ async def _invoke_adapter(
         )
     if engine_name == "cargo-test":
         return await run_cargo(
+            test_target,
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            collect_coverage=collect_coverage,
+        )
+    if engine_name == "junit":
+        return await run_junit(
             test_target,
             artifact_dir=artifact_dir,
             timeout=timeout,

@@ -59,6 +59,7 @@ def _ecosystem_for_workspace(workspace_path: object) -> str | None:
 _IMPLEMENTED_ECOSYSTEM_TO_ENGINE: dict[str, str] = {
     "python": "pytest",
     "javascript-typescript": "jest",
+    "java": "junit",
     "go": "go-test",
     "rust": "cargo-test",
 }
@@ -68,9 +69,9 @@ def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
     """Pick the Native Engine for a resolved Test Target.
 
     Returns a `NativeEngineContext` for any ecosystem with a shipping
-    adapter (python+pytest, javascript-typescript+jest, go+go-test,
-    rust+cargo-test). Any other detected-but-not-yet-implemented
-    ecosystem (java / dotnet) raises `EngineNotSupportedError`.
+    adapter (python+pytest, javascript-typescript+jest, java+junit,
+    go+go-test, rust+cargo-test). Any other detected-but-not-yet-
+    implemented ecosystem (dotnet) raises `EngineNotSupportedError`.
     Workspaces that match no supported ecosystem also raise — the caller
     is expected to gate on `assess_engine_readiness` first.
     """

@@ -20,6 +20,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/novetest"]
+# Vendored JUnit Platform Console Launcher jar + EPL-2.0 NOTICE file ship
+# inside the wheel. The Phase 2.5 JUnit adapter task brief (§1.1)
+# prescribed the setuptools `[tool.setuptools.package-data]` directive,
+# but this project uses Hatchling — the Hatchling-native equivalent is
+# the `force-include` block below, which is explicit even though
+# Hatchling would already include these files via the default
+# `packages` selection (they live under `src/novetest/...` and are not
+# gitignored). Per CEO-approved
+# `decisions/2026-06-03-junit-console-launcher-vendor.md` (closes Open
+# Question #5). Future vendored adapter helpers follow this same
+# `force-include` + `_vendor/THIRD_PARTY_NOTICES.txt` + sibling jar
+# pattern.
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/novetest/run/adapters/_vendor/junit-platform-console-standalone-1.11.4.jar" = "novetest/run/adapters/_vendor/junit-platform-console-standalone-1.11.4.jar"
+"src/novetest/run/adapters/_vendor/THIRD_PARTY_NOTICES.txt" = "novetest/run/adapters/_vendor/THIRD_PARTY_NOTICES.txt"
 
 [dependency-groups]
 dev = [
