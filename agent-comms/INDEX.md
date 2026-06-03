@@ -9,6 +9,7 @@ _(none)_
 
 ## Pending
 - [run-team-2026-06-03-phase2.5-junit-adapter.md](./tasks/run-team-2026-06-03-phase2.5-junit-adapter.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter)
+- [run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md](./tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter-hotfix)
 
 ## Blocked
 _(none)_
