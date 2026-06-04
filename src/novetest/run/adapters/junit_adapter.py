@@ -297,18 +297,41 @@ async def _run_maven(
             artifact_dir=artifact_dir,
         )
 
-    # Coverage glob + per-mode dispatch.
+    # Coverage glob + per-mode dispatch + stage.
     coverage_xml: Path | None = None
     if collect_coverage:
-        coverage_xml = _glob_jacoco_xml(workspace, multi_module_paths)
-        if coverage_xml is None and not has_jacoco:
-            # User asked for coverage but didn't declare JaCoCo —
-            # degrade gracefully: surface a warning, omit the coverage
-            # artifact, but DO return a successful NativeResult. The
-            # Coverage engine's `derive_coverage_facts` will then return
-            # a `missing-native-payload` outcome and the CLI surfaces
-            # that as an unavailable coverage report.
-            pass
+        if multi_module:
+            # Multi-module: stage every per-module XML preserving the
+            # module folder. ``coverage_xml`` points at the parent
+            # ``coverage/`` directory so D2's per-module glob works at
+            # the Coverage engine.
+            staged_any = False
+            for module_dir in multi_module_paths:
+                module_xml = (
+                    module_dir / "target" / "site" / "jacoco" / "jacoco.xml"
+                )
+                if module_xml.is_file():
+                    _stage_coverage_xml(
+                        module_xml,
+                        artifact_dir=artifact_dir,
+                        sub_path=module_dir.name,
+                    )
+                    staged_any = True
+            if staged_any:
+                coverage_xml = artifact_dir / "native" / "coverage"
+        else:
+            native_jacoco = workspace / "target" / "site" / "jacoco" / "jacoco.xml"
+            if native_jacoco.is_file():
+                coverage_xml = _stage_coverage_xml(
+                    native_jacoco,
+                    artifact_dir=artifact_dir,
+                )
+        # If `coverage_xml` is still None and the user did NOT declare
+        # JaCoCo: degrade gracefully — emit a `missing-jacoco` warning
+        # (handled by the warnings block below) and omit
+        # `artifact_paths["coverage_xml"]`. The Coverage engine's
+        # ``derive_coverage_facts`` then returns a `missing-native-
+        # payload` outcome.
 
     payload_warnings: list[dict[str, str]] = []
     if ambiguous:
@@ -353,14 +376,24 @@ async def _run_maven(
         "stdout": native_dir / STDOUT_LOG_FILENAME,
         "stderr": native_dir / STDERR_LOG_FILENAME,
     }
-    # `reports_dir` is the surface that downstream consumers can re-read
-    # without our parser. Multi-module workspaces have multiple reports
-    # dirs — we surface the FIRST one in artifact_paths (a single Path
-    # value) and the full list lives in `payload["reports"]`. This
-    # matches the cargo precedent of "one canonical artifact, full
-    # detail in payload".
+    # Stage the native reports directory under
+    # ``artifact_dir/native/reports/`` so ``artifact_paths["reports_dir"]``
+    # is a subpath of ``store.path`` — required by the orchestration
+    # layer's ``.relative_to(store.path)`` invariant (`workflows/run.py:
+    # 85-88`). Sibling adapters (pytest/jest/gotest/cargo) write their
+    # native artifacts directly under ``artifact_dir``; Maven writes
+    # under ``<workspace>/target/`` so we copy. Multi-module workspaces
+    # preserve the per-module folder under ``reports/<module>/`` so
+    # downstream attribution survives. The full module-aware list lives
+    # on ``payload["reports"]``.
     if report_locations:
-        artifact_paths["reports_dir"] = report_locations[0][0]
+        for native_reports, module_name in report_locations:
+            _stage_reports_dir(
+                native_reports,
+                artifact_dir=artifact_dir,
+                sub_path=module_name,
+            )
+        artifact_paths["reports_dir"] = artifact_dir / "native" / "reports"
     if coverage_xml is not None:
         artifact_paths["coverage_xml"] = coverage_xml
 
@@ -511,7 +544,13 @@ async def _run_gradle(
             / "jacocoTestReport.xml"
         )
         if candidate.is_file():
-            coverage_xml = candidate
+            # Gradle's source basename is `jacocoTestReport.xml`; we
+            # stage it as the canonical `jacoco.xml` so the Coverage
+            # engine has a single dispatch path across build tools.
+            coverage_xml = _stage_coverage_xml(
+                candidate,
+                artifact_dir=artifact_dir,
+            )
 
     payload_warnings: list[dict[str, str]] = []
     if ambiguous:
@@ -556,8 +595,15 @@ async def _run_gradle(
         "stdout": native_dir / STDOUT_LOG_FILENAME,
         "stderr": native_dir / STDERR_LOG_FILENAME,
     }
+    # Stage Gradle's native reports under
+    # ``artifact_dir/native/reports/`` so the path satisfies the
+    # orchestration layer's ``.relative_to(store.path)`` invariant
+    # (`workflows/run.py:85-88`). Gradle writes under
+    # ``<workspace>/build/test-results/test/`` which is NOT a subpath
+    # of ``store.path`` and would otherwise trigger a `cli-error`.
     if reports_dir.is_dir():
-        artifact_paths["reports_dir"] = reports_dir
+        _stage_reports_dir(reports_dir, artifact_dir=artifact_dir)
+        artifact_paths["reports_dir"] = artifact_dir / "native" / "reports"
     if coverage_xml is not None:
         artifact_paths["coverage_xml"] = coverage_xml
 
@@ -671,7 +717,7 @@ def _normalize_test_case(
     """
 
     classname = case.get("classname", "")
-    name = case.get("name", "")
+    name = _strip_trailing_parens(case.get("name", ""))
     identity = f"{classname}#{name}" if classname else name
     time_attr = case.get("time", "0")
     try:
@@ -763,6 +809,29 @@ def _summarize_tests(tests: list[dict[str, object]]) -> dict[str, int]:
         elif status == "errored":
             summary["errored"] += 1
     return summary
+
+
+def _strip_trailing_parens(name: str) -> str:
+    """Normalize a JUnit ``<testcase name>`` attribute across build tools.
+
+    Gradle 8+ (JUnit Platform 1.10+) JUnit XML reports include a literal
+    trailing ``()`` for parameterless methods (e.g. ``"testFoo()"``).
+    Maven Surefire strips them (emits ``"testFoo"``). We normalize to
+    the Maven-canonical no-parens form so ``identity`` is byte-stable
+    across build tools — otherwise ``run_record.failed_tests`` diverges
+    on the same source between Maven and Gradle, breaking downstream
+    Phase 4 (Localization) / Phase 5 (Replay) ``test_id`` lookups.
+
+    ONLY strips a literal trailing ``()`` pair. Parametrized JUnit 5
+    display names like ``"testFoo(int)[1] => 1"`` or signature forms
+    like ``"testBar(java.lang.String)"`` are preserved verbatim — the
+    parens there carry signature information that downstream
+    consumers may want to render.
+    """
+
+    if name.endswith("()"):
+        return name[:-2]
+    return name
 
 
 def _safe_failure_log_name(identity: str) -> str:
@@ -984,6 +1053,82 @@ def _detect_jacoco_version_gradle(build_content: str) -> str | None:
     return None (informational metadata only)."""
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Native-artifact staging (subpath-invariant enforcement)
+# ---------------------------------------------------------------------------
+#
+# Maven Surefire writes JUnit XML under ``<workspace>/target/surefire-
+# reports/`` and JaCoCo XML under ``<workspace>/target/site/jacoco/``.
+# Gradle writes JUnit XML under ``<workspace>/build/test-results/test/``
+# and JaCoCo XML under ``<workspace>/build/reports/jacoco/test/``. None
+# of those paths sit under the Project Store (`store.path`), so they
+# violate the orchestration layer's ``.relative_to(store.path)``
+# invariant (``workflows/run.py:85-88``). We copy the native outputs
+# under ``artifact_dir/native/`` so every entry in
+# ``NativeResult.artifact_paths`` is a subpath of ``store.path``,
+# matching what pytest / jest / gotest / cargo adapters already do.
+#
+# We copy (`shutil.copytree` / `shutil.copy2`) rather than move so the
+# user's source tree is never touched and a retry won't clobber the
+# native build dir on the second pass.
+
+
+def _stage_reports_dir(
+    src: Path,
+    *,
+    artifact_dir: Path,
+    sub_path: str | None = None,
+) -> Path:
+    """Copy ``src`` into ``artifact_dir/native/reports[/<sub_path>]``.
+
+    Returns the staged directory. Existing destination contents are
+    removed first so a retry call within the same run produces a clean
+    copy (``shutil.copytree`` rejects pre-existing destinations on
+    Python < 3.8; ``dirs_exist_ok=True`` is the modern equivalent and
+    keeps the helper idempotent within a single run).
+
+    ``sub_path`` is used by Maven multi-module workspaces: every module's
+    ``target/surefire-reports/`` lands under
+    ``artifact_dir/native/reports/<module>/`` so per-module attribution
+    is preserved on disk for downstream readers.
+    """
+
+    staged_root = artifact_dir / "native" / "reports"
+    dest = staged_root / sub_path if sub_path else staged_root
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+    return dest
+
+
+def _stage_coverage_xml(
+    src: Path,
+    *,
+    artifact_dir: Path,
+    sub_path: str | None = None,
+) -> Path:
+    """Copy ``src`` into ``artifact_dir/native/coverage/[<sub_path>/]jacoco.xml``.
+
+    Returns the staged file path. Canonical destination basename is
+    ``jacoco.xml`` regardless of the source name — Gradle's source file
+    is ``jacocoTestReport.xml`` while Maven's is ``jacoco.xml``; the
+    Coverage engine dispatches on the engine name, not the basename, so
+    we collapse both onto one canonical name so a future glob over the
+    coverage directory has a stable shape.
+
+    ``sub_path`` (e.g. a Maven module name) lands one directory level
+    above the file, matching the multi-module D2 contract per
+    ``decisions/2026-06-03``.
+    """
+
+    staged_dir = artifact_dir / "native" / "coverage"
+    if sub_path:
+        staged_dir = staged_dir / sub_path
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    dest = staged_dir / "jacoco.xml"
+    shutil.copy2(src, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------

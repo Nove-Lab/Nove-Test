@@ -27,6 +27,9 @@ from novetest.run.adapters.junit_adapter import (
     _normalize_test_case,
     _parse_surefire_reports_dir,
     _safe_failure_log_name,
+    _stage_coverage_xml,
+    _stage_reports_dir,
+    _strip_trailing_parens,
     _summarize_tests,
 )
 
@@ -507,8 +510,219 @@ class TestNormalizeTestCase:
             artifact_dir=tmp_path,
             failure_logs={},
         )
-        # Identity preserves the full display name verbatim.
+        # Identity preserves the full display name verbatim (only a
+        # *literal trailing* `()` is stripped — see TestStripTrailingParens).
         assert entry["identity"] == "X#testFoo(int)[1] => 1"
+
+    def test_gradle_trailing_parens_stripped(self, tmp_path: Path) -> None:
+        """Defect 3 hotfix (2026-06-04). Gradle 8+ JUnit XML emits
+        ``<testcase name="testFoo()">`` (parens preserved for
+        parameterless methods); Maven Surefire emits the same case as
+        ``name="testFoo"``. ``_normalize_test_case`` must strip the
+        literal trailing `()` so the resulting `identity` is byte-
+        stable across build tools."""
+
+        import xml.etree.ElementTree as ET
+
+        gradle_case = ET.fromstring(
+            '<testcase classname="com.example.CalculatorTest"'
+            ' name="testSubtract()" time="0.002"/>'
+        )
+        entry_gradle = _normalize_test_case(
+            gradle_case,
+            module_name=None,
+            report_path=tmp_path / "TEST-G.xml",
+            failures_dir=tmp_path / "failures",
+            artifact_dir=tmp_path,
+            failure_logs={},
+        )
+        maven_case = ET.fromstring(
+            '<testcase classname="com.example.CalculatorTest"'
+            ' name="testSubtract" time="0.002"/>'
+        )
+        entry_maven = _normalize_test_case(
+            maven_case,
+            module_name=None,
+            report_path=tmp_path / "TEST-M.xml",
+            failures_dir=tmp_path / "failures",
+            artifact_dir=tmp_path,
+            failure_logs={},
+        )
+        assert entry_gradle["identity"] == "com.example.CalculatorTest#testSubtract"
+        assert entry_maven["identity"] == "com.example.CalculatorTest#testSubtract"
+        assert entry_gradle["identity"] == entry_maven["identity"]
+
+    def test_gradle_failure_log_key_uses_stripped_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``failure_logs`` dict keys MUST also use the stripped
+        identity — otherwise downstream consumers (normalizer's
+        per-test ``failure_reference`` lookup) miss the log."""
+
+        import xml.etree.ElementTree as ET
+
+        case_xml = (
+            '<testcase classname="com.example.CalculatorTest"'
+            ' name="testSubtract()" time="0.002">'
+            '<failure message="boom" type="AssertionError">stack here</failure>'
+            "</testcase>"
+        )
+        case = ET.fromstring(case_xml)
+        failure_logs: dict[str, str] = {}
+        _normalize_test_case(
+            case,
+            module_name=None,
+            report_path=tmp_path / "TEST.xml",
+            failures_dir=tmp_path / "failures",
+            artifact_dir=tmp_path,
+            failure_logs=failure_logs,
+        )
+        # The key uses the stripped form, NOT the original with parens.
+        assert "com.example.CalculatorTest#testSubtract" in failure_logs
+        assert "com.example.CalculatorTest#testSubtract()" not in failure_logs
+
+
+# ---------------------------------------------------------------------------
+# _strip_trailing_parens (Defect 3 — cross-build-tool identity stability)
+# ---------------------------------------------------------------------------
+
+
+class TestStripTrailingParens:
+    def test_maven_style_passthrough(self) -> None:
+        assert _strip_trailing_parens("testFoo") == "testFoo"
+
+    def test_gradle_style_stripped(self) -> None:
+        assert _strip_trailing_parens("testFoo()") == "testFoo"
+
+    def test_parametrized_signature_preserved(self) -> None:
+        """JUnit 5 parametrized tests carry the parameter type list
+        inside the display name's parens — that text is NOT a literal
+        trailing `()`, so it must be preserved verbatim."""
+
+        assert (
+            _strip_trailing_parens("testFoo(int)[1] arg=5")
+            == "testFoo(int)[1] arg=5"
+        )
+
+    def test_signature_form_preserved(self) -> None:
+        """Some Surefire / Gradle plugins emit Java signature in the
+        name (`name="testBar(java.lang.String)"`). The signature ends
+        with `)` but the name does NOT end with the empty `()` pair,
+        so it stays intact."""
+
+        assert (
+            _strip_trailing_parens("testBar(java.lang.String)")
+            == "testBar(java.lang.String)"
+        )
+
+    def test_empty_string_passthrough(self) -> None:
+        assert _strip_trailing_parens("") == ""
+
+    def test_bare_double_parens_collapse(self) -> None:
+        """Edge: a `name="()"` would strip to empty. Acceptable; an
+        empty `name` is already pathological for JUnit XML."""
+
+        assert _strip_trailing_parens("()") == ""
+
+
+# ---------------------------------------------------------------------------
+# _stage_reports_dir + _stage_coverage_xml (Defects 1 + 2 closure)
+# ---------------------------------------------------------------------------
+
+
+class TestStageReportsDir:
+    def test_stages_under_artifact_dir(self, tmp_path: Path) -> None:
+        """Defect 1 fix: the staged path MUST be a subpath of
+        ``artifact_dir`` so the orchestration layer's
+        ``.relative_to(store.path)`` rewrite holds. Otherwise the CLI
+        envelope hard-fails with `cli-error` on every JUnit run."""
+
+        src = tmp_path / "target" / "surefire-reports"
+        src.mkdir(parents=True)
+        (src / "TEST-Foo.xml").write_text("<testsuite/>", encoding="utf-8")
+
+        artifact_dir = tmp_path / ".novetest" / "run" / "artifacts" / "run_X"
+        staged = _stage_reports_dir(src, artifact_dir=artifact_dir)
+
+        assert staged == artifact_dir / "native" / "reports"
+        assert staged.is_relative_to(artifact_dir)
+        assert (staged / "TEST-Foo.xml").is_file()
+        # Source is untouched (we copy, never move).
+        assert (src / "TEST-Foo.xml").is_file()
+
+    def test_multi_module_preserves_module_subpath(self, tmp_path: Path) -> None:
+        """Maven multi-module: each module stages under
+        ``reports/<module_name>/`` so per-module attribution survives
+        on disk."""
+
+        src_a = tmp_path / "module-a" / "target" / "surefire-reports"
+        src_a.mkdir(parents=True)
+        (src_a / "TEST-A.xml").write_text("<testsuite/>", encoding="utf-8")
+        src_b = tmp_path / "module-b" / "target" / "surefire-reports"
+        src_b.mkdir(parents=True)
+        (src_b / "TEST-B.xml").write_text("<testsuite/>", encoding="utf-8")
+
+        artifact_dir = tmp_path / "art"
+        _stage_reports_dir(src_a, artifact_dir=artifact_dir, sub_path="module-a")
+        _stage_reports_dir(src_b, artifact_dir=artifact_dir, sub_path="module-b")
+
+        reports_root = artifact_dir / "native" / "reports"
+        assert (reports_root / "module-a" / "TEST-A.xml").is_file()
+        assert (reports_root / "module-b" / "TEST-B.xml").is_file()
+
+    def test_idempotent_on_retry(self, tmp_path: Path) -> None:
+        """Staging twice within the same run (a retry / re-run within
+        the same artifact_dir) does not raise — ``dirs_exist_ok=True``
+        keeps the helper safe."""
+
+        src = tmp_path / "target" / "surefire-reports"
+        src.mkdir(parents=True)
+        (src / "TEST-X.xml").write_text("<testsuite/>", encoding="utf-8")
+
+        artifact_dir = tmp_path / "art"
+        _stage_reports_dir(src, artifact_dir=artifact_dir)
+        # Should not raise.
+        staged = _stage_reports_dir(src, artifact_dir=artifact_dir)
+        assert (staged / "TEST-X.xml").is_file()
+
+
+class TestStageCoverageXml:
+    def test_canonicalizes_basename_to_jacoco_xml(self, tmp_path: Path) -> None:
+        """Gradle emits `jacocoTestReport.xml`; Maven emits `jacoco.xml`.
+        Staging collapses both onto the canonical destination basename
+        `jacoco.xml` so the Coverage engine's dispatch is uniform."""
+
+        gradle_src = tmp_path / "build" / "reports" / "jacoco" / "test"
+        gradle_src.mkdir(parents=True)
+        gradle_xml = gradle_src / "jacocoTestReport.xml"
+        gradle_xml.write_text(
+            "<?xml version='1.0'?><report/>", encoding="utf-8"
+        )
+
+        artifact_dir = tmp_path / ".novetest" / "art"
+        staged = _stage_coverage_xml(gradle_xml, artifact_dir=artifact_dir)
+
+        assert staged == artifact_dir / "native" / "coverage" / "jacoco.xml"
+        assert staged.is_relative_to(artifact_dir)
+        assert staged.read_text(encoding="utf-8").startswith("<?xml")
+
+    def test_multi_module_sub_path(self, tmp_path: Path) -> None:
+        """Maven multi-module stages each module's XML under
+        ``coverage/<module>/jacoco.xml``."""
+
+        src = tmp_path / "module-a" / "target" / "site" / "jacoco" / "jacoco.xml"
+        src.parent.mkdir(parents=True)
+        src.write_text("<report/>", encoding="utf-8")
+
+        artifact_dir = tmp_path / "art"
+        staged = _stage_coverage_xml(
+            src, artifact_dir=artifact_dir, sub_path="module-a"
+        )
+
+        assert (
+            staged
+            == artifact_dir / "native" / "coverage" / "module-a" / "jacoco.xml"
+        )
 
 
 # ---------------------------------------------------------------------------
