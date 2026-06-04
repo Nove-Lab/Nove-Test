@@ -10,7 +10,10 @@ related:
   - agent-comms/decisions/2026-05-25-supported-engine-matrix.md
   - agent-comms/decisions/2026-06-03-junit-console-launcher-vendor.md
   - agent-comms/findings/manual-test-team-2026-06-04-phase2.5-junit-adapter.md
+  - agent-comms/findings/manual-test-team-2026-06-04-phase2.5-junit-adapter-hotfix.md
   - agent-comms/tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md
+  - agent-comms/tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-3.md
+  - agent-comms/questions/main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md
   - scripts/dev-host-setup.md
 ---
 
@@ -119,6 +122,82 @@ toolchain. On Manual Test's equipped host the gate evaluates `False`,
 the test runs rather than skips, and the orchestration `.relative_to`
 invariant is exercised end-to-end.
 
+### 2.5. Originating team's pre-handoff gate is also bound when the slice touches adapter integration tests
+
+> **Amended 2026-06-04 (late-day)** in response to the JUnit hotfix-2 cycle's
+> pre-merge gate failure on the equipped host (Main Branch's gate
+> caught a CLI-smoke envelope-path bug and an unresolved Gradle
+> coverage staging defect — see
+> `questions/main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md`).
+> Same masking class as Defect 4 in hotfix #1: an integration-level
+> assertion shipped without ever being exercised end-to-end because
+> Run team's pre-handoff gate ran on a JDK-less host where the smoke
+> skipped. The §1 + §2 + §4 verdict-blocking gates at Manual Test
+> caught it both times, but at significant cycle cost (two re-pass
+> cycles). The originating-team-side equipping requirement closes the
+> remaining leakage path.
+
+When a Run-team slice modifies either of the following paths, the
+team's **own pre-handoff gate** MUST run on a host with the relevant
+toolchain installed per `scripts/dev-host-setup.md`:
+
+- `src/novetest/run/adapters/<engine>_adapter.py`
+- `tests/integration/run/test_<engine>_*.py`
+
+The diff-classification heuristic: if `git diff origin/main --name-only`
+matches either glob, the equip-and-exercise §2.5 mandate is in force.
+
+Concrete requirements at pre-handoff time:
+
+1. The toolchain CLI is on PATH and meets the matrix floor
+   (`decisions/2026-05-25-supported-engine-matrix.md`).
+2. `uv run pytest -q tests/integration/run/test_<engine>_*.py` shows
+   the engine's integration cases **executing** — not all skipped.
+   At least one CLI-level smoke (the §2 template) executes the
+   `subprocess.run(["uv", "run", "novetest", ...])` happy-path against
+   the canonical fixture and asserts the envelope shape.
+3. If Run team's local environment cannot be equipped (license
+   restriction, container limitation, missing distro package), the
+   work **pauses** and the team files a `questions/` entry to PM
+   rather than handing off an un-exercised diff. PM either dispatches
+   the equipping step itself or hands the slice to a host that can
+   equip (Manual Test's host is the default fallback).
+4. The handoff document includes a "Pre-handoff gate environment"
+   section reporting the detected toolchain versions and the
+   pass/skip/fail counts for the engine-specific integration cases
+   (skip count for those cases MUST be 0; failure count MUST be 0).
+
+Main Branch's pre-merge gate continues to act as the second layer; its
+equipping mandate was implicit-but-binding from this decision's §1 +
+§4. This amendment makes the **originating team's gate** the first
+layer, so the same class of defect cannot leak through Main Branch
+again. Manual Test stays the third (verdict) layer.
+
+### 2.5.1 What does NOT count as compliance
+
+The diff-classification heuristic considers only the file globs above.
+The following do NOT satisfy §2.5:
+
+- Unit tests that stub `subprocess.run` and assert argv shape only.
+  Argv assertion is necessary but not sufficient — it confirms the
+  call is *issued*, not that the underlying tool's runtime semantics
+  produce the expected on-disk artifact (the F2 Gradle defect on
+  hotfix #2 is exactly this gap: argv is correct, `--continue` is
+  present, but `:jacocoTestReport` never runs).
+- Integration tests that import the adapter module and call its
+  internals directly (e.g. `run_junit(...)` rather than
+  `subprocess.run(["uv", "run", "novetest", "run"], ...)`). Those
+  bypass the orchestration layer's `.relative_to(store.path)`
+  invariant and the JSON envelope projection.
+- A CLI-level smoke whose body executes but whose assertions reference
+  an envelope shape that the actual CLI does not produce. The smoke
+  must dereference real envelope fields and the dereference must
+  succeed against the canonical fixture's output (this is the F1
+  defect on hotfix #2).
+
+In short: the pre-handoff gate must produce a positive `1 passed` on
+the smoke against a real subprocess + real toolchain + real envelope.
+
 ### 3. Verification doc template carries the requirement
 
 `agent-comms/README.md` §"Standard body sections (per type) → verifications/"
@@ -174,7 +253,11 @@ retroactively alter the handling of the existing cargo gap:
   plugin floor" pre-flight pattern.
 - **Run team** — when writing new adapter task briefs and integration tests,
   includes the CLI-level smoke pattern from §2 and the host equipping
-  pointer to `scripts/dev-host-setup.md`.
+  pointer to `scripts/dev-host-setup.md`. **Also (per §2.5):** when the
+  team's diff modifies `src/novetest/run/adapters/<engine>_adapter.py`
+  OR `tests/integration/run/test_<engine>_*.py`, the team's pre-handoff
+  gate runs on an equipped host; otherwise the work pauses and a
+  `questions/` entry is filed to PM.
 - **PM team** — when writing new adapter task briefs, includes the
   equip-and-exercise expectation in the brief's "Re-verification" section
   and references this decision file by name.
@@ -203,9 +286,14 @@ retroactively alter the handling of the existing cargo gap:
 
 ## Effective date
 
-2026-06-04. Applies immediately to the JUnit hotfix re-verification
-(`tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md`) and to all
-subsequent adapter cycles.
+2026-06-04 (§§1, 2, 3, 4, 5). Applies immediately to the JUnit hotfix
+re-verification (`tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md`)
+and to all subsequent adapter cycles.
+
+**2026-06-04 late-day amendment (§2.5)** — applies immediately to the JUnit
+hotfix-3 cycle (`tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-3.md`)
+and to all subsequent Run-team slices that match the diff-classification
+heuristic in §2.5.
 
 ## Supersedes
 
