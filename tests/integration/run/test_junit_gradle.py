@@ -189,4 +189,12 @@ def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
     assert envelope["schema"] == "novetest/v1"
     assert isinstance(envelope["ok"], bool)
     if envelope["ok"]:
-        assert envelope["data"]["run_record"]["engine_name"] == "junit"
+        # See Maven sibling for full rationale: envelope shape is
+        # ``data.memory_entry.run_record`` per ``src/novetest/orchestration/
+        # workflows/run.py:32-46`` + ``src/novetest/cli/app.py:269-281``.
+        # The hotfix-2 dereference ``data.run_record`` was wrong and was
+        # caught by Main Branch's equipped-host pre-merge gate.
+        assert (
+            envelope["data"]["memory_entry"]["run_record"]["engine_name"]
+            == "junit"
+        )
