@@ -9,11 +9,25 @@ contract `decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md`).
 Runtime expectation: ~30–90 seconds on first run (Maven downloads
 JUnit Jupiter from Maven Central into the per-user `~/.m2/repository/`
 cache). Subsequent runs use the warm cache and finish in ~10–15 s.
+
+CLI-level smoke (Defect 4 closure per hotfix 2026-06-04): the
+``test_cli_smoke_run_emits_envelope`` case spawns the real CLI via
+``subprocess.run`` to exercise the orchestration layer's
+``.relative_to(store.path)`` invariant. Without this, adapter
+contract violations like Defect 1 (reports_dir set to a native
+out-of-store path) remain invisible to the team's local gate AND
+Main Branch's pre-merge gate — the original 2026-06-03 JUnit cycle
+was verdict-failed by Manual Test exactly because the adapter-
+direct integration tests bypassed the wire surface.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -91,6 +105,21 @@ async def test_basic_run_emits_native_result(
     assert "stderr" in result.artifact_paths
     assert "reports_dir" in result.artifact_paths
 
+    # Defect 1 hotfix (2026-06-04): the reports_dir MUST be staged under
+    # the per-run artifact_dir (a subpath of `store.path`), NOT the
+    # native Maven `target/surefire-reports/` directory. Otherwise the
+    # orchestration layer's ``.relative_to(store.path)`` rewrite at
+    # ``workflows/run.py:85-88`` raises and the CLI returns a
+    # `cli-error` envelope on every JUnit run.
+    reports_dir = result.artifact_paths["reports_dir"]
+    assert reports_dir.is_relative_to(artifact_dir), (
+        f"reports_dir {reports_dir} is not under artifact_dir {artifact_dir}; "
+        "Defect 1 regression — adapter must stage under artifact_dir/native/reports"
+    )
+    assert reports_dir == artifact_dir / "native" / "reports"
+    # The staged dir actually contains the JUnit XML the parser read.
+    assert any(reports_dir.glob("TEST-*.xml"))
+
     # Metadata pin for the vendored launcher version (always present).
     assert result.metadata["console_launcher_version"] == "1.11.4"
     assert result.metadata["build_tool"] == "maven"
@@ -120,3 +149,72 @@ async def test_coverage_run_emits_jacoco_xml(
     xml_text = coverage_xml.read_text(encoding="utf-8")
     assert "<report" in xml_text
     assert "Calculator" in xml_text
+
+    # Defect 2 hotfix (2026-06-04): coverage_xml is staged under
+    # ``artifact_dir/native/coverage/jacoco.xml`` — not the native Maven
+    # ``target/site/jacoco/jacoco.xml`` — so the orchestration layer's
+    # ``.relative_to(store.path)`` rewrite holds. (The original cycle
+    # never populated `coverage_xml` at all, even with JaCoCo wired in
+    # the fixture's pom.xml.)
+    assert coverage_xml.is_relative_to(artifact_dir)
+    assert coverage_xml == artifact_dir / "native" / "coverage" / "jacoco.xml"
+
+
+# ---------------------------------------------------------------------------
+# CLI-level smoke (Defect 4 closure — Manual Test 2026-06-04 findings)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
+    """End-to-end CLI smoke — catches Defect-1-class regressions.
+
+    Calls ``python -m novetest run`` via subprocess (not ``run_junit``
+    directly) so the orchestration layer's ``.relative_to(store.path)``
+    invariant is actually exercised. The 2026-06-03 cycle landed a
+    contract violation that was structurally invisible to the
+    adapter-direct integration tests above — this case forecloses the
+    regression class.
+
+    Mirrors the canonical pattern from
+    ``tests/integration/orchestration/conftest.py::run_cli_in``: same
+    interpreter (``sys.executable``), ``-m novetest``, ``NOVETEST_OUTPUT
+    =json`` for stable envelope shape, UTF-8 decode.
+    """
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["NOVETEST_OUTPUT"] = "json"
+
+    init_result = subprocess.run(
+        [sys.executable, "-m", "novetest", "init"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert init_result.returncode == 0, init_result.stderr
+
+    run_result = subprocess.run(
+        [sys.executable, "-m", "novetest", "run"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    # Exit 0 (all passed) or 1 (some test failed) are both acceptable;
+    # exit >= 2 is a CLI-error and indicates a contract violation like
+    # Defect 1.
+    assert run_result.returncode in (0, 1), (
+        f"CLI returned exit {run_result.returncode}; "
+        f"expected 0 (pass) or 1 (some test failed). "
+        f"stdout: {run_result.stdout!r} stderr: {run_result.stderr!r}"
+    )
+    envelope = json.loads(run_result.stdout)
+    assert envelope["schema"] == "novetest/v1"
+    assert isinstance(envelope["ok"], bool)
+    if envelope["ok"]:
+        assert envelope["data"]["run_record"]["engine_name"] == "junit"
