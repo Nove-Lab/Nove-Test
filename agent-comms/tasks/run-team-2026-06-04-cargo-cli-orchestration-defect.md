@@ -4,9 +4,7 @@ to: novetest-run-team
 type: task
 created: 2026-06-04
 slug: cargo-cli-orchestration-defect
-status: blocked
-blocked-by:
-  - agent-comms/tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-2.md
+status: pending
 related:
   - agent-comms/findings/manual-test-team-2026-06-04-host-equip.md
   - agent-comms/decisions/2026-06-04-equip-and-exercise-for-adapter-cycles.md
@@ -17,13 +15,15 @@ related:
 
 # Cargo adapter — CLI orchestration path returns `adapter-unparseable-output` on the canonical fixture (P1) + build-failure heuristic misfires (P2)
 
-## ⛔ DO NOT START UNTIL JUNIT HOTFIX CYCLE CLOSES
+## ✅ UNBLOCKED 2026-06-04 — JUNIT CYCLE CLOSED CLEANLY
 
-`status: blocked` is intentional. The JUnit hotfix
-(`tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md`) is your
-priority-1 work. When that ships and Manual Test re-passes JUnit, PM
-will flip THIS brief to `status: pending` and the CEO will dispatch.
-Until then, do not branch a worktree for this work.
+`status: pending` since 2026-06-04. The JUnit hotfix-3 cycle closed
+with Manual Test verdict `passed` on `ddfc5b9` (see
+`agent-comms/history/2026-06-04-phase2.5-junit-adapter-three-hotfix-cycle.md`).
+CEO may dispatch Run team to pick up this brief whenever ready. The
+equip-and-exercise §2.5 mandate (added 2026-06-04) applies to this
+cycle as well — Run team's pre-handoff gate runs on the equipped
+host (Rust toolchain already present per host-equip findings).
 
 ## TL;DR
 
