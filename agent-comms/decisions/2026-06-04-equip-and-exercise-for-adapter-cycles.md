@@ -79,6 +79,16 @@ Manual Test pass MUST:
 
 ### 2. Run team adds the CLI-level smoke at adapter-introduction time
 
+> **Errata (2026-06-04, same day):** the §2 template's exit-code
+> assertion was initially written as `(0, 1)`. That set is wrong by
+> `src/novetest/cli/output.py:12-17` where `EXIT_USER_TESTS_FAILED = 3`
+> (1 is `EXIT_GENERIC`, never emitted on the happy-path "tests ran,
+> some failed" outcome). Corrected in-place to `(0, 3)`. The 2026-06-04
+> JUnit hotfix re-pass surfaced this against the canonical failing-test
+> fixture (exit 3) — caught precisely because §1's "must not skip-gate"
+> mandate forced Manual Test to actually run the smoke. The decision's
+> verdict-policy framing is unchanged.
+
 Every new Native Engine adapter task brief from PM MUST require Run team
 to add at least one CLI-level smoke under `tests/integration/run/
 test_<engine>_*.py`, shaped roughly as:
@@ -95,7 +105,7 @@ def test_cli_smoke_run_emits_envelope(<fixture_workspace>: Path):
     assert init.returncode == 0, init.stderr
     run = subprocess.run(["uv", "run", "novetest", "run"],
                          cwd=<fixture_workspace>, capture_output=True, text=True, timeout=300)
-    assert run.returncode in (0, 1), (
+    assert run.returncode in (0, 3), (
         f"unexpected cli-error: returncode={run.returncode} stderr={run.stderr!r}"
     )
     envelope = json.loads(run.stdout)
