@@ -1131,12 +1131,25 @@ class TestMavenCoverageArgv:
 
 
 class TestGradleCoverageArgv:
-    """Gradle coverage argv must include ``--continue`` *before*
-    ``jacocoTestReport`` so the task graph keeps running after a
-    failing `:test` task and the report task can still execute.
-    Hotfix #2 closure (Defect 2 reopen, Gradle side)."""
+    """Gradle coverage argv must inject an ``--init-script`` pointing at
+    a generated ``init-ignore-test-failures.gradle`` and include
+    ``jacocoTestReport`` as a CLI target. **Why not ``--continue``?**
+    Hotfix #2 attempted ``--continue`` + ``jacocoTestReport`` and Main
+    Branch's equipped-host pre-merge gate (2026-06-04, Gradle 8.14.5)
+    caught that this is insufficient — Gradle's ``--continue`` only
+    keeps running tasks INDEPENDENT of the failure, and
+    ``:jacocoTestReport`` is transitively dependent on ``:test`` (via
+    ``executionData = test.binaryResultsDirectory.file('jacoco/test.exec')``
+    plus often an explicit ``dependsOn(tasks.test)`` in user builds).
+    The init-script sets ``Test.ignoreFailures = true`` which is the
+    Gradle analog of Maven's ``-Dmaven.test.failure.ignore=true``; test
+    failures still surface in the JUnit XML (the normalizer aggregates
+    failed status from there per ``normalizer.py:736-757``) but
+    ``:test``'s task-level result is success so the graph proceeds to
+    ``:jacocoTestReport``. Hotfix #3 closure (Defect 2 reopen, Gradle
+    side, second attempt)."""
 
-    async def test_continue_flag_present_with_coverage_and_jacoco(
+    async def test_init_script_present_with_coverage_and_jacoco(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1168,16 +1181,46 @@ class TestGradleCoverageArgv:
 
         assert len(captured) == 1
         argv = captured[0]
-        assert "--continue" in argv
+        # Hotfix #3: no more `--continue` (it didn't work). Replaced by
+        # init-script injecting `Test.ignoreFailures = true`.
+        assert "--continue" not in argv
+        assert "--init-script" in argv
         assert "jacocoTestReport" in argv
-        idx_flag = argv.index("--continue")
-        idx_task = argv.index("jacocoTestReport")
-        assert idx_flag < idx_task, (
-            "`--continue` MUST precede `jacocoTestReport` so Gradle has "
-            "the flag in scope when the `:test` task fails."
+        idx_flag = argv.index("--init-script")
+        # The next argv entry after `--init-script` is the script path.
+        init_script_arg = argv[idx_flag + 1]
+        assert init_script_arg.endswith(
+            "init-ignore-test-failures.gradle"
+        ), (
+            f"Expected init-script path ending in "
+            f"`init-ignore-test-failures.gradle`; got {init_script_arg!r}."
+        )
+        # The script must EXIST at the path captured in argv — that's
+        # the contract with Gradle (otherwise it would error at parse
+        # time on the real subprocess invocation).
+        init_script_path = Path(init_script_arg)
+        assert init_script_path.is_file(), (
+            f"init-script file not written at {init_script_path}; "
+            f"the adapter must materialize it before invoking gradle."
+        )
+        contents = init_script_path.read_text(encoding="utf-8")
+        assert "ignoreFailures = true" in contents, (
+            f"init-script must set ignoreFailures = true so :test does "
+            f"not abort the build; contents were:\n{contents}"
+        )
+        assert "withType(Test)" in contents, (
+            f"init-script must target Test tasks (not arbitrary tasks); "
+            f"contents were:\n{contents}"
+        )
+        # Init-script must be staged under the run's artifact tree, NOT
+        # in /tmp or another shared location. This keeps the artifact
+        # postmortem-discoverable and runs hermetic.
+        assert "/art/" in str(init_script_path), (
+            f"init-script must live under artifact_dir/native/; got "
+            f"{init_script_path}"
         )
 
-    async def test_continue_flag_absent_without_coverage(
+    async def test_init_script_absent_without_coverage(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -1209,4 +1252,5 @@ class TestGradleCoverageArgv:
         assert len(captured) == 1
         argv = captured[0]
         assert "--continue" not in argv
+        assert "--init-script" not in argv
         assert "jacocoTestReport" not in argv

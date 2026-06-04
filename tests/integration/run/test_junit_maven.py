@@ -232,4 +232,17 @@ def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
     assert envelope["schema"] == "novetest/v1"
     assert isinstance(envelope["ok"], bool)
     if envelope["ok"]:
-        assert envelope["data"]["run_record"]["engine_name"] == "junit"
+        # Envelope shape: ``data`` carries a ``MemoryEntry`` (per
+        # ``src/novetest/orchestration/workflows/run.py:32-46`` ``RunOutcome.
+        # memory_entry`` and ``src/novetest/cli/app.py:269-281`` which
+        # projects ``data = {"memory_entry": entry.to_dict()}``). The
+        # ``RunRecord`` lives under ``data.memory_entry.run_record`` — NOT
+        # ``data.run_record``. Hotfix #2 shipped a wrong dereference here;
+        # Main Branch's equip-and-exercise pre-merge gate caught it on
+        # 2026-06-04 (``KeyError: 'run_record'``) and aborted the merge.
+        # See ``agent-comms/questions/main-branch-team-2026-06-04-junit-
+        # hotfix-2-gate-failed.md`` for the gate transcript.
+        assert (
+            envelope["data"]["memory_entry"]["run_record"]["engine_name"]
+            == "junit"
+        )
