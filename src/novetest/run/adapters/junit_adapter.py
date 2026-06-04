@@ -209,6 +209,20 @@ async def _run_maven(
         "test",
     ]
     if collect_coverage and has_jacoco:
+        # Tell Surefire to REPORT test failures (in the XML and via
+        # exit-code-reaching channels) but NOT raise
+        # `MojoFailureException`, so Maven continues past the test
+        # phase and the `jacoco:report` goal below actually runs.
+        # Without this flag, a single failing test aborts the reactor
+        # before `target/site/jacoco/jacoco.xml` is ever serialized —
+        # the canonical fixture's intentional failure was exactly that
+        # case in hotfix #1 (Manual Test 2026-06-04 findings, Defect 2
+        # reopen). The user-tests-failed signal is still carried in
+        # the Surefire XML the adapter parses for test outcomes and
+        # propagates to `EXIT_USER_TESTS_FAILED` correctly. Apply ONLY
+        # in coverage runs — non-coverage runs keep their default
+        # abort-on-failure semantics.
+        argv.append("-Dmaven.test.failure.ignore=true")
         # Append the JaCoCo report goal so the agent dumps XML at
         # `target/site/jacoco/jacoco.xml` after Surefire finishes. The
         # `prepare-agent` goal is wired into the project's `pom.xml` by
@@ -479,6 +493,16 @@ async def _run_gradle(
     if test_target.target_expression:
         argv.extend(["--tests", test_target.target_expression])
     if collect_coverage and has_jacoco:
+        # `--continue` tells Gradle to keep running independent tasks
+        # even when some fail. `:jacocoTestReport` is independent of
+        # `:test`'s pass/fail outcome — it depends on the JaCoCo
+        # agent's `jacoco.exec` file, which is produced when `:test`
+        # runs the JaCoCo-instrumented JVM regardless of result.
+        # Without `--continue`, a single failing test stops the task
+        # graph and `:jacocoTestReport` never runs (Manual Test
+        # 2026-06-04 findings, Defect 2 reopen). Apply ONLY in
+        # coverage runs.
+        argv.append("--continue")
         argv.append("jacocoTestReport")
 
     env = _build_child_env()

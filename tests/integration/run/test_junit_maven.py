@@ -140,9 +140,14 @@ async def test_coverage_run_emits_jacoco_xml(
         timeout=300.0,
         collect_coverage=True,
     )
-    # Failing test still fails; coverage XML still emitted because the
-    # JaCoCo agent is in the test phase and the report goal runs in the
-    # test lifecycle.
+    # Failing test still surfaces as exit 3 (EXIT_USER_TESTS_FAILED); the
+    # `-Dmaven.test.failure.ignore=true` flag (hotfix #2, 2026-06-04)
+    # lets Maven continue past the Surefire failure so the subsequent
+    # `jacoco:report` goal actually runs and writes
+    # ``target/site/jacoco/jacoco.xml``. Without that flag, Maven aborts
+    # at the test phase and JaCoCo XML is never serialized — that was
+    # the Defect 2 reopen Manual Test caught on 2026-06-04 after the
+    # first hotfix attempt.
     assert "coverage_xml" in result.artifact_paths
     coverage_xml = result.artifact_paths["coverage_xml"]
     assert coverage_xml.is_file()
@@ -205,12 +210,22 @@ def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
         encoding="utf-8",
         timeout=600,
     )
-    # Exit 0 (all passed) or 1 (some test failed) are both acceptable;
-    # exit >= 2 is a CLI-error and indicates a contract violation like
-    # Defect 1.
-    assert run_result.returncode in (0, 1), (
+    # Exit 0 (all passed) or 3 (EXIT_USER_TESTS_FAILED, some user test
+    # failed) are the only acceptable codes on the canonical happy-path
+    # fixture. Hotfix #1 shipped a buggy `(0, 1)` here — Manual Test
+    # caught it on 2026-06-04 because EXIT_GENERIC=1 doesn't fire on
+    # a clean user-tests-failed exit; the canonical fixture intentionally
+    # contains a failing test and the CLI reports it via the dedicated
+    # EXIT_USER_TESTS_FAILED=3 channel (see `src/novetest/cli/output.py:
+    # 12-17`).
+    assert run_result.returncode in (0, 3), (
         f"CLI returned exit {run_result.returncode}; "
-        f"expected 0 (pass) or 1 (some test failed). "
+        f"expected 0 (EXIT_OK, all passed) or 3 (EXIT_USER_TESTS_FAILED, "
+        f"some user tests failed). Exit codes 1 (EXIT_GENERIC), "
+        f"2 (EXIT_USAGE), 4 (EXIT_ENGINE_MISSING), 5 (EXIT_STORAGE) all "
+        f"indicate contract or environment violations and MUST not "
+        f"occur on the canonical happy-path fixture. See "
+        f"src/novetest/cli/output.py:12-17. "
         f"stdout: {run_result.stdout!r} stderr: {run_result.stderr!r}"
     )
     envelope = json.loads(run_result.stdout)
