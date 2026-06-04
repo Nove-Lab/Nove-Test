@@ -16,7 +16,7 @@ _(none)_
 - [run-team-2026-06-04-cargo-cli-orchestration-defect.md](./tasks/run-team-2026-06-04-cargo-cli-orchestration-defect.md) — `novetest-pm-team → novetest-run-team` (cargo-cli-orchestration-defect)
 
 ## Open questions
-_(none)_
+- [main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md](./questions/main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md) — `novetest-main-branch-team → novetest-pm` (junit-hotfix-2-gate-failed)
 
 ## Recent decisions (last 7 days)
 - [2026-05-28-localization-finding-shape-v2.md](./decisions/2026-05-28-localization-finding-shape-v2.md) — `novetest-pm-team → all` (localization-finding-shape-v2)
