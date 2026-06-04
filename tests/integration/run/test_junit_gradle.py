@@ -172,9 +172,17 @@ def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
         encoding="utf-8",
         timeout=600,
     )
-    assert run_result.returncode in (0, 1), (
+    # Exit 0 or 3 only — see the Maven sibling's matching assertion
+    # for the full exit-code-map rationale. Hotfix #1 shipped `(0, 1)`
+    # which Manual Test 2026-06-04 caught as a process bug.
+    assert run_result.returncode in (0, 3), (
         f"CLI returned exit {run_result.returncode}; "
-        f"expected 0 (pass) or 1 (some test failed). "
+        f"expected 0 (EXIT_OK, all passed) or 3 (EXIT_USER_TESTS_FAILED, "
+        f"some user tests failed). Exit codes 1 (EXIT_GENERIC), "
+        f"2 (EXIT_USAGE), 4 (EXIT_ENGINE_MISSING), 5 (EXIT_STORAGE) all "
+        f"indicate contract or environment violations and MUST not "
+        f"occur on the canonical happy-path fixture. See "
+        f"src/novetest/cli/output.py:12-17. "
         f"stdout: {run_result.stdout!r} stderr: {run_result.stderr!r}"
     )
     envelope = json.loads(run_result.stdout)

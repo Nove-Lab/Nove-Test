@@ -26,6 +26,14 @@ repositories {
 dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    // Gradle 9 dropped the implicit injection of `junit-platform-launcher`
+    // into `testRuntimeClasspath` that Gradle 7.6/8.x added when
+    // `useJUnitPlatform()` was declared. Declaring the dependency
+    // explicitly is the JUnit project's recommended post-9 pattern and
+    // is backwards-compatible across Gradle 7.6/8.x/9.x. Added per
+    // hotfix #2 2026-06-04 after Manual Test surfaced the Gradle 9
+    // incompatibility on the equipped host.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks.test {

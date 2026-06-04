@@ -12,6 +12,7 @@ file isolates the pure helpers from the subprocess seam.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,6 +33,8 @@ from novetest.run.adapters.junit_adapter import (
     _strip_trailing_parens,
     _summarize_tests,
 )
+from novetest.run.types import TestTarget
+from novetest.utils.asyncio_subprocess import SubprocessResult
 
 
 # ---------------------------------------------------------------------------
@@ -813,3 +816,397 @@ def test_run_junit_raises_when_no_manifest(tmp_path: Path) -> None:
             )
         )
     assert excinfo.value.kind == "build-tool-undetermined"
+
+
+# ---------------------------------------------------------------------------
+# Defect 2 reopen (hotfix #2 2026-06-04) — coverage argv must keep the
+# build alive past the failing-test phase so the JaCoCo report goal /
+# task actually runs.
+# ---------------------------------------------------------------------------
+
+
+_MAVEN_POM_WITH_JACOCO = """<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>x</groupId><artifactId>y</artifactId><version>1</version>
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>"""
+
+
+_GRADLE_BUILD_WITH_JACOCO = """
+plugins {
+    `java-library`
+    jacoco
+}
+dependencies {
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+}
+"""
+
+
+_MINIMAL_SUREFIRE_XML = (
+    '<?xml version="1.0"?>'
+    '<testsuite name="Sentinel" tests="1" failures="0" errors="0" skipped="0">'
+    '<testcase classname="Sentinel" name="probe" time="0.001"/>'
+    "</testsuite>"
+)
+
+
+def _seed_maven_workspace(workspace: Path) -> None:
+    """Materialize a minimal Maven workspace declaring JaCoCo."""
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "pom.xml").write_text(_MAVEN_POM_WITH_JACOCO, encoding="utf-8")
+
+
+def _seed_gradle_workspace(workspace: Path) -> None:
+    """Materialize a minimal Gradle workspace declaring JaCoCo."""
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "build.gradle.kts").write_text(
+        _GRADLE_BUILD_WITH_JACOCO, encoding="utf-8"
+    )
+
+
+def _make_maven_argv_capturing_stub(
+    captured_argv: list[list[str]],
+    *,
+    workspace: Path,
+) -> Any:
+    """Build an async stub for `run_subprocess` that captures every
+    Maven argv invocation and seeds a minimal Surefire XML report so
+    the adapter's parser doesn't blow up on the post-run glob.
+
+    Recognizes two version-probe shapes (``mvn -v`` and ``java
+    -version``) and returns canonical bytes; the third (main) shape is
+    captured and used to seed reports.
+    """
+
+    async def stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        # `java -version` writes to stderr per Java convention.
+        if isinstance(argv, (list, tuple)) and argv[-1] == "-version":
+            return SubprocessResult(
+                returncode=0,
+                stdout=b"",
+                stderr=b'openjdk version "17.0.10"\n',
+                timed_out=False,
+            )
+        # `mvn -v` shape: stdout starts with "Apache Maven ...".
+        if (
+            isinstance(argv, (list, tuple))
+            and len(argv) >= 2
+            and argv[-1] == "-v"
+        ):
+            return SubprocessResult(
+                returncode=0,
+                stdout=b"Apache Maven 3.9.9 (sha) ...\n",
+                stderr=b"",
+                timed_out=False,
+            )
+        # Main `mvn -B test ...` invocation. Capture argv and seed a
+        # Surefire XML so the post-run parser walks a real directory.
+        captured_argv.append(list(argv))
+        reports_dir = workspace / "target" / "surefire-reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        (reports_dir / "TEST-Sentinel.xml").write_text(
+            _MINIMAL_SUREFIRE_XML, encoding="utf-8"
+        )
+        return SubprocessResult(
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+            timed_out=False,
+        )
+
+    return stub
+
+
+def _make_gradle_argv_capturing_stub(
+    captured_argv: list[list[str]],
+    *,
+    workspace: Path,
+) -> Any:
+    """Same shape as the Maven stub but for the Gradle path."""
+
+    async def stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        if isinstance(argv, (list, tuple)) and argv[-1] == "-version":
+            return SubprocessResult(
+                returncode=0,
+                stdout=b"",
+                stderr=b'openjdk version "17.0.10"\n',
+                timed_out=False,
+            )
+        if isinstance(argv, (list, tuple)) and argv[-1] == "--version":
+            return SubprocessResult(
+                returncode=0,
+                stdout=b"Gradle 8.5\n",
+                stderr=b"",
+                timed_out=False,
+            )
+        captured_argv.append(list(argv))
+        reports_dir = workspace / "build" / "test-results" / "test"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        (reports_dir / "TEST-Sentinel.xml").write_text(
+            _MINIMAL_SUREFIRE_XML, encoding="utf-8"
+        )
+        return SubprocessResult(
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+            timed_out=False,
+        )
+
+    return stub
+
+
+class TestMavenCoverageArgv:
+    """Maven coverage argv must include ``-Dmaven.test.failure.ignore=true``
+    *before* the ``jacoco:report`` goal so the report goal runs even
+    when Surefire reports failures. Hotfix #2 closure (Defect 2 reopen)."""
+
+    async def test_failure_ignore_flag_present_with_coverage_and_jacoco(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_maven_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_maven_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(
+            _shutil,
+            "which",
+            lambda name: f"/fake/{name}",
+        )
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=True,
+        )
+
+        assert len(captured) == 1, "stub should have captured one main invocation"
+        argv = captured[0]
+        assert "-Dmaven.test.failure.ignore=true" in argv
+        assert "org.jacoco:jacoco-maven-plugin:report" in argv
+        # Ordering matters: the flag must come BEFORE the report goal so
+        # Maven has the directive in scope when surefire decides whether
+        # to raise.
+        idx_flag = argv.index("-Dmaven.test.failure.ignore=true")
+        idx_goal = argv.index("org.jacoco:jacoco-maven-plugin:report")
+        assert idx_flag < idx_goal, (
+            "`-Dmaven.test.failure.ignore=true` MUST precede the JaCoCo "
+            "report goal so Surefire's failure handling honors it."
+        )
+
+    async def test_failure_ignore_flag_absent_without_coverage(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-coverage runs keep their default abort-on-failure
+        semantics — the flag must NOT be injected unless we asked for
+        coverage."""
+
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_maven_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_maven_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert "-Dmaven.test.failure.ignore=true" not in argv
+        assert "org.jacoco:jacoco-maven-plugin:report" not in argv
+
+    async def test_failure_ignore_flag_absent_when_jacoco_undeclared(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Even with `collect_coverage=True`, if the user's pom.xml
+        does NOT declare jacoco-maven-plugin, we must not toggle the
+        ignore flag (there's no `jacoco:report` goal to run anyway —
+        a `missing-jacoco` warning surfaces instead per hotfix #1)."""
+
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir(parents=True)
+        # JaCoCo deliberately absent from pom.
+        (workspace / "pom.xml").write_text(
+            """<?xml version="1.0"?>
+            <project>
+                <modelVersion>4.0.0</modelVersion>
+                <groupId>x</groupId><artifactId>y</artifactId><version>1</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.junit.jupiter</groupId>
+                        <artifactId>junit-jupiter</artifactId>
+                        <version>5.10.2</version>
+                    </dependency>
+                </dependencies>
+            </project>""",
+            encoding="utf-8",
+        )
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_maven_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=True,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert "-Dmaven.test.failure.ignore=true" not in argv
+
+
+class TestGradleCoverageArgv:
+    """Gradle coverage argv must include ``--continue`` *before*
+    ``jacocoTestReport`` so the task graph keeps running after a
+    failing `:test` task and the report task can still execute.
+    Hotfix #2 closure (Defect 2 reopen, Gradle side)."""
+
+    async def test_continue_flag_present_with_coverage_and_jacoco(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        # `gradle` resolved off PATH (no `./gradlew` in workspace).
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=True,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert "--continue" in argv
+        assert "jacocoTestReport" in argv
+        idx_flag = argv.index("--continue")
+        idx_task = argv.index("jacocoTestReport")
+        assert idx_flag < idx_task, (
+            "`--continue` MUST precede `jacocoTestReport` so Gradle has "
+            "the flag in scope when the `:test` task fails."
+        )
+
+    async def test_continue_flag_absent_without_coverage(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert "--continue" not in argv
+        assert "jacocoTestReport" not in argv
