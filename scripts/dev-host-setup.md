@@ -267,8 +267,9 @@ floor bump warranted at this firing.
 
 ## 5. Java (JDK + Maven) — for JUnit 5 adapter
 
-**Floor:** JDK 17 (LTS) + Maven 3.9 (or Gradle 7.6) per matrix rows added
-2026-06-03.
+**Floor:** JDK 17 (LTS) + Maven 3.8 (or Gradle 7.6) per matrix rows added
+2026-06-03 (Maven floor lowered 3.9 → 3.8 on 2026-06-04 — see matrix
+decision).
 
 **Floor source:** `decisions/2026-05-25-supported-engine-matrix.md` rows
 "JDK" / "Maven (Surefire) OR Gradle (`useJUnitPlatform()`)"; pinned by
@@ -329,7 +330,7 @@ adapter task brief at handoff time.
 
 ```sh
 java -version            # openjdk version "17" or newer
-mvn -version             # Apache Maven 3.9.x or newer (or gradle -version)
+mvn -version             # Apache Maven 3.8.x or newer (or gradle -version)
 ```
 
 ### Per-floor-bump maintenance
