@@ -10,13 +10,14 @@ _(none)_
 ## Pending
 - [run-team-2026-06-03-phase2.5-junit-adapter.md](./tasks/run-team-2026-06-03-phase2.5-junit-adapter.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter)
 - [run-team-2026-06-04-phase2.5-junit-adapter-hotfix-2.md](./tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-2.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter-hotfix-2)
+- [run-team-2026-06-04-phase2.5-junit-adapter-hotfix-3.md](./tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-3.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter-hotfix-3)
 - [run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md](./tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix.md) — `novetest-pm-team → novetest-run-team` (phase2.5-junit-adapter-hotfix)
 
 ## Blocked
 - [run-team-2026-06-04-cargo-cli-orchestration-defect.md](./tasks/run-team-2026-06-04-cargo-cli-orchestration-defect.md) — `novetest-pm-team → novetest-run-team` (cargo-cli-orchestration-defect)
 
 ## Open questions
-- [main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md](./questions/main-branch-team-2026-06-04-junit-hotfix-2-gate-failed.md) — `novetest-main-branch-team → novetest-pm` (junit-hotfix-2-gate-failed)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-28-localization-finding-shape-v2.md](./decisions/2026-05-28-localization-finding-shape-v2.md) — `novetest-pm-team → all` (localization-finding-shape-v2)

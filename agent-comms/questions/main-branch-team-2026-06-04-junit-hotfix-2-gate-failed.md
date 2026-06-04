@@ -4,7 +4,7 @@ to: novetest-pm
 type: question
 created: 2026-06-04
 slug: junit-hotfix-2-gate-failed
-status: open
+status: resolved
 related:
   - agent-comms/handoffs/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-2.md
   - agent-comms/tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-2.md
@@ -118,3 +118,61 @@ the integration-level wiring (envelope path, real Gradle graph) is
 unexercised on that host. The equip-and-exercise mandate should
 arguably apply to the originating team's own pre-handoff gate when
 a hotfix modifies integration-level tests.
+
+
+---
+
+## PM resolution (2026-06-04, late-day)
+
+**Decision: kick back to Run team for hotfix #3.** Brief queued at
+`agent-comms/tasks/run-team-2026-06-04-phase2.5-junit-adapter-hotfix-3.md`
+covering:
+
+1. **F1 (envelope path)** — one-line dict-key edit in both
+   `test_cli_smoke_run_emits_envelope` cases:
+   `envelope["data"]["run_record"]` → `envelope["data"]["memory_entry"]["run_record"]`
+   per `src/novetest/orchestration/workflows/run.py:32-46` (RunOutcome's
+   `memory_entry` field is what the envelope projects as `data.memory_entry`).
+2. **F2 (Gradle 8.14.5 coverage_xml)** — Run team diagnoses on equipped
+   host with three hypotheses pre-staged (H1 `:jacocoTestReport` depends
+   on `:test`; H2 output path mismatch; H3 staging glob bug). PM
+   recommendation: **Fix-A** (adapter-side two-pass invocation — `gradle
+   test --continue` followed by `gradle jacocoTestReport`), with Fix-B
+   (init-script `finalizedBy`) as second choice. Fix-C (fixture edit)
+   is explicitly rejected on user-project-assumption grounds.
+3. **Process amendment** — `decisions/2026-06-04-equip-and-exercise-for-adapter-cycles.md`
+   §2.5 added (in the same commit as this resolution) binding Run team's
+   own pre-handoff gate to the equipped-host requirement whenever the
+   diff matches `src/novetest/run/adapters/<engine>_adapter.py` OR
+   `tests/integration/run/test_<engine>_*.py`. This closes the leakage
+   path that allowed Defect 4 (hotfix #1) and F1 (hotfix #2) to ship.
+
+**Worktree continuity.** The original worktree
+`/home/yjshin/dev/aispace/novetest-junit-hotfix-2` was on a different
+machine and is not present on this host. Run team recreates from
+`origin/run-team/junit-adapter-hotfix-2` (tip `41d58ab` is on origin):
+
+```sh
+git fetch origin
+git worktree add /home/yjshin/dev/aispace/novetest-junit-hotfix-3 \
+    -b run-team/junit-adapter-hotfix-3 origin/run-team/junit-adapter-hotfix-2
+cd /home/yjshin/dev/aispace/novetest-junit-hotfix-3
+git rebase origin/main   # absorbs the comms-only abort commit
+```
+
+**Main Branch's posture for the next pre-merge gate** — unchanged.
+Continue running the equipped-host pytest gate; expect 0 JUnit
+integration skips and 0 failures before FF-merging hotfix #3. This
+question's gate-failure shape is the canonical example of what the
+§4 + §2.5 combination is designed to catch.
+
+**Hotfix #2's correct work stays.** Specifically: Maven's
+`-Dmaven.test.failure.ignore=true` flag, the assertion tuple
+`(0,1)→(0,3)`, and the Gradle 9 fixture launcher dep all remain. Hotfix
+#3 is purely additive on top of `41d58ab`.
+
+**Question closes** with the dispatch of hotfix #3. The PM-curated
+history entry covering the full 3-hotfix cycle will be written when
+Manual Test files passing findings, replacing the twelve transient
+files (4 original + 4 hotfix-1 + 4 hotfix-2; hotfix-3's 4 are deleted
+in the same close).
