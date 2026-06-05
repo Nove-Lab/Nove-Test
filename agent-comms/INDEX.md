@@ -8,7 +8,7 @@ Last regenerated: 2026-06-05
 _(none)_
 
 ## Pending
-_(none)_
+- [run-team-2026-06-05-phase2.5-dotnet-adapter.md](./tasks/run-team-2026-06-05-phase2.5-dotnet-adapter.md) — `novetest-pm-team → novetest-run-team` (phase2.5-dotnet-adapter)
 
 ## Blocked
 _(none)_
