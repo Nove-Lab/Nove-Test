@@ -393,6 +393,7 @@ NO `RUSTFLAGS` override (would invalidate the build cache). NO `CARGO_INCREMENTA
 ### Edge cases
 
 - Workspaces: `--workspace` is always passed so all members run by default. Users can scope to one crate via a nextest filter expression (e.g. `package(foo)`) plumbed through `target_expression`.
+- Directory-typed targets: `target_resolver` classifies `novetest run .` and `novetest run <subdir>/` as `target_type="directory"`. The adapter suppresses the positional-filter append for directory targets (Fix A, 2026-06-05 cargo CLI orchestration defect closure — see `tasks/run-team-2026-06-04-cargo-cli-orchestration-defect.md`) because `cargo nextest` interprets positional args as filter DSL tokens, not filesystem paths. v1 treats all directory-typed targets as workspace-equivalent (`--workspace` covers the workspace root, matching the `novetest run .` ↔ `novetest run` bare equivalence). Sub-crate directory selection (e.g. `novetest run crates/foo/`) would require translation to nextest's `-E 'package(crate)'` expression or cargo's `-p crate` selector — deferred until a user requests it.
 - Doctests: `cargo test --doc` is a separate path; nextest does not run doctests. Out of scope for v1; future slice.
 - Integration tests in `tests/` get one binary per file — they appear as separate suite blocks in the libtest-json stream and the `name` field disambiguates them.
 - Build cache: ensure same `--features` set across discovery, execution, and coverage runs or the cache invalidates.

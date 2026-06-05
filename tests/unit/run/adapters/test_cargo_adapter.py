@@ -400,6 +400,322 @@ async def test_argv_passes_target_expression_through_verbatim(
     assert captured_argv[-1] == "tests::test_add"
 
 
+async def test_argv_omits_directory_target_expression(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix A regression pin (2026-06-05 cargo CLI orchestration defect).
+
+    ``target_resolver`` classifies ``novetest run .`` as
+    ``target_type="directory"`` with ``target_expression="."`` because
+    ``workspace_context / "."`` resolves to a directory. The adapter
+    MUST NOT pass directory-type expressions to ``cargo nextest`` as
+    positional arguments — nextest interprets the positional as a
+    filter DSL token, and the literal ``"."`` matches a test whose ID
+    equals ``"."`` (none in any realistic workspace), yielding exit 4
+    with ``Starting 0 tests across … (3 tests skipped)`` and
+    ``error: no tests to run``. ``--workspace`` already covers the
+    workspace root, so suppressing the append produces the same
+    invocation as ``novetest run`` bare — matching the user's intent.
+
+    See ``agent-comms/findings/manual-test-team-2026-06-04-host-equip.md``
+    §"Cargo adapter — CLI vs adapter-direct discrepancy" for the
+    field-captured stderr that motivated this regression pin.
+
+    The negative assertion (``"." not in captured_argv``) is the load-
+    bearing guard. The positive ``--workspace in captured_argv`` is a
+    cross-check that the non-positional flag still lands.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    captured_argv: list[str] = []
+
+    async def capturing_stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        # Route version probes to canned responses so the captured
+        # argv carries ONLY the main invocation's flags (same pattern
+        # as ``test_argv_uses_default_workspace_when_expression_empty``).
+        if isinstance(argv, (list, tuple)) and len(argv) >= 2:
+            if argv[-1] == "--version" and (len(argv) == 2 or argv[1] == "nextest"):
+                if len(argv) == 2:
+                    return SubprocessResult(
+                        returncode=0,
+                        stdout=b"cargo 1.74.0\n",
+                        stderr=b"",
+                        timed_out=False,
+                    )
+                return SubprocessResult(
+                    returncode=0,
+                    stdout=b"cargo-nextest 0.9.70\n",
+                    stderr=b"",
+                    timed_out=False,
+                )
+        captured_argv.extend(argv)
+        return SubprocessResult(
+            returncode=0,
+            stdout=_ndjson_bytes(_passing_events()),
+            stderr=b"",
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
+
+    # ``resolve_test_target(".", workspace)`` produces
+    # ``target_type="directory"`` because ``workspace / "."`` is a dir.
+    # This is the exact code path Manual Test exercised on 2026-06-04
+    # via ``uv run novetest run .``.
+    target = resolve_test_target(".", cargo_test_basic_workspace)
+    assert target.target_type == "directory"
+    assert target.target_expression == "."
+
+    await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
+
+    # Load-bearing: the literal "." must NOT be appended as a positional
+    # filter. Pre-fix it sat at ``captured_argv[-1]``; post-fix the argv
+    # tail is ``--workspace`` (same as the empty-expression case).
+    assert "." not in captured_argv, (
+        f"directory-type target_expression '.' must not reach nextest as "
+        f"a positional filter (Fix A regression — see cargo_adapter.run_cargo "
+        f"docstring). Got argv: {captured_argv!r}"
+    )
+    assert captured_argv[-1] == "--workspace"
+    # Sanity guards against the test stub being mis-routed.
+    assert "nextest" in captured_argv
+    assert "run" in captured_argv
+
+
+async def test_argv_appends_file_target_expression_verbatim(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix A scope guard (2026-06-05 cargo CLI orchestration defect).
+
+    The directory-type suppression must NOT affect non-directory
+    target types. ``target_type="file"`` (or ``"workspace"`` /
+    ``"nodeid"``) keeps the pre-fix verbatim-append contract. This
+    test pins the ``"file"`` case explicitly so a future refactor of
+    Fix A that over-broadly suppresses (e.g. by accident gating on
+    ``target_type in {"directory", "file"}``) is caught.
+
+    We construct the ``TestTarget`` directly rather than relying on
+    ``resolve_test_target`` because ``resolve_test_target("nonexistent.rs",
+    workspace)`` returns ``target_type="file"`` only when the path does
+    NOT resolve as a directory. Constructing it explicitly makes the
+    test independent of fixture filesystem state.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+    from novetest.run.types import TestTarget
+
+    captured_argv: list[str] = []
+
+    async def capturing_stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        if isinstance(argv, (list, tuple)) and len(argv) >= 2:
+            if argv[-1] == "--version" and (len(argv) == 2 or argv[1] == "nextest"):
+                if len(argv) == 2:
+                    return SubprocessResult(
+                        returncode=0,
+                        stdout=b"cargo 1.74.0\n",
+                        stderr=b"",
+                        timed_out=False,
+                    )
+                return SubprocessResult(
+                    returncode=0,
+                    stdout=b"cargo-nextest 0.9.70\n",
+                    stderr=b"",
+                    timed_out=False,
+                )
+        captured_argv.extend(argv)
+        return SubprocessResult(
+            returncode=0,
+            stdout=_ndjson_bytes(_passing_events()),
+            stderr=b"",
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
+
+    target = TestTarget(
+        target_expression="tests/integration_test.rs",
+        target_type="file",
+        workspace_path=cargo_test_basic_workspace,
+    )
+    await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
+
+    # File-type targets keep the verbatim append (parity with pre-fix
+    # contract). The engine surfaces its own error if the path doesn't
+    # match anything — that's the user's signal, not a Run-team
+    # responsibility to pre-validate.
+    assert captured_argv[-1] == "tests/integration_test.rs"
+
+
+async def test_no_tests_match_stderr_surfaces_distinct_message(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix B regression pin (2026-06-05 cargo CLI orchestration defect).
+
+    When nextest's stderr contains BOTH ``Starting 0 tests across`` AND
+    ``error: no tests to run``, the adapter must surface a distinct
+    diagnostic that names "filter matched zero tests" — NOT the
+    misleading "likely build failure" wording. The pre-fix branch
+    surfaced both true compile failures and filter-mismatches with the
+    same prose; users whose stderr clearly showed ``Finished test
+    profile … target(s)`` (i.e. build succeeded) were misdirected to
+    investigate compile errors that did not exist.
+
+    The stderr literal used here is verbatim from Manual Test's
+    2026-06-04 host-equip findings — the exact bytes nextest 0.9.137
+    emits when the filter resolves to zero tests across two binaries
+    with three discovered-then-skipped tests.
+
+    The post-fix message MUST:
+    1. Include the words "filter matched zero tests" (the accurate
+       root-cause framing).
+    2. NOT include "likely build failure" (the misleading pre-fix
+       wording — the negative assertion is the load-bearing guard
+       against a future refactor accidentally falling through to the
+       generic branch).
+    3. Carry the offending ``target_expression`` repr so the user can
+       correlate the diagnosis with what they typed.
+    4. Carry the ``target_type`` repr so an AI consumer can disambiguate
+       the directory-vs-explicit-filter case at one glance.
+    5. Stay on ``kind="unparseable-output"`` per task brief §2 —
+       adding a new kind would require a ``questions/`` entry first.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    # Verbatim stderr from the Manual Test 2026-06-04 findings file
+    # §"Cargo adapter — CLI vs adapter-direct discrepancy", trimmed
+    # to the load-bearing literals + surrounding context. The
+    # ``Finished test profile`` line is included to prove the
+    # heuristic still fires even when stderr contains positive
+    # build-success markers — the pre-fix code treated this as a
+    # build failure anyway.
+    no_tests_stderr = (
+        b"   Compiling cargo_test_basic v0.1.0\n"
+        b"    Finished `test` profile [unoptimized + debuginfo] "
+        b"target(s) in 0.31s\n"
+        b"------------\n"
+        b" Nextest run ID 640954a3 with nextest profile: default\n"
+        b"    Starting 0 tests across 2 binaries (3 tests skipped)\n"
+        b"------------\n"
+        b"     Summary [   0.001s] 0 tests run: 0 passed, 3 skipped\n"
+        b"error: no tests to run\n"
+        b"(hint: use `--no-tests` to customize)\n"
+    )
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=4,
+            stdout_bytes=b"",
+            stderr_bytes=no_tests_stderr,
+        ),
+    )
+
+    # Use a non-empty filter expression with ``target_type="nodeid"`` so
+    # Fix A's directory-suppression does NOT intercept — we want Fix
+    # B's heuristic to actually run against an argv that DID carry a
+    # filter. (A directory-typed target would yield zero tests via
+    # ``--workspace`` matching the full workspace, not via the
+    # no-tests-match path; that case is owned by Fix A's test above.)
+    from novetest.run.types import TestTarget
+
+    target = TestTarget(
+        target_expression="tests::definitely_does_not_exist",
+        target_type="nodeid",
+        workspace_path=cargo_test_basic_workspace,
+    )
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
+
+    # Kind contract: still ``unparseable-output`` per task brief §2 —
+    # disambiguation lives in the message text, not in a new kind.
+    assert exc_info.value.kind == "unparseable-output"
+
+    message = str(exc_info.value)
+
+    # Positive: the accurate root-cause framing.
+    assert "filter matched zero tests" in message, (
+        f"post-fix message must name the actual cause; got: {message!r}"
+    )
+    # Negative (load-bearing): the misleading pre-fix wording must be
+    # gone. A future refactor that re-introduces it (e.g. by falling
+    # through to the generic branch) is caught here.
+    assert "likely build failure" not in message, (
+        f"misleading 'likely build failure' wording must not appear in "
+        f"the no-tests-match branch; got: {message!r}"
+    )
+    # Diagnostic context: the offending filter expression and
+    # target_type appear in the message so a user can correlate the
+    # diagnosis with what they typed.
+    assert "tests::definitely_does_not_exist" in message
+    assert "nodeid" in message
+
+
+async def test_no_tests_match_heuristic_does_not_fire_on_true_compile_failure(
+    cargo_test_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix B scope guard (2026-06-05 cargo CLI orchestration defect).
+
+    True compile failures (exit 101 with ``error[E####]`` in stderr,
+    no ``Starting 0 tests across`` line) must still surface as the
+    generic "likely build failure" diagnostic. The no-tests-match
+    carve-out fires ONLY on the conjunction of both nextest literals.
+
+    Without this scope guard, a refactor that broadened the carve-out
+    (e.g. dropped the second literal from the conjunction) could
+    silently re-classify compile failures, breaking the diagnostic
+    contract in the other direction.
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=101,
+            stdout_bytes=b"",
+            stderr_bytes=(
+                b"error[E0425]: cannot find function `nonexistent` in this scope\n"
+                b"error: aborting due to previous error\n"
+                b"error: could not compile `cargo_test_basic` (lib test) "
+                b"due to 1 previous error\n"
+            ),
+        ),
+    )
+
+    target = resolve_test_target("", cargo_test_basic_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
+    assert exc_info.value.kind == "unparseable-output"
+    # Generic branch fired: the message DOES say "build failure" and
+    # does NOT say "filter matched zero tests".
+    message = str(exc_info.value)
+    assert "build failure" in message.lower()
+    assert "filter matched zero tests" not in message
+
+
 async def test_failing_test_writes_failure_log(
     cargo_test_basic_workspace: Path,
     tmp_path: Path,
