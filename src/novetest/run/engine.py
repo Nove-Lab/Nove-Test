@@ -13,6 +13,7 @@ from pathlib import Path
 
 from novetest.models import RunRecord
 from novetest.run.adapters.cargo_adapter import run_cargo
+from novetest.run.adapters.dotnet_adapter import run_xunit
 from novetest.run.adapters.gotest_adapter import run_gotest
 from novetest.run.adapters.jest_adapter import run_jest
 from novetest.run.adapters.junit_adapter import run_junit
@@ -145,6 +146,13 @@ async def _invoke_adapter(
         )
     if engine_name == "junit":
         return await run_junit(
+            test_target,
+            artifact_dir=artifact_dir,
+            timeout=timeout,
+            collect_coverage=collect_coverage,
+        )
+    if engine_name == "xunit":
+        return await run_xunit(
             test_target,
             artifact_dir=artifact_dir,
             timeout=timeout,

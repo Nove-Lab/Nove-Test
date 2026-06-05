@@ -2,10 +2,9 @@
 
 Phase 1 shipped pytest; Phase 2.5 added jest; Phase 3 (adapter backlog
 slice #1) added go-test; Phase 3 (adapter backlog slice #2) added
-cargo-test. The remaining two pairs (junit / xunit) appear in
-`list_supported_engine_pairs` so detection and CLI surfaces can name
-them even though `select_native_engine` raises for any selection
-without an implemented adapter.
+cargo-test; Phase 2.5 fifth-ecosystem slice added junit; Phase 2.5
+sixth-and-final slice added xunit (.NET). All six pairs in
+`list_supported_engine_pairs` are now fully implemented adapters.
 """
 
 from __future__ import annotations
@@ -50,8 +49,14 @@ def _ecosystem_for_workspace(workspace_path: object) -> str | None:
     for ecosystem, markers in _ECOSYSTEM_MARKERS:
         if any((workspace_path / m).exists() for m in markers):
             return ecosystem
-    # .NET uses glob markers; check separately.
-    if any(workspace_path.glob("*.csproj")) or any(workspace_path.glob("*.sln")):
+    # .NET uses glob markers; check separately (walk one level deep for
+    # ``*.csproj`` to cover the canonical library + test project split —
+    # see ``readiness._glob_dotnet_markers`` for the rationale).
+    if (
+        any(workspace_path.glob("*.csproj"))
+        or any(workspace_path.glob("*/*.csproj"))
+        or any(workspace_path.glob("*.sln"))
+    ):
         return "dotnet"
     return None
 
@@ -62,18 +67,18 @@ _IMPLEMENTED_ECOSYSTEM_TO_ENGINE: dict[str, str] = {
     "java": "junit",
     "go": "go-test",
     "rust": "cargo-test",
+    "dotnet": "xunit",
 }
 
 
 def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
     """Pick the Native Engine for a resolved Test Target.
 
-    Returns a `NativeEngineContext` for any ecosystem with a shipping
-    adapter (python+pytest, javascript-typescript+jest, java+junit,
-    go+go-test, rust+cargo-test). Any other detected-but-not-yet-
-    implemented ecosystem (dotnet) raises `EngineNotSupportedError`.
-    Workspaces that match no supported ecosystem also raise — the caller
-    is expected to gate on `assess_engine_readiness` first.
+    Returns a `NativeEngineContext` for any of the six shipping adapters
+    (python+pytest, javascript-typescript+jest, java+junit, go+go-test,
+    rust+cargo-test, dotnet+xunit). Workspaces that match no supported
+    ecosystem raise — the caller is expected to gate on
+    `assess_engine_readiness` first.
     """
 
     ecosystem = _ecosystem_for_workspace(test_target.workspace_path)

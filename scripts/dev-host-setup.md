@@ -363,7 +363,29 @@ xUnit v3 / Microsoft.Testing.Platform coverage is **deferred from MVP** —
 the adapter detects v3 and emits `xunit-v3-coverage-deferred` warning,
 running tests without coverage collection.
 
-### Linux / WSL2
+### Primary install path — user-local via `dotnet-install.sh`
+
+This is the recommended path for both Manual Test's verification host
+and any contributor host that lacks sudo or wants reproducible installs
+in `$HOME`. Microsoft's `dotnet-install.sh` lays the SDK under
+`~/.dotnet/` and does NOT require elevated privileges. Both equipped
+hosts as of 2026-06-05 use this path:
+
+```sh
+curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+bash /tmp/dotnet-install.sh --channel 8.0 --install-dir ~/.dotnet
+rm /tmp/dotnet-install.sh
+
+# Add to PATH (and to ~/.local/share/novetest-toolchains.sh if used)
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+```
+
+The `--channel 8.0` flag pins to the .NET 8 LTS release stream;
+substitute `--channel 9.0` after PM updates the matrix to declare 9.x
+as the tested ceiling.
+
+### Alternative — Linux apt feed (system-wide; requires sudo)
 
 ```sh
 # Microsoft package feed for Ubuntu 22.04 (adjust for other distros)
@@ -373,7 +395,7 @@ sudo apt-get update
 sudo apt-get install -y dotnet-sdk-8.0
 ```
 
-### macOS
+### Alternative — macOS Homebrew
 
 ```sh
 brew install --cask dotnet-sdk          # latest stable (currently .NET 8)
@@ -382,8 +404,7 @@ brew install --cask dotnet-sdk          # latest stable (currently .NET 8)
 ### Smoke probe (validates Coverlet floor)
 
 After install, validate that `coverlet.collector >= 6.0.2` is resolvable
-from NuGet and that `dotnet test` emits per-test Cobertura under the
-expected glob:
+from NuGet and that `dotnet test` emits a Cobertura XML report:
 
 ```sh
 cd /tmp
@@ -395,7 +416,7 @@ cat > coverlet.runsettings <<RUNSETTINGS
 <RunSettings>
   <DataCollectionRunSettings>
     <DataCollectors>
-      <DataCollector friendlyName="XPlat code coverage">
+      <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
           <PerTestCoverage>true</PerTestCoverage>
@@ -410,14 +431,22 @@ RUNSETTINGS
 dotnet test --collect:"XPlat Code Coverage" --settings coverlet.runsettings \
   --results-directory ./TestResults
 
-# Expect per-test files (NOT a single coverage.cobertura.xml):
-ls TestResults/**/coverage.*.cobertura.xml
+# The aggregate file always lands:
+ls TestResults/**/coverage.cobertura.xml
 ```
 
-If the `ls` returns the per-test glob, the host is correctly equipped for
-the .NET adapter's per-test mode. If only `coverage.cobertura.xml` (no
-slug) appears, the user's resolved Coverlet version is below 6.0.2 or the
-runsettings was not picked up — re-check both.
+**Empirical finding (2026-06-05)**:
+`<PerTestCoverage>true</PerTestCoverage>` in the XPlat data collector
+path is **inert in Coverlet 6.0.x** on SDK 8.0 / Linux — only the
+aggregate `coverage.cobertura.xml` is emitted, never per-test
+`coverage.<slug>.cobertura.xml` files. The adapter's runsettings still
+pins the `<PerTestCoverage>` element for forward-compat with a future
+Coverlet release that honors the gate; the coverage glob prefers
+per-test first then falls back to aggregate. See
+`agent-comms/questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md`
+for the diag-log capture and PM's pending disposition. The smoke probe
+above is therefore checking for the aggregate file (not the per-test
+glob the brief's earlier wording referenced).
 
 ### Verify
 

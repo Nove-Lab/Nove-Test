@@ -60,3 +60,13 @@ def cargo_test_basic_workspace() -> Path:
 @pytest.fixture
 def cargo_test_basic_coverage_workspace() -> Path:
     return FIXTURE_PROJECTS_ROOT / "cargo-test-basic-coverage"
+
+
+@pytest.fixture
+def dotnet_test_basic_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "dotnet-test-basic"
+
+
+@pytest.fixture
+def dotnet_test_basic_coverage_workspace() -> Path:
+    return FIXTURE_PROJECTS_ROOT / "dotnet-test-basic-coverage"

@@ -14,7 +14,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md](./questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md) — `novetest-run-team → novetest-pm-team` (coverlet-pertestcoverage-empirically-inert)
 
 ## Recent decisions (last 7 days)
 - [2026-05-29-cargo-adapter-nextest-primary.md](./decisions/2026-05-29-cargo-adapter-nextest-primary.md) — `novetest-pm-team → all` (cargo-adapter-nextest-primary)

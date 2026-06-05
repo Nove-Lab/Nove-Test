@@ -51,17 +51,19 @@ def test_js_workspace_selects_jest(tmp_path: Path) -> None:
     assert context.engine_name == "jest"
 
 
-def test_dotnet_workspace_raises_until_adapter_lands(tmp_path: Path) -> None:
-    """junit / xunit have no adapters yet — they must still raise
-    `EngineNotSupportedError`. xunit is chosen as the representative
-    because .NET uses a glob-based detection path that exercises a
-    different branch of `_ecosystem_for_workspace`.
+def test_dotnet_workspace_selects_xunit(tmp_path: Path) -> None:
+    """Phase 2.5 sixth-and-last slice: xunit is now an implemented adapter,
+    so ``*.csproj`` workspaces resolve to the xunit engine context rather
+    than raising. The glob-based detection branch (vs marker-file detection
+    used by python/javascript/java/go/rust) is exercised here so the
+    selector's two detection paths both have regression coverage.
     """
 
     (tmp_path / "Foo.csproj").write_text("<Project/>", encoding="utf-8")
     target = TestTarget("", "workspace", tmp_path)
-    with pytest.raises(EngineNotSupportedError):
-        select_native_engine(target)
+    context = select_native_engine(target)
+    assert context.ecosystem == "dotnet"
+    assert context.engine_name == "xunit"
 
 
 def test_go_workspace_selects_gotest(tmp_path: Path) -> None:
