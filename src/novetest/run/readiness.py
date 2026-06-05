@@ -115,7 +115,12 @@ def detect_engine_candidates(project_workspace: Path) -> tuple[EngineCandidate, 
             )
         )
 
-    dotnet_evidence = _glob_markers(project_workspace, ("*.csproj", "*.sln"))
+    # .NET marker detection walks one level deep too because the
+    # canonical .NET pattern places csprojs in subdirectories
+    # (``MyLib/MyLib.csproj`` + ``MyLib.Tests/MyLib.Tests.csproj``).
+    # ``.sln`` files live at workspace root by convention so we only
+    # walk those at depth 0.
+    dotnet_evidence = _glob_dotnet_markers(project_workspace)
     if dotnet_evidence:
         candidates.append(
             EngineCandidate(
@@ -207,8 +212,20 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     if junit_candidate is not None:
         return await _assess_junit_readiness(project_workspace, junit_candidate)
 
-    # A supported candidate was detected, but no adapter implementation
-    # exists yet (dotnet) — surface as misconfigured so the CLI
+    xunit_candidate = next(
+        (
+            c
+            for c in relevant
+            if c.ecosystem == "dotnet" and c.engine_name == "xunit"
+        ),
+        None,
+    )
+    if xunit_candidate is not None:
+        return await _assess_xunit_readiness(project_workspace, xunit_candidate)
+
+    # Every shipping ecosystem above has a dedicated branch — if the
+    # iteration reaches here, the supported list grew without a matching
+    # readiness probe being wired up. Surface as misconfigured so the CLI
     # can name the ecosystem without pretending it is ready.
     chosen = relevant[0]
     return EngineReadinessResult(
@@ -278,6 +295,32 @@ def _glob_markers(root: Path, patterns: tuple[str, ...]) -> tuple[str, ...]:
     for pattern in patterns:
         for match in root.glob(pattern):
             hits.append(match.name)
+    return tuple(sorted(set(hits)))
+
+
+def _glob_dotnet_markers(root: Path) -> tuple[str, ...]:
+    """Glob ``*.csproj`` and ``*.sln`` markers for a .NET workspace.
+
+    Walks one level deep for ``*.csproj`` because the canonical .NET
+    pattern places csprojs in subdirectories (``MyLib/MyLib.csproj`` +
+    ``MyLib.Tests/MyLib.Tests.csproj``). ``*.sln`` lives at workspace
+    root by convention; we only walk depth 0 for it.
+
+    Returns relative-from-root names (e.g. ``"MyLib.Tests/MyLib.Tests.csproj"``)
+    so the evidence is identifiable downstream when multiple csprojs at
+    different depths produce the same basename.
+    """
+
+    hits: list[str] = []
+    for sln in root.glob("*.sln"):
+        hits.append(sln.name)
+    for csproj in root.glob("*.csproj"):
+        hits.append(csproj.name)
+    for csproj in root.glob("*/*.csproj"):
+        try:
+            hits.append(str(csproj.relative_to(root)))
+        except ValueError:
+            hits.append(csproj.name)
     return tuple(sorted(set(hits)))
 
 
@@ -915,3 +958,193 @@ def _parse_cargo_version(cargo_version_output: str) -> str | None:
         version = parts[1]
         return version if version else None
     return None
+
+
+# ---------------------------------------------------------------------------
+# xunit / .NET readiness (Phase 2.5 sixth-and-last-ecosystem slice)
+# ---------------------------------------------------------------------------
+
+
+_XUNIT_PACKAGEREF_PROBE_RE: re.Pattern[str] = re.compile(
+    r"<PackageReference\s+[^>]*Include\s*=\s*[\"']xunit[\"'](?![.])",
+    re.IGNORECASE,
+)
+_XUNIT_V3_PACKAGEREF_PROBE_RE: re.Pattern[str] = re.compile(
+    r"<PackageReference\s+[^>]*Include\s*=\s*[\"']xunit[\"'][^>]*"
+    r"Version\s*=\s*[\"']3\.",
+    re.IGNORECASE,
+)
+_MSTEST_PACKAGEREF_PROBE_RE: re.Pattern[str] = re.compile(
+    r"<PackageReference\s+[^>]*Include\s*=\s*[\"']MSTest\.TestFramework[\"']",
+    re.IGNORECASE,
+)
+_NUNIT_PACKAGEREF_PROBE_RE: re.Pattern[str] = re.compile(
+    r"<PackageReference\s+[^>]*Include\s*=\s*[\"']NUnit[\"']",
+    re.IGNORECASE,
+)
+
+
+async def _assess_xunit_readiness(
+    project_workspace: Path,
+    candidate: EngineCandidate,
+) -> EngineReadinessResult:
+    """Decide xunit's readiness state for a .NET workspace.
+
+    Sequence (per task brief §3.1 + decision 2026-06-03):
+    1. ``dotnet`` on PATH? If absent → ``engine-missing`` (engine cannot
+       run at all; engine_context dropped so the caller does not name
+       xunit in the guidance — there is no xunit reachable yet).
+    2. ``*.csproj`` present (one-level walk to support the canonical
+       library + test project split)? Already confirmed by candidate
+       detection; re-checked to close a TOCTOU window.
+    3. xUnit ``<PackageReference Include="xunit">`` in the picked test
+       csproj? If MSTest or NUnit detected instead → ``engine-
+       misconfigured`` with framework-specific guidance. If none of the
+       three → generic ``missing-xunit``.
+    4. Best-effort SDK version capture from ``dotnet --version`` —
+       informational metadata; never fails the state.
+
+    Coverlet floor is NOT a readiness gate (the adapter itself emits
+    a runtime warning + falls back to aggregate when Coverlet is below
+    floor — see `dotnet_adapter.run_xunit`). Coverlet is only required
+    when `collect_coverage=True`; bare ``novetest run`` works without it.
+    """
+
+    if shutil.which("dotnet") is None:
+        return EngineReadinessResult(
+            state="engine-missing",
+            engine_context=None,
+            evidence=candidate.evidence,
+            issues=(
+                "`dotnet` not found on PATH; install .NET SDK 8.0+ "
+                "(see scripts/dev-host-setup.md §6)",
+            ),
+        )
+
+    # Project detection (mirrors dotnet_adapter._detect_test_project's
+    # one-level walk so a canonical library + test split is reachable
+    # without redundant top-level nesting).
+    direct = list(project_workspace.glob("*.csproj"))
+    one_deep = list(project_workspace.glob("*/*.csproj"))
+    all_csprojs = sorted(direct + one_deep, key=lambda p: str(p).lower())
+    if not all_csprojs:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="dotnet", engine_name="xunit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                ".NET workspace markers detected but no *.csproj found at "
+                "the workspace root or one level deep; expected the "
+                "canonical library + test project split (e.g. "
+                "MyLib/MyLib.csproj + MyLib.Tests/MyLib.Tests.csproj)",
+            ),
+        )
+
+    test_csprojs = [p for p in all_csprojs if "test" in p.name.lower()]
+    chosen_csproj = test_csprojs[0] if test_csprojs else all_csprojs[0]
+    try:
+        csproj_content = chosen_csproj.read_text(encoding="utf-8")
+    except OSError:
+        csproj_content = ""
+
+    if _XUNIT_V3_PACKAGEREF_PROBE_RE.search(csproj_content) is not None:
+        # v3 is a "readiness=ready, but coverage will be deferred" state.
+        # The adapter's run-time warning surfaces the deferral; readiness
+        # itself stays green so the user CAN run tests.
+        engine_version = await _probe_dotnet_sdk_version(project_workspace)
+        return EngineReadinessResult(
+            state="ready",
+            engine_context=NativeEngineContext(
+                ecosystem="dotnet",
+                engine_name="xunit",
+                engine_version=engine_version,
+            ),
+            evidence=candidate.evidence,
+            issues=(),
+        )
+
+    if _XUNIT_PACKAGEREF_PROBE_RE.search(csproj_content) is None:
+        # No xunit. Diagnose whether it's MSTest / NUnit / nothing.
+        if _MSTEST_PACKAGEREF_PROBE_RE.search(csproj_content) is not None:
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="dotnet", engine_name="xunit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "MSTest detected (PackageReference MSTest.TestFramework); "
+                    "Nove Test currently supports xUnit v2 only — MSTest "
+                    "support is deferred to a future cycle per "
+                    "decisions/2026-06-03-coverlet-pertestcoverage-key.md "
+                    "§\"Why no separate MstestAdapter / NunitAdapter\"",
+                ),
+            )
+        if _NUNIT_PACKAGEREF_PROBE_RE.search(csproj_content) is not None:
+            return EngineReadinessResult(
+                state="engine-misconfigured",
+                engine_context=NativeEngineContext(
+                    ecosystem="dotnet", engine_name="xunit"
+                ),
+                evidence=candidate.evidence,
+                issues=(
+                    "NUnit detected (PackageReference NUnit); Nove Test "
+                    "currently supports xUnit v2 only — NUnit support is "
+                    "deferred to a future cycle per "
+                    "decisions/2026-06-03-coverlet-pertestcoverage-key.md "
+                    "§\"Why no separate MstestAdapter / NunitAdapter\"",
+                ),
+            )
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="dotnet", engine_name="xunit"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "xUnit is not declared in "
+                f"{chosen_csproj.name}; add "
+                "<PackageReference Include=\"xunit\" Version=\"2.6.0\" /> "
+                "(or later 2.x) and <PackageReference Include="
+                "\"xunit.runner.visualstudio\" /> to the test project",
+            ),
+        )
+
+    engine_version = await _probe_dotnet_sdk_version(project_workspace)
+    return EngineReadinessResult(
+        state="ready",
+        engine_context=NativeEngineContext(
+            ecosystem="dotnet",
+            engine_name="xunit",
+            engine_version=engine_version,
+        ),
+        evidence=candidate.evidence,
+        issues=(),
+    )
+
+
+async def _probe_dotnet_sdk_version(workspace: Path) -> str | None:
+    """Best-effort SDK version read via ``dotnet --version``.
+
+    Returns ``"8.0.421"`` shape strings. None silently on any subprocess
+    failure (informational metadata only; never load-bearing for the
+    readiness state's correctness).
+    """
+
+    dotnet = shutil.which("dotnet")
+    if dotnet is None:
+        return None
+    try:
+        result = await run_subprocess(
+            [dotnet, "--version"],
+            cwd=workspace,
+            timeout=10.0,
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    text = result.stdout.decode("utf-8", errors="replace").strip()
+    return text or None

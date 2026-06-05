@@ -75,14 +75,17 @@ async def test_execute_with_engine_context_runs_pytest(
 async def test_execute_with_engine_context_rejects_unimplemented_engine(
     basic_workspace: Path, tmp_path: Path
 ) -> None:
-    """Phase 2.5 added jest, so this test now uses xunit as the
-    'still-unimplemented' example. junit / go-test / cargo-test would all
-    behave identically; xunit is chosen so the test does not become stale
-    if a follow-up slice adds another adapter.
+    """All 6 native engines (pytest / jest / go-test / cargo-test / junit /
+    xunit) are now implemented at Phase 2.5 close. To still exercise the
+    "engine not implemented" raise path we synthesize an
+    ``EngineNotSupportedError`` via a hypothetical future engine name
+    (``"phpunit"``); the contract is "every unrecognized name raises",
+    which stays load-bearing for forward compatibility with Phase 3+
+    adapter additions.
     """
 
     target = resolve_test_target("", basic_workspace)
-    context = NativeEngineContext(ecosystem="dotnet", engine_name="xunit")
+    context = NativeEngineContext(ecosystem="php", engine_name="phpunit")
     with pytest.raises(EngineNotSupportedError):
         await execute_with_engine_context(
             target, context, artifact_dir=tmp_path, timeout=10.0

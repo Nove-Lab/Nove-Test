@@ -66,6 +66,10 @@ def normalize_native_result(
         status, summary, test_results = _normalize_junit_payload(
             native_result.payload, returncode=native_result.returncode
         )
+    elif engine_name == "xunit":
+        status, summary, test_results = _normalize_xunit_payload(
+            native_result.payload, returncode=native_result.returncode
+        )
     else:
         raise AdapterInvocationError(
             f"normalize_native_result has no handler for engine={engine_name!r}",
@@ -745,6 +749,146 @@ def _aggregate_junit_status(
     - Any failing/errored TestResult → ``"failed"``.
     - No failing tests, returncode == 0 → ``"passed"``.
     - No failing tests, returncode != 0 → ``"errored"``.
+    """
+
+    failures = sum(
+        1 for tr in test_results if tr.outcome in ("failed", "errored")
+    )
+    if failures:
+        return "failed"
+    if returncode == 0:
+        return "passed"
+    return "errored"
+
+
+# ---------------------------------------------------------------------------
+# xunit payload normalization (Phase 2.5 sixth-and-last-ecosystem slice)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_xunit_payload(
+    payload: Mapping[str, Any],
+    *,
+    returncode: int,
+) -> tuple[str, dict[str, int], tuple[TestResult, ...]]:
+    """Normalize the dotnet/xunit adapter's payload into Run Record components.
+
+    Payload shape (set by ``dotnet_adapter.run_xunit`` per task brief §3.1):
+
+    ``{"csproj": "<rel path>",
+       "xunit_major_version": 2 | 3 | 0,
+       "xunit_version": "<2.6.0 | ...>",
+       "coverlet_version": "<6.0.2 | ...>" | None,
+       "coverage_mode": "per-test" | "aggregate" | None,
+       "tests": [{"identity", "test_id", "class_name", "method_name",
+                  "status", "duration_ms", "failure": {message, type, stack},
+                  "stdout", "stderr"}, ...],
+       "summary": {"total", "passed", "failed", "skipped", "errored"},
+       "failure_logs": {"<identity>": "<rel path>"},
+       "warnings": [{"kind", "message"}, ...]}``
+
+    Status aggregation mirrors junit/gotest/cargo:
+    - Any failing OR errored test → ``"failed"``.
+    - No failing/errored tests, returncode == 0 → ``"passed"``.
+    - No failing/errored tests, returncode != 0 → ``"errored"`` (build /
+      VSTest harness failure after some tests ran — TRX still parses).
+    """
+
+    tests_raw = payload.get("tests")
+    if not isinstance(tests_raw, list):
+        raise AdapterInvocationError(
+            "xunit payload missing 'tests' array",
+            kind="unparseable-output",
+        )
+
+    failure_logs_raw = payload.get("failure_logs")
+    failure_logs: Mapping[str, str] = (
+        {str(k): str(v) for k, v in failure_logs_raw.items() if isinstance(v, str)}
+        if isinstance(failure_logs_raw, Mapping)
+        else {}
+    )
+
+    test_results: list[TestResult] = []
+    summary: dict[str, int] = {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errored": 0,
+    }
+    for entry in tests_raw:
+        if not isinstance(entry, Mapping):
+            continue
+        identity = str(entry.get("identity", ""))
+        if not identity:
+            continue
+        status = str(entry.get("status", "unknown"))
+
+        if status in summary:
+            summary[status] += 1
+
+        duration_raw = entry.get("duration_ms")
+        duration_ms = duration_raw if isinstance(duration_raw, int) else None
+
+        failure_reference: str | None = None
+        if status in ("failed", "errored"):
+            failure_reference = failure_logs.get(identity)
+            if failure_reference is None:
+                # Adapter elected not to write a per-test log (e.g. the
+                # TRX <ErrorInfo> element was empty). Surface the failure
+                # message inline for parity with pytest/junit's inline
+                # failure_reference path.
+                failure_payload = entry.get("failure")
+                if isinstance(failure_payload, Mapping):
+                    message = failure_payload.get("message")
+                    type_ = failure_payload.get("type")
+                    parts: list[str] = []
+                    if isinstance(type_, str) and type_:
+                        parts.append(type_)
+                    if isinstance(message, str) and message:
+                        parts.append(message)
+                    if parts:
+                        failure_reference = ": ".join(parts)
+
+        test_results.append(
+            TestResult(
+                node_id=identity,
+                outcome=status,
+                duration_ms=duration_ms,
+                failure_reference=failure_reference,
+            )
+        )
+
+    summary["total"] = len(test_results)
+
+    status_agg = _aggregate_xunit_status(
+        returncode=returncode,
+        test_results=tuple(test_results),
+    )
+    return status_agg, summary, tuple(test_results)
+
+
+def _aggregate_xunit_status(
+    *,
+    returncode: int,
+    test_results: tuple[TestResult, ...],
+) -> str:
+    """Decide passed / failed / errored from xunit / VSTest signals.
+
+    ``dotnet test`` exits non-zero whenever any test failed OR a build
+    step (compile) failed before test execution. The split mirrors
+    ``_aggregate_junit_status`` because the semantic contract is the
+    same — both build-tool-driven engines surface test failure as a
+    non-zero process exit:
+    - Any failing/errored TestResult → ``"failed"``.
+    - No failing tests, returncode == 0 → ``"passed"``.
+    - No failing tests, returncode != 0 → ``"errored"`` (e.g. compile
+      failure that ran zero tests, or a VSTest harness error after some
+      tests passed).
+
+    Note: ``dotnet test``'s exit code is empirically ``1`` when ≥1 test
+    fails (verified on equipped host SDK 8.0.421 + xunit 2.6.0). The
+    `metadata.native_exit_code` forensic surface preserves this value
+    regardless of the derived ``status``.
     """
 
     failures = sum(
