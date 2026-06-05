@@ -501,6 +501,8 @@ not ship. See [`decisions/2026-06-03-coverlet-pertestcoverage-key.md`](../../age
   across OS path-safety rules; the correlation logic is load-bearing and
   warrants a fixture probe before commit.
 
+> **Amendment 2026-06-05**: Per [`decisions/2026-06-03-coverlet-pertestcoverage-key.md`](../../agent-comms/decisions/2026-06-03-coverlet-pertestcoverage-key.md) §3 (amended 2026-06-05): `<PerTestCoverage>true</PerTestCoverage>` is **empirically inert** on the Coverlet XPlat data collector path (verified on Coverlet 6.0.2 + 6.0.4, dotnet SDK 8.0.421, Linux x86_64). Only the aggregate `coverage.cobertura.xml` is produced. **The adapter ships aggregate-effective-default for v1** with a glob-first/aggregate-fallback strategy. Per-test mode on .NET is achievable only via `coverlet.msbuild` (user csproj modification — violates the non-modification contract) and is deferred. Phase 4 Localization SBFL on .NET projects operates at aggregate granularity and routes to `failure_proximity` mode (per decision §R4).
+
 ### Test-to-code mapping
 
 **Per-test attribution is supported.** With Coverlet collector + `PerTestCoverage`, we get per-test Cobertura files. Alternatively, Microsoft's first-party `dotnet-coverage` tool's static instrumentation has a per-test mode used by Visual Studio's "Live Unit Testing." `mapping_granularity: per-test`.

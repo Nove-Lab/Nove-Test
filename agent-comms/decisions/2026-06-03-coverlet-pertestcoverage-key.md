@@ -51,11 +51,13 @@ created at Phase 2.5 .NET cycle) MUST:
    </RunSettings>
    ```
 
-3. **Glob output files at `TestResults/**/coverage.*.cobertura.xml`** (NOT the
-   aggregate `coverage.cobertura.xml` pattern). In per-test mode Coverlet writes
-   one file per test method named `coverage.<test-display-name>.cobertura.xml`
-   where `<test-display-name>` is a slugified form of the test method's display
-   name.
+3. **Glob output files**:
+   - **Aggregate (v1 effective default)**: `TestResults/**/coverage.cobertura.xml` — single file per test run.
+   - **Per-test (deferred, forward-compat retained)**: `TestResults/**/coverage.*.cobertura.xml` — one file per test method named `coverage.<test-display-name>.cobertura.xml` where `<test-display-name>` is a slugified form of the test method's display name.
+
+   The adapter MUST attempt the per-test glob first and fall back to aggregate when the per-test glob returns 0 files.
+
+   > **Amendment 2026-06-05 (CEO-approved):** Empirical verification on the Phase 2.5 .NET adapter cycle (Coverlet 6.0.2 AND 6.0.4 / dotnet SDK 8.0.421 / xunit 2.6 / Linux x86_64) demonstrates that `<PerTestCoverage>true</PerTestCoverage>` is **inert** via the `coverlet.collector` XPlat data collector path — only the aggregate `coverage.cobertura.xml` is produced regardless of the runsettings element. VSTest `--diag` log confirms the config reaches Coverlet's `CoverletInProcDataCollector`; Coverlet does NOT split per-test under this path. Per-test coverage on .NET is achievable only via the `coverlet.msbuild` MSBuild integration which requires user csproj modification, violating Nove Test's non-modification contract. **Adapter ships aggregate-effective-default for v1.** The adapter retains `<PerTestCoverage>true</PerTestCoverage>` in its runsettings template for forward-compatibility with a future Coverlet release that fixes the XPlat path. The per-test-glob-with-aggregate-fallback strategy auto-degrades today (100% to aggregate); zero adapter change required if a future Coverlet release flips the behavior. See `agent-comms/questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md` (resolved by this amendment, queued for archive at cycle close).
 
 4. **Detect the user's resolved Coverlet version via `dotnet list <project>
    package --include-transitive`** so transitive references through
@@ -158,6 +160,8 @@ The .NET adapter cycle's DoD MUST include bullets addressing R1 and R2.
   (supported as of dotnet SDK 7.0) when the SDK version allows; otherwise
   fall back to tabular parsing.
 
+- **R4 (medium, MVP-affecting) — added 2026-06-05 amendment** — Phase 4 Localization SBFL across .NET projects operates at **aggregate granularity** (not per-test) because per-test coverage is empirically inert on the Coverlet XPlat path (see §3 amendment). Per `decisions/2026-05-30-localization-outcome-envelope-shape.md` and Phase 4's three-mode design, .NET projects route to **`failure_proximity` mode** (file-edit-distance heuristic on test failures), NOT full SBFL with per-test spectrum matrix (Ochiai / Op2 / DStar / Tarantula). This is a **degraded but well-defined** user experience — `novetest localization` CLI still returns ranked candidates, just with reduced precision compared to per-test SBFL. The 3-mode design absorbs this without breaking the user contract. Future cycle pathways to restore per-test on .NET: (a) opt-in `coverlet.msbuild` mode via a flag that explicitly modifies user's csproj (with prominent user-consent prompt — opt-in violation of non-modification contract is acceptable when explicit), OR (b) a future Coverlet XPlat path fix from upstream.
+
 ## Supported-engine matrix amendment
 
 Adds to `decisions/2026-05-25-supported-engine-matrix.md`:
@@ -187,7 +191,10 @@ When PM writes the .NET adapter task brief, it MUST:
 2. Include the §6 xUnit v3 detection + `xunit-v3-coverage-deferred` warning
    as a DoD bullet.
 3. Include the R1 parametrized-fixture probe + R2 >=5k-test performance
-   validation as separate DoD bullets.
+   validation as separate DoD bullets. (R1 is **resolved 2026-06-05** by the §3
+   amendment: per-test coverage on the XPlat path is empirically inert, so the
+   slug-correlation algorithm only exercises against synthetic test data and
+   the aggregate-fallback path covers the runtime reality.)
 4. Reference the supported-engine matrix amendment for floor versions.
 5. Reference the dev-host-setup .NET section so Manual Test can equip the
    host before E2E verification (per 2026-05-29 polyglot-host-parity contract).
