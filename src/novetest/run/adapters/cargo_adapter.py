@@ -83,6 +83,27 @@ FAILURES_DIR_NAME = "failures"
 # token nextest will keep printing as long as the gate is named that.
 _NEXTEST_LIBTEST_JSON_ENV_LITERAL = "NEXTEST_EXPERIMENTAL_LIBTEST_JSON"
 
+# The no-tests-match stderr signature `cargo-nextest` ≥ 0.9.50 emits
+# when its filter expression resolves to zero tests across all binaries
+# (exit code 4; distinct from compile failures which exit 101). The two
+# literals together form the binding signature: ``Starting 0 tests
+# across`` (the per-binary count line) AND ``error: no tests to run``
+# (the trailing diagnostic). Both must be present for the carve-out to
+# fire — the count line alone could appear in pathological
+# "compiled-but-zero-`#[test]`-items" scenarios where the more accurate
+# diagnosis is build-adjacent ("the user's fixture is empty"); the
+# conjunction excludes that case because nextest only emits the second
+# literal on filter mismatch, not on empty binaries. Recognizing this
+# pair surfaces a distinct message before the generic ``likely build
+# failure`` branch so users get accurate root-cause guidance — stderr
+# clearly shows ``Finished test profile … target(s)`` earlier in the
+# run when the build actually succeeded. See
+# ``agent-comms/findings/manual-test-team-2026-06-04-host-equip.md``
+# §"Cargo adapter — CLI vs adapter-direct discrepancy" for the
+# verbatim stderr capture this heuristic recognizes.
+_NEXTEST_NO_TESTS_LITERAL = "Starting 0 tests across"
+_NEXTEST_NO_TESTS_ERROR_LITERAL = "error: no tests to run"
+
 
 def _libtest_json_env_misconfigured_error(
     *, mode: str, returncode: int, stderr_tail: str
@@ -216,7 +237,31 @@ async def run_cargo(
             "--workspace",
         ]
 
-    if target_expression:
+    # Fix A (2026-06-05 cargo CLI orchestration defect):
+    # ``cargo nextest`` does NOT take filesystem-directory arguments as
+    # positional filters. The positional argument is interpreted as a
+    # **filter DSL expression** (e.g. ``tests::add`` or
+    # ``package(foo)``). When ``target_resolver`` classifies the user's
+    # input as ``target_type="directory"`` (the common ``novetest run .``
+    # case, where ``workspace_context / "."`` exists as a directory), the
+    # literal ``"."`` becomes a filter DSL token that matches a test
+    # whose ID equals ``"."`` — nextest finds no such test and exits 4
+    # with "no tests to run". Suppress the append for directory targets:
+    # ``--workspace`` already covers the workspace root, which matches
+    # the user's intent for ``novetest run .`` (identical to
+    # ``novetest run`` bare). Sub-crate directory selection (e.g.
+    # ``novetest run crates/foo/``) would need translation to nextest's
+    # expression DSL (``-E 'package(foo)'``) or cargo's ``-p`` selector;
+    # that is deferred until a user requests it. Documented in
+    # ``design/implementation-plan/engine-adapters.md §5``. Non-directory
+    # target types (``workspace``, ``nodeid``, ``file``) keep the
+    # verbatim append: ``workspace`` produces an empty expression and
+    # falls out at the truthiness check; ``nodeid`` carries a
+    # ``crate::path::test`` form that nextest accepts directly;
+    # ``file`` is a free-form string the user opted into and the engine
+    # surfaces its own error on mismatch — parity with the pre-fix
+    # contract for those three types.
+    if target_expression and test_target.target_type != "directory":
         argv.append(target_expression)
 
     env = _build_child_env()
@@ -340,6 +385,41 @@ async def run_cargo(
                 mode="nextest",
                 returncode=result.returncode,
                 stderr_tail=detail_source[-400:],
+            )
+        # Fix B (2026-06-05 cargo CLI orchestration defect):
+        # Distinguish nextest's "filter matched zero tests" exit (which
+        # is exit 4 and stderr-signaled with the conjunction of the
+        # two literals below) from a true compile failure (typically
+        # exit 101 with cargo's ``error[E####]`` diagnostics in
+        # stderr). The pre-fix branch surfaced both as "likely build
+        # failure" wording, misleading users whose stderr clearly
+        # showed ``Finished test profile … target(s)`` earlier in the
+        # run. Post-fix: emit a distinct message that names the
+        # actual cause and references the offending filter expression
+        # so the user can correlate. Stays on
+        # ``kind="unparseable-output"`` per
+        # ``tasks/run-team-2026-06-04-cargo-cli-orchestration-defect.md``
+        # §2 — adding a new kind would be a model-shape change and
+        # requires a ``questions/`` entry; v1 disambiguation via
+        # message text is sufficient. After Fix A above, this branch
+        # rarely fires on the ``novetest run .`` path (directory-type
+        # targets no longer reach nextest as filters); the carve-out
+        # remains valuable for users who pass explicit filter
+        # expressions (e.g. ``novetest run tests::nonexistent``).
+        if (
+            _NEXTEST_NO_TESTS_LITERAL in stderr_text
+            and _NEXTEST_NO_TESTS_ERROR_LITERAL in stderr_text
+        ):
+            raise AdapterInvocationError(
+                f"cargo nextest filter matched zero tests "
+                f"(target_expression={target_expression!r}, "
+                f"target_type={test_target.target_type!r}); the filter "
+                f"expression did not match any test in the workspace. "
+                f"Pass an explicit filter like ``tests::name`` or "
+                f"``package(crate)``, or omit the positional argument "
+                f"to run the full workspace. stderr tail: "
+                f"{stderr_text[-400:]}",
+                kind="unparseable-output",
             )
         raise AdapterInvocationError(
             f"cargo nextest exited {result.returncode} without starting any test "
