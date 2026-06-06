@@ -50,6 +50,49 @@ adapter automatically promotes the granularity. See
 ``agent-comms/questions/run-team-2026-06-05-coverlet-pertestcoverage-
 empirically-inert.md`` for the diag-log capture.
 
+**Hotfix #1 (2026-06-06)**: Manual Test 2026-06-05 verdict-failed the
+initial adapter (commit ``f8f8d93``) because ``_probe_coverlet_version``
+ran ``dotnet list <csproj> package --include-transitive --format json``
+BEFORE ``dotnet test``. That command requires
+``obj/project.assets.json`` (a ``dotnet restore`` artifact), which a
+freshly-copied user project does NOT have. The probe returned ``None``,
+the adapter treated Coverlet as absent, and ``novetest run --coverage``
+silently degraded to a no-coverage run with no envelope-level error.
+
+The fix has three parts:
+
+1. **F1a — pre-restore before probe.** ``_ensure_csproj_restored`` runs
+   ``dotnet restore <csproj>`` BEFORE ``_probe_coverlet_version`` on the
+   coverage path. ``dotnet restore`` is idempotent (~50-200ms on warm
+   cache) and tolerated to non-zero exit (the probe still tries and the
+   F1b safety-net fires if it then also fails). Placement is ONLY on
+   the coverage path so non-coverage runs pay nothing extra.
+
+2. **F1b — envelope-level visibility via metadata.** When
+   ``--coverage`` is requested AND ``_probe_coverlet_version`` returns
+   ``None`` AFTER restore, the adapter surfaces a
+   ``coverage_unavailable_kind`` + ``coverage_unavailable_message`` pair
+   on ``NativeResult.metadata`` so the user-visible envelope at
+   ``data.memory_entry.run_record.metadata`` carries the warning. The
+   existing ``payload["warnings"]`` entry stays for forensic continuity,
+   but it dies at the normalizer (which lifts ``metadata`` +
+   ``artifact_paths`` but NOT ``payload``). A formal envelope ``warnings``
+   projection from ``RunOutcome`` requires Orchestration-team plumbing
+   (``workflows/run.py`` + ``cli/app.py::run_cmd``); filed as
+   ``agent-comms/questions/run-team-2026-06-06-envelope-warnings-projection.md``
+   for PM disposition.
+
+3. **F1c — integration test pins the fresh-fixture reproducer.**
+   ``test_coverage_run_on_fresh_fixture_with_no_prior_restore`` in
+   ``tests/integration/run/test_dotnet_coverage.py`` explicitly asserts
+   the no-``obj/`` precondition and the post-fix
+   ``coverlet_version == "6.0.2"`` outcome.
+
+See ``agent-comms/findings/manual-test-team-2026-06-05-phase2.5-dotnet-
+adapter.md`` for the D1 reproducer transcript and
+``agent-comms/tasks/run-team-2026-06-05-phase2.5-dotnet-adapter-hotfix.md``
+for the binding fix shape.
+
 xUnit v3 detection (per decision §6):
 
 - ``<PackageReference Include="xunit" Version="3.*" />`` in the csproj
@@ -293,9 +336,45 @@ async def run_xunit(
     # v2). Determines whether to use the per-test template (forward-compat)
     # or the aggregate template (degraded), and surfaces a warning when
     # the user's resolved Coverlet is below floor or absent.
+    #
+    # Hotfix #1 F1b — metadata-level safety-net for the "probe returned
+    # None despite coverage requested" path. Surfaced via
+    # ``metadata["coverage_unavailable_kind"]`` + ``["..._message"]`` so
+    # the user-visible envelope at
+    # ``data.memory_entry.run_record.metadata`` carries the warning.
+    # ``payload["warnings"]`` is kept for forensic continuity but does
+    # NOT propagate to the envelope today (the normalizer only lifts
+    # ``metadata`` + ``artifact_paths`` — see normalizer.py line 80-114).
     coverlet_version: tuple[int, int, int] | None = None
     coverlet_mode: str = "aggregate"  # "per-test" or "aggregate"; only used when collect_coverage
+    coverage_unavailable_kind: str | None = None
+    coverage_unavailable_message: str | None = None
     if collect_coverage and not is_xunit_v3:
+        # Hotfix #1 F1a — Run `dotnet restore <csproj>` BEFORE the
+        # Coverlet version probe. The probe uses
+        # ``dotnet list package --include-transitive --format json``
+        # which requires ``obj/project.assets.json`` (a restore
+        # artifact) to enumerate the resolved package graph. On a
+        # freshly-copied user project the assets file doesn't exist,
+        # the probe returns None, and the adapter falls through to
+        # "Coverlet absent" — silently no-op'ing the ``--coverage``
+        # flag. This was the verdict-blocking D1 from Manual Test's
+        # 2026-06-05 finding.
+        #
+        # Restore IS idempotent (~50-200ms on warm cache; ~1-3s on cold
+        # NuGet cache on first invocation of a fresh fixture). Cost is
+        # bounded; always pay it on the coverage path. Non-zero exit is
+        # tolerated: if restore fails (e.g. offline + cold cache), the
+        # probe still tries (a pre-existing ``obj/`` may carry the
+        # assets file from a prior run), and if the probe ALSO fails
+        # the F1b safety-net fires so the user sees what went wrong
+        # via metadata.
+        #
+        # Placement: ONLY on the coverage path (guarded by
+        # ``collect_coverage and not is_xunit_v3``). Non-coverage runs
+        # pay nothing extra. The probe itself shares the same gate, so
+        # restore-before-probe is the natural composition.
+        await _ensure_csproj_restored(dotnet_path, chosen_csproj, workspace)
         coverlet_version = await _probe_coverlet_version(
             dotnet_path, chosen_csproj, workspace
         )
@@ -312,6 +391,25 @@ async def run_xunit(
                         "this run."
                     ),
                 }
+            )
+            # F1b safety-net: surface to metadata so the warning reaches
+            # the envelope at data.memory_entry.run_record.metadata.
+            # Triggers ONLY when restore happened (per F1a above) but
+            # the probe STILL returned None — i.e. genuine
+            # "coverlet.collector not in user's package graph" OR a
+            # rarer "restore failed silently AND no prior obj/ existed"
+            # case. Both are user-actionable; the message names both.
+            coverage_unavailable_kind = "coverlet-absent-or-stale"
+            coverage_unavailable_message = (
+                "novetest run --coverage was requested but "
+                "coverlet.collector could not be detected in the "
+                "project's package graph after `dotnet restore`. The "
+                "run executed WITHOUT coverage collection. To enable "
+                "coverage: add <PackageReference Include=\""
+                "coverlet.collector\" Version=\"6.0.2\" /> (or later "
+                "6.0.x) to your test .csproj. If the package IS "
+                "declared and this warning persists, check the "
+                "stderr.log artifact for `dotnet restore` errors."
             )
         elif coverlet_version < COVERLET_FLOOR_VERSION:
             payload_warnings.append(
@@ -463,6 +561,18 @@ async def run_xunit(
     if coverage_mapping_granularity is not None:
         metadata["coverage_mapping_granularity"] = coverage_mapping_granularity
     metadata["dotnet_sdk_version"] = dotnet_version_str or ""
+    # Hotfix #1 F1b — surface the coverage-unavailable warning into
+    # metadata. The pair {coverage_unavailable_kind, coverage_unavailable_message}
+    # reaches the user via the CLI envelope at
+    # ``data.memory_entry.run_record.metadata`` (the normalizer lifts
+    # NativeResult.metadata onto RunRecord.metadata; see
+    # normalizer.py:97-98). Reserved-key guard there allows arbitrary
+    # non-``native_exit_code`` keys, so this is safe. Both keys are
+    # absent on the happy path (Coverlet present + version ≥ floor).
+    if coverage_unavailable_kind is not None:
+        metadata["coverage_unavailable_kind"] = coverage_unavailable_kind
+    if coverage_unavailable_message is not None:
+        metadata["coverage_unavailable_message"] = coverage_unavailable_message
 
     return NativeResult(
         engine_name=ENGINE_NAME,
@@ -606,6 +716,60 @@ def _detect_xunit_resolved_version(csproj_content: str) -> str | None:
         re.IGNORECASE,
     )
     return match.group(1) if match else None
+
+
+# ---------------------------------------------------------------------------
+# Project restore (hotfix #1 F1a — 2026-06-06)
+# ---------------------------------------------------------------------------
+
+
+async def _ensure_csproj_restored(
+    dotnet_path: str, csproj_path: Path, workspace: Path
+) -> None:
+    """Run ``dotnet restore <csproj>`` to materialize ``obj/project.assets.json``.
+
+    Called by ``run_xunit`` on the coverage path BEFORE
+    ``_probe_coverlet_version``. The probe (``dotnet list <csproj>
+    package --include-transitive --format json``) requires the assets
+    file to enumerate the resolved package graph; on a freshly-copied
+    user project the assets file doesn't exist and the probe silently
+    returns ``None``, which the adapter then misreads as "Coverlet
+    absent". That was Manual Test 2026-06-05 D1 — the verdict-blocking
+    defect this hotfix closes.
+
+    Restore IS idempotent:
+    - Warm cache + already-restored: ~50-200 ms (file-stamp comparison)
+    - Cold NuGet cache, fresh fixture: ~1-3 s on first invocation
+    - Subsequent invocations of the same fixture: ~50-200 ms
+
+    Non-zero exit is tolerated rather than raised — callers (the F1b
+    safety-net + the existing ``engine-misconfigured`` warning) will
+    surface a structured user-facing message if the probe ALSO returns
+    None after a failed restore. Pre-existing ``obj/`` from a prior
+    ``dotnet test`` may still satisfy the probe even when today's
+    restore fails (e.g. offline + cold cache); we want to give that
+    path a chance to succeed before degrading to no-coverage.
+
+    The 300-second timeout matches the upper bound for a cold NuGet
+    cache pulling all of xunit + Microsoft.NET.Test.Sdk + coverlet.collector
+    on a slow connection. Restore should never take longer than this
+    in practice; the timeout is a safety belt rather than an expected
+    latency budget.
+
+    A ``FileNotFoundError`` during exec (TOCTOU after
+    ``shutil.which`` resolved earlier in ``run_xunit``) is allowed to
+    propagate — the caller will then re-encounter the same condition
+    when spawning ``dotnet test`` itself, mapping to the canonical
+    ``missing-binary`` AdapterInvocationError there. Doing the same
+    here would duplicate the error-shape construction; one source of
+    truth is cleaner.
+    """
+
+    await run_subprocess(
+        [dotnet_path, "restore", str(csproj_path)],
+        cwd=workspace,
+        timeout=300.0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1296,6 +1460,7 @@ __all__ = [
     "_detect_test_project",
     "_detect_xunit_major_version",
     "_detect_xunit_resolved_version",
+    "_ensure_csproj_restored",
     "_format_version",
     "_glob_coverage_xml",
     "_is_layout_ambiguous",

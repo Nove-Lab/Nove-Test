@@ -40,6 +40,7 @@ from novetest.run.adapters.dotnet_adapter import (
     _detect_test_project,
     _detect_xunit_major_version,
     _detect_xunit_resolved_version,
+    _ensure_csproj_restored,
     _format_version,
     _glob_coverage_xml,
     _is_layout_ambiguous,
@@ -144,11 +145,14 @@ def _make_run_subprocess_stub(
     coverlet_json: bytes | None = None,
     coverlet_tabular: bytes | None = None,
     coverlet_returncode: int = 0,
+    restore_returncode: int = 0,
     main_returncode: int = 0,
     main_stdout: bytes = b"",
     main_stderr: bytes = b"",
     main_timed_out: bool = False,
     captured_argv: list[list[str]] | None = None,
+    captured_restore: list[list[str]] | None = None,
+    call_log: list[str] | None = None,
     seed_trx: str | None = _MINIMAL_TRX,
     seed_coverage_xml: bool = False,
     seed_per_test_coverage_files: int = 0,
@@ -160,6 +164,7 @@ def _make_run_subprocess_stub(
     of path-prefix variations):
 
     1. ``[dotnet, "--version"]`` → ``dotnet_version`` bytes (returncode 0)
+    1.5 ``[dotnet, "restore", <csproj>]`` → ``restore_returncode`` (hotfix #1 F1a)
     2. ``[dotnet, "list", <csproj>, "package", "--include-transitive", "--format", "json"]``
        → ``coverlet_json`` bytes (None → empty projects list)
     3. ``[dotnet, "list", <csproj>, "package", "--include-transitive"]``
@@ -168,9 +173,20 @@ def _make_run_subprocess_stub(
        optionally seeds ``results.trx`` + ``coverage.cobertura.xml`` under
        ``<results-directory>``, returns the configured outcome.
 
-    ``captured_argv`` is mutated in-place when the main invocation runs —
+    ``captured_argv`` is mutated in-place when the MAIN invocation runs —
     each call appends the full argv list. Tests that need to assert
     argv shape pass a list and inspect it after ``run_xunit`` returns.
+
+    ``captured_restore`` (hotfix #1 F1a, 2026-06-06) is the separate
+    capture list for ``dotnet restore`` invocations — kept distinct
+    from ``captured_argv`` so existing tests that index
+    ``captured[0]`` as the main call do not break.
+
+    ``call_log`` (hotfix #1 F1a, 2026-06-06) is a parallel ordering
+    tracker: every recognized call appends one of ``"version"`` /
+    ``"restore"`` / ``"list-json"`` / ``"list-tabular"`` / ``"main"``.
+    Tests that assert ordering (e.g. restore-before-probe) inspect
+    this list.
     """
 
     async def stub(
@@ -189,10 +205,29 @@ def _make_run_subprocess_stub(
             and len(argv) == 2
             and argv[-1] == "--version"
         ):
+            if call_log is not None:
+                call_log.append("version")
             return SubprocessResult(
                 returncode=0,
                 stdout=dotnet_version,
                 stderr=b"",
+                timed_out=False,
+            )
+
+        # 1.5. dotnet restore <csproj>  (hotfix #1 F1a — 2026-06-06)
+        if (
+            isinstance(argv, (list, tuple))
+            and len(argv) >= 2
+            and argv[1] == "restore"
+        ):
+            if captured_restore is not None:
+                captured_restore.append(list(argv))
+            if call_log is not None:
+                call_log.append("restore")
+            return SubprocessResult(
+                returncode=restore_returncode,
+                stdout=b"",
+                stderr=b"" if restore_returncode == 0 else b"restore failed",
                 timed_out=False,
             )
 
@@ -204,6 +239,8 @@ def _make_run_subprocess_stub(
             and "--format" in argv
         ):
             payload = coverlet_json or b'{"version":1,"parameters":"","projects":[]}'
+            if call_log is not None:
+                call_log.append("list-json")
             return SubprocessResult(
                 returncode=coverlet_returncode,
                 stdout=payload,
@@ -218,6 +255,8 @@ def _make_run_subprocess_stub(
             and "package" in argv
         ):
             payload = coverlet_tabular or b""
+            if call_log is not None:
+                call_log.append("list-tabular")
             return SubprocessResult(
                 returncode=coverlet_returncode,
                 stdout=payload,
@@ -228,6 +267,8 @@ def _make_run_subprocess_stub(
         # 4. Main invocation.
         if captured_argv is not None:
             captured_argv.append(list(argv))
+        if call_log is not None:
+            call_log.append("main")
 
         # Find ``--results-directory <path>`` so the stub can seed the
         # TRX file + per-test or aggregate coverage files (the parser
@@ -1370,6 +1411,439 @@ class TestEndToEndStubbed:
         with pytest.raises(AdapterInvocationError) as exc_info:
             await run_xunit(target, artifact_dir=tmp_path, timeout=0.1)
         assert exc_info.value.kind == "timed-out"
+
+
+# ---------------------------------------------------------------------------
+# TestPreRestore (hotfix #1 F1a — 2026-06-06)
+# ---------------------------------------------------------------------------
+
+
+class TestPreRestore:
+    """``_ensure_csproj_restored`` + its placement before
+    ``_probe_coverlet_version`` on the coverage path.
+
+    Closes the verdict-blocking D1 defect Manual Test caught on
+    2026-06-05 (``findings/manual-test-team-2026-06-05-phase2.5-dotnet-
+    adapter.md``): the probe ran on a freshly-copied project that had
+    no ``obj/project.assets.json`` (the assets file is materialized by
+    ``dotnet restore``), the probe returned None, and the adapter
+    silently no-op'd the ``--coverage`` flag.
+
+    Fix: ``_ensure_csproj_restored`` runs ``dotnet restore <csproj>``
+    BEFORE the probe on the coverage path. These tests pin the
+    placement + the call shape + the failure-tolerance contract.
+    """
+
+    async def test_restore_invoked_before_probe_on_coverage_path(
+        self,
+        dotnet_test_basic_coverage_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The canonical ordering — restore MUST happen before list-json
+        probe on the coverage path. This is the binding ordering: if it
+        ever flips, D1 reopens because the probe runs against a
+        no-assets-file state."""
+
+        call_log: list[str] = []
+        json_payload = (
+            b'{"version":1,"parameters":"","projects":[{"path":"x.csproj",'
+            b'"frameworks":[{"framework":"net8.0",'
+            b'"topLevelPackages":[{"id":"coverlet.collector","requestedVersion":"6.0.2","resolvedVersion":"6.0.2"}],'
+            b'"transitivePackages":[]}]}]}'
+        )
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(
+                coverlet_json=json_payload,
+                call_log=call_log,
+                seed_coverage_xml=True,
+            ),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", dotnet_test_basic_coverage_workspace)
+        await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        # restore MUST appear in the call log.
+        assert "restore" in call_log, (
+            f"_ensure_csproj_restored was not invoked on coverage path; "
+            f"call_log={call_log!r}"
+        )
+        # restore MUST appear BEFORE the list-json probe.
+        restore_idx = call_log.index("restore")
+        list_idx = call_log.index("list-json")
+        assert restore_idx < list_idx, (
+            f"restore ran AFTER list-json probe; ordering broken. "
+            f"call_log={call_log!r}. This regresses D1 (Manual Test "
+            f"2026-06-05) — the probe needs obj/project.assets.json "
+            f"from restore."
+        )
+        # And both MUST happen before the main `dotnet test`.
+        main_idx = call_log.index("main")
+        assert list_idx < main_idx, (
+            f"list-json ran AFTER main `dotnet test`; ordering broken. "
+            f"call_log={call_log!r}"
+        )
+
+    async def test_restore_not_invoked_on_non_coverage_path(
+        self,
+        dotnet_test_basic_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-coverage runs MUST NOT pay the restore cost. The
+        probe-and-restore composition is gated by ``collect_coverage``;
+        bare ``novetest run`` paths stay zero-overhead.
+
+        ``dotnet test`` itself performs an implicit restore when it
+        runs, so the user's project still ends up correctly built; we
+        just don't FORCE an extra restore from this adapter on the
+        non-coverage path where the probe isn't called at all."""
+
+        call_log: list[str] = []
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(call_log=call_log),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", dotnet_test_basic_workspace)
+        await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=False,
+        )
+        assert "restore" not in call_log, (
+            f"restore invoked on non-coverage path; should be coverage-"
+            f"path-only. call_log={call_log!r}"
+        )
+        assert "list-json" not in call_log
+        assert "list-tabular" not in call_log
+
+    async def test_restore_not_invoked_on_xunit_v3_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """xUnit v3 detected + coverage requested → v3 deferral fires
+        BEFORE the probe (and therefore before restore). The probe
+        path is short-circuited; restore should not happen either."""
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _seed_csproj(ws, content=(
+            '<Project Sdk="Microsoft.NET.Sdk">\n'
+            '  <ItemGroup>\n'
+            '    <PackageReference Include="xunit" Version="3.0.0" />\n'
+            '  </ItemGroup>\n'
+            '</Project>\n'
+        ))
+        call_log: list[str] = []
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(call_log=call_log),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", ws)
+        await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        assert "restore" not in call_log, (
+            f"restore invoked on xunit v3 path; should short-circuit "
+            f"before restore. call_log={call_log!r}"
+        )
+        assert "list-json" not in call_log
+
+    async def test_restore_failure_tolerated_proceeds_to_probe(
+        self,
+        dotnet_test_basic_coverage_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-zero exit from ``dotnet restore`` MUST NOT raise. The
+        probe still runs (a pre-existing ``obj/`` from a prior run
+        may still satisfy it), and if the probe ALSO returns None the
+        F1b safety-net surfaces a structured warning."""
+
+        call_log: list[str] = []
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(
+                restore_returncode=1,
+                # Probe returns no packages too — exercises the safety-net path.
+                coverlet_json=b'{"version":1,"parameters":"","projects":[]}',
+                call_log=call_log,
+            ),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", dotnet_test_basic_coverage_workspace)
+        # MUST NOT raise even though restore failed.
+        result = await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        # Restore was attempted.
+        assert "restore" in call_log
+        # Probe ran after restore failure (the "pre-existing obj/" tolerance).
+        assert "list-json" in call_log
+        assert call_log.index("restore") < call_log.index("list-json")
+        # F1b safety-net fired (probe also returned None).
+        assert result.metadata.get("coverage_unavailable_kind") == (
+            "coverlet-absent-or-stale"
+        )
+
+    async def test_restore_subprocess_args_match_contract(
+        self,
+        dotnet_test_basic_coverage_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The captured restore argv MUST be exactly
+        ``[dotnet, "restore", <csproj_absolute_path>]``. Tests against
+        ad-hoc args (e.g. ``--force``, ``--locked-mode``, etc.) — we
+        want the minimal, user-defaults-preserving invocation."""
+
+        captured_restore: list[list[str]] = []
+        json_payload = (
+            b'{"version":1,"parameters":"","projects":[{"path":"x.csproj",'
+            b'"frameworks":[{"framework":"net8.0",'
+            b'"topLevelPackages":[{"id":"coverlet.collector","resolvedVersion":"6.0.2"}],'
+            b'"transitivePackages":[]}]}]}'
+        )
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(
+                coverlet_json=json_payload,
+                captured_restore=captured_restore,
+                seed_coverage_xml=True,
+            ),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", dotnet_test_basic_coverage_workspace)
+        await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        assert len(captured_restore) == 1, (
+            f"expected exactly one restore call; got {captured_restore!r}"
+        )
+        argv = captured_restore[0]
+        assert argv[0] == _FAKE_DOTNET
+        assert argv[1] == "restore"
+        # The third arg MUST be a path that ends in `.csproj` (the
+        # test project's csproj path under workspace). Exact path
+        # depends on test_basic_coverage workspace layout; sanity-
+        # check shape rather than fix the prefix.
+        assert argv[2].endswith(".csproj"), (
+            f"third restore arg should be a csproj path; got {argv[2]!r}"
+        )
+        # No extra args — minimal invocation.
+        assert len(argv) == 3, (
+            f"restore argv has unexpected extra tokens: {argv!r}"
+        )
+
+    async def test_ensure_csproj_restored_direct_invocation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Direct invocation of the helper MUST call run_subprocess with
+        the canonical 3-token argv + 300s timeout. Locking the timeout
+        prevents accidental regressions where a short timeout would
+        truncate cold-NuGet-cache restores on fresh hosts."""
+
+        captured_args: list[Any] = []
+        captured_kwargs: list[dict[str, Any]] = []
+
+        async def capture_stub(
+            argv: Any, *, cwd: Any, env: Any | None = None, timeout: float | None = None,
+        ) -> SubprocessResult:
+            captured_args.append(list(argv))
+            captured_kwargs.append({"cwd": cwd, "timeout": timeout})
+            return SubprocessResult(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+        monkeypatch.setattr(adapter, "run_subprocess", capture_stub)
+        csproj_path = tmp_path / "Tests" / "Tests.csproj"
+        csproj_path.parent.mkdir(parents=True, exist_ok=True)
+        csproj_path.write_text("<Project/>")
+        await _ensure_csproj_restored(
+            "/usr/bin/dotnet", csproj_path, tmp_path
+        )
+        assert captured_args == [["/usr/bin/dotnet", "restore", str(csproj_path)]]
+        assert captured_kwargs[0]["cwd"] == tmp_path
+        assert captured_kwargs[0]["timeout"] == 300.0
+
+
+# ---------------------------------------------------------------------------
+# TestEnvelopeSafetyNet (hotfix #1 F1b — 2026-06-06)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvelopeSafetyNet:
+    """``metadata["coverage_unavailable_{kind,message}"]`` surfacing for the
+    "probe returned None despite --coverage" path.
+
+    Pins the F1b safety-net contract: when restore happens but the
+    probe still returns None, the user-visible envelope at
+    ``data.memory_entry.run_record.metadata`` MUST carry both the
+    ``coverage_unavailable_kind`` (machine-readable) and the
+    ``coverage_unavailable_message`` (human-readable). On the happy
+    path (Coverlet present + version ≥ floor) BOTH keys MUST be
+    absent.
+
+    A formal envelope ``warnings`` projection (top-level
+    ``envelope["warnings"]`` field with ``EnvelopeWarning`` shape) is
+    deferred to a follow-up cross-team slice — see
+    ``agent-comms/questions/run-team-2026-06-06-envelope-warnings-
+    projection.md``. The metadata-surface here is the in-charter v1.
+    """
+
+    async def test_metadata_carries_coverage_unavailable_when_probe_returns_none(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Coverage requested + Coverlet truly absent → both metadata
+        keys populated with the expected kind and a non-empty message."""
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _seed_csproj(ws)  # csproj has Coverlet, but stub returns empty
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(
+                coverlet_json=b'{"version":1,"parameters":"","projects":[]}',
+            ),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", ws)
+        result = await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        # Machine-readable kind — pinned literal for AI-consumer parsers.
+        assert result.metadata.get("coverage_unavailable_kind") == (
+            "coverlet-absent-or-stale"
+        )
+        # Human-readable message — non-empty, mentions both `--coverage`
+        # and `coverlet.collector` so the user can act on it without
+        # reading the source.
+        message = result.metadata.get("coverage_unavailable_message", "")
+        assert message, "coverage_unavailable_message should be non-empty"
+        assert "coverlet.collector" in message
+        assert "--coverage" in message
+
+    async def test_metadata_omits_coverage_unavailable_when_probe_succeeds(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Happy path — Coverlet 6.0.2 present + ≥ floor → BOTH F1b
+        keys absent. We do NOT want a no-op safety-net key on the
+        successful path (would confuse AI parsers / dashboards
+        scanning for the warning)."""
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _seed_csproj(ws)
+        json_payload = (
+            b'{"version":1,"parameters":"","projects":[{"path":"x.csproj",'
+            b'"frameworks":[{"framework":"net8.0",'
+            b'"topLevelPackages":[{"id":"coverlet.collector","resolvedVersion":"6.0.2"}],'
+            b'"transitivePackages":[]}]}]}'
+        )
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(
+                coverlet_json=json_payload, seed_coverage_xml=True,
+            ),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", ws)
+        result = await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        assert "coverage_unavailable_kind" not in result.metadata
+        assert "coverage_unavailable_message" not in result.metadata
+        # Sanity — happy path actually populated coverlet_version.
+        assert result.metadata.get("coverlet_version") == "6.0.2"
+
+    async def test_metadata_omits_coverage_unavailable_on_non_coverage_path(
+        self,
+        dotnet_test_basic_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Non-coverage runs MUST NOT carry the F1b safety-net keys.
+        The probe path is short-circuited by ``not collect_coverage``,
+        so the absence-of-Coverlet path is never reached."""
+
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(),
+        )
+        target = resolve_test_target("", dotnet_test_basic_workspace)
+        result = await run_xunit(
+            target, artifact_dir=tmp_path, timeout=60.0
+        )
+        assert "coverage_unavailable_kind" not in result.metadata
+        assert "coverage_unavailable_message" not in result.metadata
+
+    async def test_metadata_omits_coverage_unavailable_on_xunit_v3_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """xUnit v3 deferral has its OWN payload warning
+        (``xunit-v3-coverage-deferred``); the F1b safety-net is for
+        the v2-Coverlet-absent path specifically. v3 + --coverage
+        MUST not carry coverage_unavailable_* keys.
+
+        (The Run team may later promote the v3 deferral to a separate
+        metadata key surface; for now it lives in payload only.)"""
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _seed_csproj(ws, content=(
+            '<Project Sdk="Microsoft.NET.Sdk">\n'
+            '  <ItemGroup>\n'
+            '    <PackageReference Include="xunit" Version="3.0.0" />\n'
+            '  </ItemGroup>\n'
+            '</Project>\n'
+        ))
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(),
+        )
+        artifact_dir = tmp_path / "art"
+        target = resolve_test_target("", ws)
+        result = await run_xunit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=60.0,
+            collect_coverage=True,
+        )
+        assert "coverage_unavailable_kind" not in result.metadata
+        assert "coverage_unavailable_message" not in result.metadata
+        # Sanity — v3 warning IS in payload.
+        warnings_kinds = [w["kind"] for w in result.payload["warnings"]]
+        assert WARNING_XUNIT_V3_DEFERRED in warnings_kinds
 
 
 # ---------------------------------------------------------------------------
