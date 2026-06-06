@@ -8,15 +8,13 @@ Last regenerated: 2026-06-06
 _(none)_
 
 ## Pending
-- [run-team-2026-06-05-phase2.5-dotnet-adapter-hotfix.md](./tasks/run-team-2026-06-05-phase2.5-dotnet-adapter-hotfix.md) — `novetest-pm-team → novetest-run-team` (phase2.5-dotnet-adapter-hotfix)
-- [run-team-2026-06-05-phase2.5-dotnet-adapter.md](./tasks/run-team-2026-06-05-phase2.5-dotnet-adapter.md) — `novetest-pm-team → novetest-run-team` (phase2.5-dotnet-adapter)
+_(none)_
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md](./questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md) — `novetest-run-team → novetest-pm-team` (coverlet-pertestcoverage-empirically-inert)
-- [run-team-2026-06-06-envelope-warnings-projection.md](./questions/run-team-2026-06-06-envelope-warnings-projection.md) — `novetest-run-team → novetest-pm-team` (envelope-warnings-projection)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-05-30-localization-outcome-envelope-shape.md](./decisions/2026-05-30-localization-outcome-envelope-shape.md) — `novetest-pm-team → all` (localization-outcome-envelope-shape)
@@ -25,6 +23,7 @@ _(none)_
 - [2026-06-03-coverlet-pertestcoverage-key.md](./decisions/2026-06-03-coverlet-pertestcoverage-key.md) — `novetest-pm-team → all` (coverlet-pertestcoverage-key)
 - [2026-06-03-junit-console-launcher-vendor.md](./decisions/2026-06-03-junit-console-launcher-vendor.md) — `novetest-pm-team → all` (junit-console-launcher-vendor)
 - [2026-06-04-equip-and-exercise-for-adapter-cycles.md](./decisions/2026-06-04-equip-and-exercise-for-adapter-cycles.md) — `novetest-pm-team → all` (equip-and-exercise-for-adapter-cycles)
+- [2026-06-06-adapter-warning-surface-v1-metadata-channel.md](./decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md) — `novetest-pm-team → all` (adapter-warning-surface-v1-metadata-channel)
 
 ## Recent history (last 7 days)
 - [2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md](./history/2026-05-30-localization-warnings-and-cargo-trigger-b-reopened.md) — `novetest-pm-team → all` (localization-warnings-and-cargo-trigger-b-reopened)
@@ -39,3 +38,4 @@ _(none)_
 - [2026-06-03-phase5-complete-replay-engine.md](./history/2026-06-03-phase5-complete-replay-engine.md) — `novetest-pm-team → all` (phase5-complete-replay-engine)
 - [2026-06-04-phase2.5-junit-adapter-three-hotfix-cycle.md](./history/2026-06-04-phase2.5-junit-adapter-three-hotfix-cycle.md) — `novetest-pm-team → all` (phase2.5-junit-adapter-three-hotfix-cycle)
 - [2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md](./history/2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md) — `novetest-pm-team → all` (cargo-cli-orchestration-defect-and-second-equip-exercise-validation)
+- [2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md](./history/2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md) — `novetest-pm-team → all` (phase2.5-dotnet-adapter-two-cycle-arc)
