@@ -8,7 +8,8 @@ Last regenerated: 2026-06-06
 _(none)_
 
 ## Pending
-_(none)_
+- [coverage-team-2026-06-06-dotnet-cobertura-derive.md](./tasks/coverage-team-2026-06-06-dotnet-cobertura-derive.md) — `novetest-pm-team → novetest-coverage-team` (dotnet-cobertura-derive)
+- [run-team-2026-06-06-envelope-warnings-projection.md](./tasks/run-team-2026-06-06-envelope-warnings-projection.md) — `novetest-pm-team → novetest-run-team` (envelope-warnings-projection)
 
 ## Blocked
 _(none)_
