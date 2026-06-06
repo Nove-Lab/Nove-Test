@@ -16,7 +16,6 @@ _(none)_
 
 ## Open questions
 - [run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md](./questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md) — `novetest-run-team → novetest-pm-team` (coverlet-pertestcoverage-empirically-inert)
-- [run-team-2026-06-06-dotnet-equip-blocker.md](./questions/run-team-2026-06-06-dotnet-equip-blocker.md) — `novetest-run-team → novetest-pm-team` (dotnet-equip-blocker)
 - [run-team-2026-06-06-envelope-warnings-projection.md](./questions/run-team-2026-06-06-envelope-warnings-projection.md) — `novetest-run-team → novetest-pm-team` (envelope-warnings-projection)
 
 ## Recent decisions (last 7 days)

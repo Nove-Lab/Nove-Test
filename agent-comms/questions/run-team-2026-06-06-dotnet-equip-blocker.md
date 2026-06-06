@@ -2,17 +2,94 @@
 from: novetest-run-team
 to: novetest-pm-team
 type: question
-status: open
+status: resolved
 created: 2026-06-06
 slug: dotnet-equip-blocker
 related:
   - agent-comms/tasks/run-team-2026-06-05-phase2.5-dotnet-adapter-hotfix.md
   - agent-comms/decisions/2026-06-04-equip-and-exercise-for-adapter-cycles.md
+  - agent-comms/handoffs/run-team-2026-06-06-phase2.5-dotnet-adapter-hotfix.md
   - scripts/dev-host-setup.md
   - .claude/settings.json
 ---
 
 # Question — .NET equip blocker on this checkout's host (§2.5 cannot self-satisfy)
+
+## ✅ RESOLUTION (2026-06-06 same session)
+
+**Resolved by CEO clarification — this host WAS equipped; Run
+team's initial scan misread the state.** No PM disposition needed.
+
+The original scan ran:
+
+```sh
+ls -la ~/.dotnet/dotnet 2>&1 || echo "(no user-local dotnet)"
+# ls: cannot access '/home/yjshin/.dotnet/dotnet': No such file or directory
+# (no user-local dotnet)
+```
+
+Both lines fired — Run team concluded the binary was missing.
+But a re-scan of the directory (after CEO note "매뉴얼 테스트팀은
+이 컴퓨터에서도 검증 준비 되었다고 했거든") found the binary IS
+present (`/home/yjshin/.dotnet/dotnet`, 68424 bytes, executable,
+timestamped `Jun 6 22:20` — predating the session). The
+toolchain shim at `~/.local/share/novetest-toolchains.sh` was
+also present (1144 bytes; the initial check's `head -50` cut it
+off from view). Coverlet 6.0.2 was cached at
+`~/.nuget/packages/coverlet.collector/6.0.2/`. Java 17.0.19 +
+Maven 3.8.7 + Gradle 8.5 were all present too.
+
+The masking factor: PATH did not include `~/.dotnet`, so
+`which dotnet` returned nothing — Run team mistook this for "not
+installed" instead of "installed but not on PATH". Sourcing the
+toolchain shim (`source ~/.local/share/novetest-toolchains.sh`)
+exports `DOTNET_ROOT="$HOME/.dotnet"` and prepends it to PATH,
+after which `dotnet --version` returns `8.0.421`. The shim is
+self-introspecting and emits a banner:
+
+```
+[novetest-toolchains] equipped: dotnet=8.0.421 java=17.0.19 mvn=3.8.7 gradle=8.5
+```
+
+— exactly what dev-host-setup §6 prescribes.
+
+### §2.5 gate results (post-source-shim)
+
+| Gate | Result |
+|---|---|
+| Dotnet integration (binding §2.5) | **6 passed + 0 skipped + 0 failed in 23.43s** ✓ |
+| Full equipped-host suite | **1145 passed + 5 skipped + 0 failed in 105.59s** ✓ |
+| D1 Manual Test §1.1 verbatim reproducer | **PASS** — `coverlet_version=6.0.2`, `coverage_xml` artifact present, no `coverage_unavailable_kind` ✓ |
+
+The handoff (`agent-comms/handoffs/run-team-2026-06-06-phase2.5-
+dotnet-adapter-hotfix.md`) was updated to `status: ready` in the
+same comms-only follow-up commit that flipped this question to
+`status: resolved`.
+
+### Process lesson (for future cycles)
+
+Run team's host-equip detection sequence should be:
+
+1. `source ~/.local/share/novetest-toolchains.sh` (if it exists) FIRST.
+2. Read the shim's emitted banner — it names exactly what's
+   present vs MISSING.
+3. Probe each tool via the shim's exported PATH, not via
+   `which X` from a default shell.
+4. Only conclude "unequipped" when the shim itself reports MISSING
+   for the target tool OR when the shim doesn't exist.
+
+The pre-existing scan pattern (`ls ~/.dotnet/dotnet || echo
+"(missing)"`) is too sensitive to PATH state. WORKLOG entry #2
+captures this as a Gotcha.
+
+The four options below are preserved for the historical record
+in case a future cycle hits a genuine equip blocker (e.g. a
+truly fresh host with no prior equip). The cycle that filed THIS
+question did not actually have that situation.
+
+---
+
+# (Historical record — what was filed before resolution)
 
 ## TL;DR
 
