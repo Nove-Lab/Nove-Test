@@ -14,18 +14,29 @@ Memory's ``has_coverage_facts`` flag auto-flips on subsequent reads. The
 derive call returns either a ``CoverageFactSet`` (success) or a
 ``CoverageUnavailable`` value (REQ-COV-004) — both are forwarded on the
 ``RunOutcome`` for the CLI handler to format into the envelope.
+
+Adapter-emitted warnings (``NativeResult.warnings`` per the 2026-06-06
+Option C slice — see
+``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``)
+propagate unchanged onto ``RunOutcome.warnings`` so the CLI handler
+projects them onto the envelope's top-level ``warnings`` field via a
+trivial ``AdapterWarning → EnvelopeWarning`` field-copy at
+envelope-construction time. The orchestration layer deliberately holds
+the ``AdapterWarning`` shape (NOT ``EnvelopeWarning``) so the existing
+``cli → orchestration`` dependency direction stays one-way; the
+projection happens at the CLI boundary.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from novetest.coverage import CoverageUnavailable, derive_coverage_facts
 from novetest.memory import ProjectStore, retrieve_run_evidence, store_run_evidence
 from novetest.models import MemoryEntry
 from novetest.models.coverage_fact_set import CoverageFactSet
-from novetest.run import execute, resolve_test_target
+from novetest.run import AdapterWarning, execute, resolve_test_target
 from novetest.utils.ulid import generate_ulid
 
 
@@ -39,11 +50,19 @@ class RunOutcome:
     derive facts — e.g. the native payload was missing or corrupt). The
     CLI handler discriminates with ``isinstance`` to emit the envelope's
     ``coverage_outcome`` block.
+
+    ``warnings`` carries the adapter's notice-grade signals (defaults to
+    the empty tuple when the adapter emitted none). The CLI handler
+    projects each ``AdapterWarning`` to an ``EnvelopeWarning`` and passes
+    the converted tuple to ``Envelope(...)`` at construction time. Per
+    decision 2026-06-06 they are transient envelope decorations — NOT
+    persisted on the Run Record.
     """
 
     memory_entry: MemoryEntry
     artifact_dir: Path
     coverage_outcome: CoverageFactSet | CoverageUnavailable | None = None
+    warnings: tuple[AdapterWarning, ...] = field(default_factory=tuple)
 
 
 async def run_target_in_store(
@@ -74,7 +93,7 @@ async def run_target_in_store(
     run_id = generate_ulid()
     artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
 
-    record = await execute(
+    record, warnings = await execute(
         target,
         artifact_dir=artifact_dir,
         run_id=run_id,
@@ -100,4 +119,5 @@ async def run_target_in_store(
         memory_entry=entry,
         artifact_dir=artifact_dir,
         coverage_outcome=coverage_outcome,
+        warnings=warnings,
     )

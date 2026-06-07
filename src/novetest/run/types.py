@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 @dataclass(slots=True, frozen=True)
@@ -77,6 +77,34 @@ class EngineReadinessResult:
 
 
 @dataclass(slots=True, frozen=True)
+class AdapterWarning:
+    """Notice-grade signal an adapter raises during a run.
+
+    Structurally compatible with ``cli.output.EnvelopeWarning`` (same
+    three fields ``code`` / ``message`` / ``details``) so the
+    orchestration↔CLI projection at envelope-construction time is a
+    field-by-field copy. Kept in ``run/`` rather than re-exporting
+    ``EnvelopeWarning`` from ``cli/output.py`` so the adapter layer
+    does NOT take a dependency on the CLI layer (the existing dependency
+    direction is ``cli → orchestration → run``; an
+    ``adapter → cli`` import would invert it).
+
+    Per `decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md`
+    §"Option C follow-up slice scope" criterion #3 the converged shape
+    is ``code: str`` (machine-friendly slug) + ``message: str``
+    (human-readable hint) + ``details: dict[str, Any]`` (optional
+    structured context). The reserved adapter-warning *kinds* live in
+    each adapter's module constants (e.g. ``WARNING_COVERLET_ABSENT``)
+    to stay close to their emit sites; the catalog is documented in
+    the same decision file.
+    """
+
+    code: str
+    message: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
 class NativeResult:
     """Raw adapter output handed to `normalize_native_result`.
 
@@ -98,6 +126,16 @@ class NativeResult:
     ``str`` so the contract layer is type-checkable and IDE-visible.
     Transient per-engine state that does NOT need to surface on
     ``RunRecord`` stays in ``payload``.
+
+    ``warnings`` carries adapter-emitted notice-grade signals that the
+    orchestration layer lifts onto the JSON envelope's top-level
+    ``warnings`` field (per
+    `decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md`).
+    NOT persisted onto ``RunRecord`` — warnings are transient envelope
+    decorations, not facts. The forensic per-warning payload (the
+    ``payload["warnings"]`` list each adapter still writes) is kept for
+    one release cycle as the v1 bridge per the same decision; both
+    channels are populated in steady state.
     """
 
     engine_name: str
@@ -108,3 +146,4 @@ class NativeResult:
     completed_at_ms: int
     engine_version: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+    warnings: tuple[AdapterWarning, ...] = ()

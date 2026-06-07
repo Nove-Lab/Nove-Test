@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Final
 
 from novetest.run.errors import AdapterInvocationError
-from novetest.run.types import NativeResult, TestTarget
+from novetest.run.types import AdapterWarning, NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
 
 from ._vendor import LAUNCHER_JAR_SHA256, LAUNCHER_VERSION
@@ -70,6 +70,15 @@ ENGINE_NAME: Final[str] = "junit"
 
 # Default timeout — mirrors the prior four adapters' 600 s ceiling.
 _DEFAULT_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# Warning kinds — surfaced on BOTH ``payload["warnings"]`` (v1 forensic
+# bridge per decision 2026-06-06) AND ``NativeResult.warnings`` (envelope-
+# bound, projected to ``envelope.warnings[]`` by the CLI handler). The
+# literals match the catalog in
+# ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``
+# §"What MUST be retroactively projected to envelope top-level".
+WARNING_AMBIGUOUS_BUILD_TOOL: Final[str] = "ambiguous-build-tool"
+WARNING_MISSING_JACOCO: Final[str] = "missing-jacoco"
 
 # Gradle init-script: makes Test tasks tolerate test-level failures so the
 # task graph proceeds to `:jacocoTestReport` (the JaCoCo report task is
@@ -371,30 +380,46 @@ async def _run_maven(
         # payload` outcome.
 
     payload_warnings: list[dict[str, str]] = []
+    # Envelope-bound parallel surface (2026-06-06 Option C slice). Each
+    # ``payload_warnings`` append below also emits an ``AdapterWarning``
+    # so the orchestration → CLI projection surfaces every warning on
+    # ``envelope.warnings[]``. Both channels populate in lockstep per
+    # decision criterion #2 (backward-compat bridge for one release).
+    result_warnings: list[AdapterWarning] = []
     if ambiguous:
+        ambiguous_msg = (
+            "both pom.xml and build.gradle{,.kts} were detected; "
+            "Maven was chosen as the default tiebreaker per "
+            "decisions/2026-06-03 ratification of brief §6 D3. To "
+            "use Gradle instead, remove the Maven manifest or "
+            "(future) pass --build-tool=gradle."
+        )
         payload_warnings.append(
-            {
-                "kind": "ambiguous-build-tool",
-                "message": (
-                    "both pom.xml and build.gradle{,.kts} were detected; "
-                    "Maven was chosen as the default tiebreaker per "
-                    "decisions/2026-06-03 ratification of brief §6 D3. To "
-                    "use Gradle instead, remove the Maven manifest or "
-                    "(future) pass --build-tool=gradle."
-                ),
-            }
+            {"kind": WARNING_AMBIGUOUS_BUILD_TOOL, "message": ambiguous_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_AMBIGUOUS_BUILD_TOOL,
+                message=ambiguous_msg,
+                details={"chosen_build_tool": "maven"},
+            )
         )
     if collect_coverage and not has_jacoco:
+        missing_jacoco_msg = (
+            "coverage was requested but the project's pom.xml does "
+            "not declare jacoco-maven-plugin; add the plugin (>= "
+            "0.8.11) under <build><plugins> in pom.xml. Coverage "
+            "data was not collected for this run."
+        )
         payload_warnings.append(
-            {
-                "kind": "missing-jacoco",
-                "message": (
-                    "coverage was requested but the project's pom.xml does "
-                    "not declare jacoco-maven-plugin; add the plugin (>= "
-                    "0.8.11) under <build><plugins> in pom.xml. Coverage "
-                    "data was not collected for this run."
-                ),
-            }
+            {"kind": WARNING_MISSING_JACOCO, "message": missing_jacoco_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_MISSING_JACOCO,
+                message=missing_jacoco_msg,
+                details={"build_tool": "maven"},
+            )
         )
 
     payload: dict[str, object] = {
@@ -461,6 +486,7 @@ async def _run_maven(
         completed_at_ms=completed_ms,
         engine_version=_string_or_none(payload.get("jupiter_version")),
         metadata=metadata,
+        warnings=tuple(result_warnings),
     )
 
 
@@ -630,30 +656,46 @@ async def _run_gradle(
             )
 
     payload_warnings: list[dict[str, str]] = []
+    # Envelope-bound parallel surface (2026-06-06 Option C slice). Each
+    # ``payload_warnings`` append below also emits an ``AdapterWarning``
+    # so the orchestration → CLI projection surfaces every warning on
+    # ``envelope.warnings[]``. Both channels populate in lockstep per
+    # decision criterion #2 (backward-compat bridge for one release).
+    result_warnings: list[AdapterWarning] = []
     if ambiguous:
+        ambiguous_msg = (
+            "both pom.xml and build.gradle{,.kts} were detected; "
+            "Maven was chosen as the default tiebreaker per brief "
+            "§6 D3 — this Gradle branch should not have been "
+            "reached, but the warning is preserved for audit."
+        )
         payload_warnings.append(
-            {
-                "kind": "ambiguous-build-tool",
-                "message": (
-                    "both pom.xml and build.gradle{,.kts} were detected; "
-                    "Maven was chosen as the default tiebreaker per brief "
-                    "§6 D3 — this Gradle branch should not have been "
-                    "reached, but the warning is preserved for audit."
-                ),
-            }
+            {"kind": WARNING_AMBIGUOUS_BUILD_TOOL, "message": ambiguous_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_AMBIGUOUS_BUILD_TOOL,
+                message=ambiguous_msg,
+                details={"chosen_build_tool": "gradle"},
+            )
         )
     if collect_coverage and not has_jacoco:
+        missing_jacoco_msg = (
+            "coverage was requested but the project's "
+            "build.gradle{,.kts} does not apply the `jacoco` "
+            "plugin; add `apply plugin: 'jacoco'` (or "
+            "`jacoco {}` in Kotlin DSL). Coverage data was not "
+            "collected for this run."
+        )
         payload_warnings.append(
-            {
-                "kind": "missing-jacoco",
-                "message": (
-                    "coverage was requested but the project's "
-                    "build.gradle{,.kts} does not apply the `jacoco` "
-                    "plugin; add `apply plugin: 'jacoco'` (or "
-                    "`jacoco {}` in Kotlin DSL). Coverage data was not "
-                    "collected for this run."
-                ),
-            }
+            {"kind": WARNING_MISSING_JACOCO, "message": missing_jacoco_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_MISSING_JACOCO,
+                message=missing_jacoco_msg,
+                details={"build_tool": "gradle"},
+            )
         )
 
     payload: dict[str, object] = {
@@ -704,6 +746,7 @@ async def _run_gradle(
         completed_at_ms=completed_ms,
         engine_version=_string_or_none(payload.get("jupiter_version")),
         metadata=metadata,
+        warnings=tuple(result_warnings),
     )
 
 
