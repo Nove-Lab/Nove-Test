@@ -69,7 +69,7 @@ from novetest.regression import (
     compare_runs,
     resolve_latest_baseline,
 )
-from novetest.run import execute, resolve_test_target
+from novetest.run import AdapterWarning, execute, resolve_test_target
 from novetest.utils.ulid import generate_ulid
 
 
@@ -91,6 +91,13 @@ class TestOutcome:
     handler can pick the right exit code without re-parsing the Memory
     Entry. Mirrors the ``RunOutcome`` shape ``cli/app.py::run_cmd``
     already consumes.
+
+    ``warnings`` carries the adapter's notice-grade signals from the Run
+    step (defaults to empty when the adapter emitted none). The CLI
+    handler projects them onto ``envelope.warnings[]`` via the same
+    ``AdapterWarning → EnvelopeWarning`` field-copy ``run_cmd`` uses.
+    Per decision 2026-06-06 they are transient envelope decorations —
+    NOT persisted on the Run Record.
     """
 
     # Pytest collection guard — keeps this dataclass from being picked up
@@ -104,6 +111,7 @@ class TestOutcome:
     fact_bundle: FactBundle
     recommendations: list[Recommendation]
     run_record_status: str
+    warnings: tuple[AdapterWarning, ...] = ()
 
 
 async def test_target_in_store(
@@ -140,7 +148,11 @@ async def test_target_in_store(
 
     # Step 2 — execute. Always with coverage so the integrated workflow
     # has the per-test attribution Localization needs for sbfl_per_test.
-    record = await execute(
+    # ``execute`` returns ``(RunRecord, adapter_warnings)`` per the
+    # 2026-06-06 envelope-warnings-projection slice; the warnings are
+    # propagated to ``TestOutcome.warnings`` so the CLI handler can
+    # surface them on ``envelope.warnings[]``.
+    record, adapter_warnings = await execute(
         target,
         artifact_dir=artifact_dir,
         run_id=run_id,
@@ -233,6 +245,7 @@ async def test_target_in_store(
         fact_bundle=bundle,
         recommendations=recommendations,
         run_record_status=run_record.status,
+        warnings=adapter_warnings,
     )
 
 

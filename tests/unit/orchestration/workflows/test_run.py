@@ -93,7 +93,7 @@ def stub_execute(monkeypatch: pytest.MonkeyPatch):
         run_id: str | None = None,
         timeout: float | None = 600.0,
         collect_coverage: bool = False,
-    ) -> RunRecord:
+    ) -> tuple[RunRecord, tuple[Any, ...]]:
         captured["collect_coverage"] = collect_coverage
         captured["artifact_dir"] = artifact_dir
         captured["run_id"] = run_id
@@ -108,7 +108,10 @@ def stub_execute(monkeypatch: pytest.MonkeyPatch):
             run_id=run_id or "01TESTTESTTESTTESTTESTTEST",
             created_at=1_700_000_000_000,
         )
-        return RunRecord(
+        # Per 2026-06-06 envelope-warnings-projection slice, ``execute``
+        # returns ``(RunRecord, adapter_warnings)``; stub a pytest-shaped
+        # record with zero warnings (pytest emits none today).
+        record = RunRecord(
             run_reference=ref,
             target_expression="",
             target_type=getattr(test_target, "target_type", "auto"),
@@ -120,6 +123,7 @@ def stub_execute(monkeypatch: pytest.MonkeyPatch):
             summary_counts={"passed": 1, "total": 1},
             artifact_paths={"pytest_json_report": str(report_path)},
         )
+        return record, ()
 
     monkeypatch.setattr(run_workflow_module, "execute", fake_execute)
     return captured

@@ -74,7 +74,7 @@ from novetest.replay import (
     ReplayUnavailable,
     replay_run,
 )
-from novetest.run import AdapterInvocationError, EngineNotReadyError
+from novetest.run import AdapterInvocationError, AdapterWarning, EngineNotReadyError
 
 
 _SUBCOMMAND_TOKENS: frozenset[str] = frozenset(
@@ -170,6 +170,31 @@ def _readiness_payload(readiness: Any) -> dict[str, Any]:
         "evidence": list(readiness.evidence),
         "issues": list(readiness.issues),
     }
+
+
+def _adapter_to_envelope_warnings(
+    warnings: tuple[AdapterWarning, ...],
+) -> tuple[EnvelopeWarning, ...]:
+    """Project ``AdapterWarning`` records onto ``EnvelopeWarning`` records.
+
+    Per
+    ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``
+    §"Option C follow-up slice scope" criterion #3, the two dataclasses
+    are structurally compatible — same three fields ``code`` / ``message``
+    / ``details``. The conversion is a field-by-field copy at the CLI
+    boundary so the orchestration layer never imports from ``cli/output.py``
+    (the existing dependency direction is ``cli → orchestration → run``;
+    inverting it would introduce a cycle).
+
+    Empty input is the common case (non-warning runs across all six
+    adapters) — return an empty tuple unchanged.
+    """
+    if not warnings:
+        return ()
+    return tuple(
+        EnvelopeWarning(code=w.code, message=w.message, details=dict(w.details))
+        for w in warnings
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +306,11 @@ def run_cmd(
     data: dict[str, Any] = {"memory_entry": entry.to_dict()}
     if outcome.coverage_outcome is not None:
         data["coverage_outcome"] = _coverage_outcome_payload(outcome.coverage_outcome)
-    _emit_and_exit(Envelope(command="run", ok=ok, data=data), exit_code)
+    envelope_warnings = _adapter_to_envelope_warnings(outcome.warnings)
+    _emit_and_exit(
+        Envelope(command="run", ok=ok, data=data, warnings=envelope_warnings),
+        exit_code,
+    )
 
 
 def _coverage_outcome_payload(

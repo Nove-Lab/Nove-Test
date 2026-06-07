@@ -23,7 +23,12 @@ from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.normalizer import normalize_native_result
 from novetest.run.readiness import assess_engine_readiness
 from novetest.run.reference import assign_run_reference
-from novetest.run.types import NativeEngineContext, NativeResult, TestTarget
+from novetest.run.types import (
+    AdapterWarning,
+    NativeEngineContext,
+    NativeResult,
+    TestTarget,
+)
 
 
 async def execute(
@@ -33,8 +38,8 @@ async def execute(
     run_id: str | None = None,
     timeout: float | None = 600.0,
     collect_coverage: bool = False,
-) -> RunRecord:
-    """Execute ``test_target`` and return a Run Record.
+) -> tuple[RunRecord, tuple[AdapterWarning, ...]]:
+    """Execute ``test_target`` and return ``(RunRecord, adapter_warnings)``.
 
     Sequence (mirroring `design/workflows/run.md` §1):
     1. `assess_engine_readiness` — short-circuit with EngineNotReadyError on
@@ -49,6 +54,15 @@ async def execute(
     enabled run lands ``coverage_json`` / ``coverage_xml`` in
     ``RunRecord.artifact_paths``. Defaults to False so non-coverage callers
     see no behavior change.
+
+    Returns the ``RunRecord`` paired with the adapter's warnings tuple
+    (``NativeResult.warnings`` lifted unchanged). Warnings are transient
+    envelope decorations per
+    `decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md`
+    §"Option C follow-up slice scope" — they do NOT land on the Run
+    Record, only on the JSON envelope's top-level ``warnings`` field via
+    the orchestration / CLI projection at ``run_cmd`` /
+    ``build_test_envelope``.
     """
 
     readiness = await assess_engine_readiness(test_target.workspace_path)
@@ -73,13 +87,16 @@ async def execute_with_engine_context(
     run_id: str | None = None,
     timeout: float | None = 600.0,
     collect_coverage: bool = False,
-) -> RunRecord:
+) -> tuple[RunRecord, tuple[AdapterWarning, ...]]:
     """Same as `execute` but reuses a pre-recorded Native Engine context.
 
     Used by Replay (Phase 5) to keep the same engine path as the original
     run. Phase 1 still gates on `assess_engine_readiness` because workspace
     state can drift between original and replay; the readiness state is
     advisory to the caller, not to the workflow shape.
+
+    Returns the ``RunRecord`` paired with the adapter warnings tuple —
+    same contract as ``execute``.
     """
 
     native_result = await _invoke_adapter(
@@ -102,7 +119,8 @@ async def execute_with_engine_context(
         target_expression=test_target.target_expression,
         target_type=test_target.target_type,
     )
-    return assign_run_reference(record, run_id=run_id)
+    record = assign_run_reference(record, run_id=run_id)
+    return record, native_result.warnings
 
 
 async def _invoke_adapter(

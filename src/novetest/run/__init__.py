@@ -30,6 +30,7 @@ from novetest.run.readiness import (
 from novetest.run.reference import assign_run_reference
 from novetest.run.target_resolver import resolve_test_target
 from novetest.run.types import (
+    AdapterWarning,
     EngineCandidate,
     EngineReadinessResult,
     NativeEngineContext,
@@ -40,6 +41,7 @@ from novetest.run.types import (
 
 __all__ = [
     "AdapterInvocationError",
+    "AdapterWarning",
     "EngineCandidate",
     "EngineNotReadyError",
     "EngineNotSupportedError",

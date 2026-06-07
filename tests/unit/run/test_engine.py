@@ -24,7 +24,11 @@ async def test_execute_pytest_basic_returns_all_passed(
     basic_workspace: Path, tmp_path: Path
 ) -> None:
     target = resolve_test_target("", basic_workspace)
-    record = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    # Per 2026-06-06 envelope-warnings-projection slice, ``execute``
+    # returns ``(RunRecord, adapter_warnings)``; pytest emits zero
+    # warnings today so the tuple's second element is the empty tuple.
+    record, warnings = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    assert warnings == ()
     assert record.status == "passed"
     assert record.engine_name == "pytest"
     assert record.ecosystem == "python"
@@ -41,7 +45,8 @@ async def test_execute_pytest_failing_captures_failure(
     failing_workspace: Path, tmp_path: Path
 ) -> None:
     target = resolve_test_target("", failing_workspace)
-    record = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    record, warnings = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    assert warnings == ()
     assert record.status == "failed"
     failed = [tr for tr in record.test_results if tr.outcome == "failed"]
     assert len(failed) == 1
@@ -65,9 +70,10 @@ async def test_execute_with_engine_context_runs_pytest(
 ) -> None:
     target = resolve_test_target("", basic_workspace)
     context = NativeEngineContext(ecosystem="python", engine_name="pytest")
-    record = await execute_with_engine_context(
+    record, warnings = await execute_with_engine_context(
         target, context, artifact_dir=tmp_path, timeout=60.0
     )
+    assert warnings == ()
     assert record.status == "passed"
     assert record.engine_name == "pytest"
 
@@ -137,10 +143,11 @@ async def test_execute_with_engine_context_dispatches_jest(
     context = NativeEngineContext(
         ecosystem="javascript-typescript", engine_name="jest"
     )
-    record = await execute_with_engine_context(
+    record, warnings = await execute_with_engine_context(
         target, context, artifact_dir=tmp_path, timeout=10.0
     )
     assert called_with.get("collect_coverage") is False
+    assert warnings == ()
     assert record.engine_name == "jest"
     assert record.ecosystem == "javascript-typescript"
     assert record.engine_version == "29.7.0"
@@ -150,7 +157,7 @@ async def test_run_id_can_be_pinned(
     basic_workspace: Path, tmp_path: Path
 ) -> None:
     target = resolve_test_target("", basic_workspace)
-    record = await execute(
+    record, _ = await execute(
         target,
         artifact_dir=tmp_path,
         run_id="01HZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -245,10 +252,11 @@ async def test_execute_with_engine_context_dispatches_gotest(
     monkeypatch.setattr(engine_module, "run_gotest", fake_run_gotest)
     target = resolve_test_target("", gotest_basic_workspace)
     context = NativeEngineContext(ecosystem="go", engine_name="go-test")
-    record = await execute_with_engine_context(
+    record, warnings = await execute_with_engine_context(
         target, context, artifact_dir=tmp_path, timeout=10.0
     )
     assert called_with.get("collect_coverage") is False
+    assert warnings == ()
     assert record.engine_name == "go-test"
     assert record.ecosystem == "go"
     assert record.engine_version == "1.23.4"
@@ -303,10 +311,11 @@ async def test_execute_with_engine_context_dispatches_cargo(
     monkeypatch.setattr(engine_module, "run_cargo", fake_run_cargo)
     target = resolve_test_target("", cargo_test_basic_workspace)
     context = NativeEngineContext(ecosystem="rust", engine_name="cargo-test")
-    record = await execute_with_engine_context(
+    record, warnings = await execute_with_engine_context(
         target, context, artifact_dir=tmp_path, timeout=10.0
     )
     assert called_with.get("collect_coverage") is False
+    assert warnings == ()
     assert record.engine_name == "cargo-test"
     assert record.ecosystem == "rust"
     assert record.engine_version == "1.74.0"

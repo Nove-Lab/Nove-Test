@@ -44,6 +44,7 @@ from novetest.cli.output import (
     EXIT_OK,
     EXIT_USER_TESTS_FAILED,
     Envelope,
+    EnvelopeWarning,
 )
 from novetest.orchestration.recommendation import RECOMMENDATION_SCHEMA_VERSION
 from novetest.orchestration.workflows.test import TestOutcome
@@ -57,6 +58,13 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
     recommendation set (an ``all_green`` envelope still exits 0 even
     when downstream stages were unavailable, because the user's tests
     actually passed).
+
+    Adapter-emitted warnings on ``TestOutcome.warnings`` are projected
+    onto ``envelope.warnings[]`` via a field-by-field
+    ``AdapterWarning → EnvelopeWarning`` copy. The two dataclasses share
+    the ``code`` / ``message`` / ``details`` shape per decision
+    2026-06-06 criterion #3. Empty input (the common case for runs
+    without adapter warnings) returns an empty tuple unchanged.
     """
 
     data: dict[str, Any] = {
@@ -75,7 +83,19 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
     else:
         exit_code = EXIT_GENERIC
         ok = False
-    return Envelope(command="test", ok=ok, data=data), exit_code
+    envelope_warnings: tuple[EnvelopeWarning, ...] = tuple(
+        EnvelopeWarning(code=w.code, message=w.message, details=dict(w.details))
+        for w in outcome.warnings
+    )
+    return (
+        Envelope(
+            command="test",
+            ok=ok,
+            data=data,
+            warnings=envelope_warnings,
+        ),
+        exit_code,
+    )
 
 
 __all__ = ["build_test_envelope"]

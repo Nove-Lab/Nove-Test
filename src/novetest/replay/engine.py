@@ -81,7 +81,17 @@ async def replay_run(
         run_id = generate_ulid()
         artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
         try:
-            record = await execute_with_engine_context(
+            # ``execute_with_engine_context`` returns
+            # ``(RunRecord, adapter_warnings)`` per the 2026-06-06 envelope-
+            # warnings-projection slice. Replay discards the warnings
+            # tuple — adapter warnings are notice-grade signals scoped to
+            # the per-invocation envelope, and ``novetest replay``'s
+            # envelope projects a Replay Result block (not a Run Record
+            # envelope). The original-run's warnings already surfaced on
+            # the original-run's envelope; the replay reruns produce
+            # their own per-invocation warnings that are not material to
+            # the replay-consistency classification.
+            record, _ = await execute_with_engine_context(
                 context.test_target,
                 context.engine_context,
                 artifact_dir=artifact_dir,

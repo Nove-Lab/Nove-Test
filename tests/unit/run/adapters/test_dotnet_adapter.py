@@ -1231,7 +1231,7 @@ class TestMetadataPopulation:
 
         target = resolve_test_target("", dotnet_test_basic_workspace)
         context = NativeEngineContext(ecosystem="dotnet", engine_name="xunit")
-        record = await execute_with_engine_context(
+        record, _warnings = await execute_with_engine_context(
             target, context, artifact_dir=tmp_path, timeout=60.0,
         )
         assert record.metadata.get("native_exit_code") == 1

@@ -73,14 +73,16 @@ The fix has three parts:
    ``None`` AFTER restore, the adapter surfaces a
    ``coverage_unavailable_kind`` + ``coverage_unavailable_message`` pair
    on ``NativeResult.metadata`` so the user-visible envelope at
-   ``data.memory_entry.run_record.metadata`` carries the warning. The
-   existing ``payload["warnings"]`` entry stays for forensic continuity,
-   but it dies at the normalizer (which lifts ``metadata`` +
-   ``artifact_paths`` but NOT ``payload``). A formal envelope ``warnings``
-   projection from ``RunOutcome`` requires Orchestration-team plumbing
-   (``workflows/run.py`` + ``cli/app.py::run_cmd``); filed as
-   ``agent-comms/questions/run-team-2026-06-06-envelope-warnings-projection.md``
-   for PM disposition.
+   ``data.memory_entry.run_record.metadata`` carries the warning. This
+   is the **v1 bridge channel** ratified by
+   ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``;
+   the same decision queued Option C (the envelope top-level
+   ``warnings`` projection) as the MVP-blocking follow-up. With the
+   2026-06-06 envelope-warnings-projection slice landed, this adapter
+   ALSO emits ``AdapterWarning`` records onto ``NativeResult.warnings``
+   so the envelope's top-level ``warnings`` field carries the same
+   signal at ``envelope.warnings[]``. Both channels are populated for
+   one release cycle per the decision's backward-compat criterion #2.
 
 3. **F1c — integration test pins the fresh-fixture reproducer.**
    ``test_coverage_run_on_fresh_fixture_with_no_prior_restore`` in
@@ -128,7 +130,7 @@ from pathlib import Path
 from typing import Final
 
 from novetest.run.errors import AdapterInvocationError
-from novetest.run.types import NativeResult, TestTarget
+from novetest.run.types import AdapterWarning, NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
 
 
@@ -302,34 +304,55 @@ async def run_xunit(
     xunit_version = _detect_xunit_resolved_version(csproj_content)
 
     payload_warnings: list[dict[str, str]] = []
+    # Envelope-bound warning surface (2026-06-06 Option C slice). Mirrors
+    # every ``payload_warnings`` append below into an ``AdapterWarning``
+    # so the orchestration → CLI projection at ``run_cmd`` /
+    # ``build_test_envelope`` surfaces each warning on
+    # ``envelope.warnings[]``. The two channels are populated in lockstep
+    # — backward-compat criterion #2 of the decision file.
+    result_warnings: list[AdapterWarning] = []
 
     if is_ambiguous:
         sibling_names = sorted({p.name for p in all_csprojs} | {s.name for s in all_slns})
+        ambiguous_msg = (
+            f"multiple .csproj / .sln files detected at the "
+            f"workspace root ({', '.join(sibling_names)}); the "
+            f"adapter picked '{chosen_csproj.name}' alphabetically "
+            f"for v1 — to scope explicitly, pass the project file "
+            f"as the run target (e.g. ``novetest run "
+            f"MyProject.Tests/MyProject.Tests.csproj``) in a "
+            f"future CLI surface"
+        )
         payload_warnings.append(
-            {
-                "kind": WARNING_AMBIGUOUS_PROJECT,
-                "message": (
-                    f"multiple .csproj / .sln files detected at the "
-                    f"workspace root ({', '.join(sibling_names)}); the "
-                    f"adapter picked '{chosen_csproj.name}' alphabetically "
-                    f"for v1 — to scope explicitly, pass the project file "
-                    f"as the run target (e.g. ``novetest run "
-                    f"MyProject.Tests/MyProject.Tests.csproj``) in a "
-                    f"future CLI surface"
-                ),
-            }
+            {"kind": WARNING_AMBIGUOUS_PROJECT, "message": ambiguous_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_AMBIGUOUS_PROJECT,
+                message=ambiguous_msg,
+                details={
+                    "csproj_candidates": [p.name for p in all_csprojs],
+                    "sln_files": [s.name for s in all_slns],
+                    "chosen_csproj": chosen_csproj.name,
+                },
+            )
         )
 
     if is_xunit_v3:
+        xunit_v3_msg = (
+            "xUnit v3 / Microsoft.Testing.Platform coverage is "
+            "not yet supported by novetest; falling back to test "
+            "execution without coverage"
+        )
         payload_warnings.append(
-            {
-                "kind": WARNING_XUNIT_V3_DEFERRED,
-                "message": (
-                    "xUnit v3 / Microsoft.Testing.Platform coverage is "
-                    "not yet supported by novetest; falling back to test "
-                    "execution without coverage"
-                ),
-            }
+            {"kind": WARNING_XUNIT_V3_DEFERRED, "message": xunit_v3_msg}
+        )
+        result_warnings.append(
+            AdapterWarning(
+                code=WARNING_XUNIT_V3_DEFERRED,
+                message=xunit_v3_msg,
+                details={"xunit_major_version": xunit_major},
+            )
         )
 
     # 3. Coverlet version detection (only when coverage requested + xUnit
@@ -379,18 +402,26 @@ async def run_xunit(
             dotnet_path, chosen_csproj, workspace
         )
         if coverlet_version is None:
+            coverlet_absent_msg = (
+                "coverage was requested but `coverlet.collector` "
+                "is not in the project's package graph; add "
+                "<PackageReference Include=\"coverlet.collector\" "
+                "Version=\"6.0.2\" /> (or later 6.0.x) to the "
+                ".csproj. Coverage data was not collected for "
+                "this run."
+            )
             payload_warnings.append(
-                {
-                    "kind": WARNING_COVERLET_ABSENT,
-                    "message": (
-                        "coverage was requested but `coverlet.collector` "
-                        "is not in the project's package graph; add "
-                        "<PackageReference Include=\"coverlet.collector\" "
-                        "Version=\"6.0.2\" /> (or later 6.0.x) to the "
-                        ".csproj. Coverage data was not collected for "
-                        "this run."
-                    ),
-                }
+                {"kind": WARNING_COVERLET_ABSENT, "message": coverlet_absent_msg}
+            )
+            result_warnings.append(
+                AdapterWarning(
+                    code=WARNING_COVERLET_ABSENT,
+                    message=coverlet_absent_msg,
+                    details={
+                        "csproj": chosen_csproj.name,
+                        "coverlet_floor": _format_version(COVERLET_FLOOR_VERSION),
+                    },
+                )
             )
             # F1b safety-net: surface to metadata so the warning reaches
             # the envelope at data.memory_entry.run_record.metadata.
@@ -399,6 +430,10 @@ async def run_xunit(
             # "coverlet.collector not in user's package graph" OR a
             # rarer "restore failed silently AND no prior obj/ existed"
             # case. Both are user-actionable; the message names both.
+            # Per decision 2026-06-06 §"Acceptance criteria for Option C
+            # slice" criterion #2 — the metadata channel stays as the
+            # backward-compat bridge for one release cycle, populated in
+            # lockstep with the envelope channel above.
             coverage_unavailable_kind = "coverlet-absent-or-stale"
             coverage_unavailable_message = (
                 "novetest run --coverage was requested but "
@@ -412,19 +447,30 @@ async def run_xunit(
                 "stderr.log artifact for `dotnet restore` errors."
             )
         elif coverlet_version < COVERLET_FLOOR_VERSION:
+            coverlet_below_msg = (
+                f"detected coverlet.collector "
+                f"{_format_version(coverlet_version)} is below "
+                f"the supported floor "
+                f"{_format_version(COVERLET_FLOOR_VERSION)}; "
+                f"upgrade for per-test coverage (when Coverlet "
+                f"fixes the XPlat data collector pipe). Falling "
+                f"back to aggregate-mode runsettings."
+            )
             payload_warnings.append(
-                {
-                    "kind": WARNING_COVERLET_BELOW_FLOOR,
-                    "message": (
-                        f"detected coverlet.collector "
-                        f"{_format_version(coverlet_version)} is below "
-                        f"the supported floor "
-                        f"{_format_version(COVERLET_FLOOR_VERSION)}; "
-                        f"upgrade for per-test coverage (when Coverlet "
-                        f"fixes the XPlat data collector pipe). Falling "
-                        f"back to aggregate-mode runsettings."
-                    ),
-                }
+                {"kind": WARNING_COVERLET_BELOW_FLOOR, "message": coverlet_below_msg}
+            )
+            result_warnings.append(
+                AdapterWarning(
+                    code=WARNING_COVERLET_BELOW_FLOOR,
+                    message=coverlet_below_msg,
+                    details={
+                        "csproj": chosen_csproj.name,
+                        "detected_coverlet_version": _format_version(
+                            coverlet_version
+                        ),
+                        "coverlet_floor": _format_version(COVERLET_FLOOR_VERSION),
+                    },
+                )
             )
         else:
             # Coverlet at or above floor — use the per-test template even
@@ -583,6 +629,7 @@ async def run_xunit(
         completed_at_ms=completed_ms,
         engine_version=dotnet_version_str,
         metadata=metadata,
+        warnings=tuple(result_warnings),
     )
 
 
