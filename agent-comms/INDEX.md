@@ -8,8 +8,7 @@ Last regenerated: 2026-06-07
 _(none)_
 
 ## Pending
-- [coverage-team-2026-06-06-dotnet-cobertura-derive.md](./tasks/coverage-team-2026-06-06-dotnet-cobertura-derive.md) — `novetest-pm-team → novetest-coverage-team` (dotnet-cobertura-derive)
-- [run-team-2026-06-06-envelope-warnings-projection.md](./tasks/run-team-2026-06-06-envelope-warnings-projection.md) — `novetest-pm-team → novetest-run-team` (envelope-warnings-projection)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -37,3 +36,4 @@ _(none)_
 - [2026-06-04-phase2.5-junit-adapter-three-hotfix-cycle.md](./history/2026-06-04-phase2.5-junit-adapter-three-hotfix-cycle.md) — `novetest-pm-team → all` (phase2.5-junit-adapter-three-hotfix-cycle)
 - [2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md](./history/2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md) — `novetest-pm-team → all` (cargo-cli-orchestration-defect-and-second-equip-exercise-validation)
 - [2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md](./history/2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md) — `novetest-pm-team → all` (phase2.5-dotnet-adapter-two-cycle-arc)
+- [2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md](./history/2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md) — `novetest-pm-team → all` (parallel-pair-envelope-warnings-and-dotnet-cobertura-derive)
