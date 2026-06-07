@@ -6,14 +6,15 @@ Workflow (from ``design/workflows/coverage.md``):
 
 We resolve the Memory Entry for the run, look up the native coverage
 payload (artifact key depends on engine: ``coverage_json`` for
-pytest / jest / go-test, ``coverage_lcov`` for cargo-test), parse it
-through the engine-appropriate parser, persist the resulting
+pytest / jest / go-test, ``coverage_lcov`` for cargo-test,
+``coverage_xml`` for junit (JaCoCo) and xunit (Coverlet Cobertura)),
+parse it through the engine-appropriate parser, persist the resulting
 ``CoverageFactSet`` so subsequent ``get_coverage_facts`` calls hit
 cache, and return the fact set.
 
 Missing or unregistered native payload is an **explicit unavailable
-outcome** (REQ-COV-004), not an exception. Corrupt payloads (JSON or
-LCOV) are propagated as
+outcome** (REQ-COV-004), not an exception. Corrupt payloads (JSON,
+LCOV, or XML) are propagated as
 ``CoverageUnavailable(reason="native-payload-corrupt")`` to keep the
 operation total at the engine boundary.
 """
@@ -21,8 +22,10 @@ operation total at the engine boundary.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
+from novetest.coverage.cobertura_parser import parse_cobertura_xml
 from novetest.coverage.istanbul_parser import parse_istanbul_json
 from novetest.coverage.jacoco_parser import parse_jacoco_xml
 from novetest.coverage.lcov_parser import parse_lcov
@@ -36,7 +39,11 @@ from novetest.coverage.results import (
 )
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
-from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.models.coverage_fact_set import (
+    CoverageFactSet,
+    CoverageSummary,
+    FileCoverage,
+)
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 
@@ -55,22 +62,27 @@ COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
 # ``src/novetest/run/adapters/cargo_adapter.py:311`` for the registration.
 COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
 
-# JUnit's adapter registers JaCoCo XML at yet another distinct key.
-# `coverage_xml` is shared with no other engine (pytest/jest also write
-# Cobertura XML alongside JSON but we always prefer the JSON path for
-# those engines). The junit branch in ``derive_coverage_facts``
-# dispatches on ``engine_name == "junit"`` and resolves THIS key.
-# Multi-module Maven workspaces register the FIRST module's XML on the
-# RunRecord and the derive branch re-globs siblings via the
-# ``metadata["multi_module"] == "true"`` flag.
+# JUnit's adapter registers JaCoCo XML under ``coverage_xml``. The
+# dotnet (xunit) adapter ALSO registers under ``coverage_xml`` — same
+# key, different XML schema (Coverlet Cobertura instead of JaCoCo).
+# Both branches read the same artifact_paths entry; the engine_name
+# dispatch picks the right parser. pytest/jest also write Cobertura/XML
+# alongside JSON but we always prefer the JSON path for those engines
+# (their derive falls into the default JSON branch, not either of the
+# XML branches). Multi-module Maven workspaces register the FIRST
+# module's XML on the RunRecord and the junit derive branch re-globs
+# siblings via the ``metadata["multi_module"] == "true"`` flag.
 COVERAGE_JACOCO_XML_ARTIFACT_KEY = "coverage_xml"
+COVERAGE_COBERTURA_XML_ARTIFACT_KEY = "coverage_xml"
 
-# Engine name the cargo adapter sets on its ``NativeResult`` /
-# ``RunRecord.engine_name``. The literal value is contractual — Run
-# team pins it in ``cargo_adapter.py``; the dispatch here matches
-# against it.
+# Engine names the adapters set on their ``NativeResult`` /
+# ``RunRecord.engine_name``. The literal values are contractual — Run
+# team pins them in each adapter; the dispatch here matches against
+# them. See ``run/adapters/{cargo,junit,dotnet}_adapter.py`` for the
+# canonical pins.
 _CARGO_ENGINE_NAME = "cargo-test"
 _JUNIT_ENGINE_NAME = "junit"
+_XUNIT_ENGINE_NAME = "xunit"
 
 
 def derive_coverage_facts(
@@ -109,6 +121,12 @@ def derive_coverage_facts(
     # the branch.
     if record.engine_name == _JUNIT_ENGINE_NAME:
         return _derive_junit_jacoco(store, record)
+    # xunit (.NET) uses Coverlet Cobertura XML at the same ``coverage_xml``
+    # key as JUnit but a completely different XML schema. The engine_name
+    # dispatch picks the right parser; the artifact key collision is
+    # intentional (matches the v1 .NET adapter's pattern precedent).
+    if record.engine_name == _XUNIT_ENGINE_NAME:
+        return _derive_xunit_cobertura(store, record)
 
     rel_path = record.artifact_paths.get(COVERAGE_JSON_ARTIFACT_KEY)
     if not rel_path:
@@ -324,3 +342,174 @@ def _derive_junit_jacoco(
 
     write_coverage_facts(store, fact_set)
     return fact_set
+
+
+# Glob pattern for per-test mode (currently empirically inert per
+# decision 2026-06-03 §3 amendment, but a future Coverlet release that
+# fixes the XPlat data collector pipe would emit files matching this
+# glob under the ``coverage_xml`` artifact directory). Includes the
+# aggregate filename too so an adapter that registers the parent
+# directory regardless of mode still finds the file. See
+# ``run/adapters/dotnet_adapter.py::_glob_coverage_xml`` for the
+# Run-side counterpart.
+_COBERTURA_GLOB = "*.cobertura.xml"
+
+
+def _derive_xunit_cobertura(
+    store: ProjectStore, record: RunRecord,
+) -> CoverageFactSet | CoverageUnavailable:
+    """Xunit (.NET) branch: parse the Coverlet Cobertura XML artifact(s).
+
+    The dotnet adapter registers ``artifact_paths["coverage_xml"]`` to
+    EITHER a single ``coverage.cobertura.xml`` file (aggregate-effective
+    default per decision 2026-06-03 §3 amendment) OR a parent directory
+    containing ``coverage.<slug>.cobertura.xml`` per-test files (the
+    forward-compat path for a future Coverlet release that fixes the
+    empirically-inert XPlat ``<PerTestCoverage>`` element). This helper
+    handles both shapes.
+
+    Per task brief §2.4, source files that no longer exist on disk are
+    silently dropped — the Cobertura XML is still valuable evidence
+    even when the user moved the source tree post-run, but coverage
+    facts that point at non-existent files would just confuse
+    downstream verbs. If ZERO files resolve to on-disk paths, this
+    returns ``CoverageUnavailable(missing-native-payload)`` with a
+    ``cobertura-sources-not-found`` discriminator in the detail string.
+
+    Per task brief §2.5, ``mapping_granularity`` is hard-coded
+    ``aggregate`` by the parser (per decision 2026-06-03 §3 amended:
+    Coverlet XPlat path is aggregate-effective-default; per-test is
+    deferred to a future Coverlet release or a separate
+    ``coverlet.msbuild`` opt-in slice).
+
+    Same total-at-the-boundary contract as the JSON / LCOV / JaCoCo
+    paths: ``CoverageUnavailable(missing-native-payload)`` for absent /
+    unregistered artifact, ``CoverageUnavailable(native-payload-corrupt)``
+    for malformed XML. Other failure modes (e.g. invariant violation
+    inside the model layer) propagate as exceptions.
+    """
+
+    rel_path = record.artifact_paths.get(COVERAGE_COBERTURA_XML_ARTIFACT_KEY)
+    if not rel_path:
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"RunRecord.artifact_paths has no "
+                f"{COVERAGE_COBERTURA_XML_ARTIFACT_KEY!r} entry; this xunit "
+                "run was executed without coverage collection, or "
+                "coverlet.collector was absent / below the 6.0.2 floor "
+                "(see decisions/2026-06-03-coverlet-pertestcoverage-key.md)"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    coverage_path = store.path / rel_path
+    xml_paths: list[Path]
+    if coverage_path.is_file():
+        xml_paths = [coverage_path]
+    elif coverage_path.is_dir():
+        # Per-test mode (forward-compat) OR aggregate-mode adapter
+        # registered the parent directory for any reason. Glob the
+        # Cobertura XMLs inside.
+        xml_paths = sorted(coverage_path.glob(_COBERTURA_GLOB))
+        if not xml_paths:
+            return CoverageUnavailable(
+                reason=REASON_MISSING_NATIVE_PAYLOAD,
+                detail=(
+                    f"coverage_xml registered as directory {coverage_path} "
+                    f"but contains no {_COBERTURA_GLOB!r} files; Coverlet "
+                    f"output may be missing or under a different glob"
+                ),
+                run_reference=record.run_reference,
+            )
+    else:
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"Native Cobertura XML payload not found on disk at "
+                f"{coverage_path}"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    workspace_root = store.path.parent
+    try:
+        raw_fact_set = parse_cobertura_xml(
+            xml_paths,
+            run_reference=record.run_reference,
+            engine_name=record.engine_name,
+            ecosystem=record.ecosystem,
+            workspace_root=workspace_root,
+        )
+    except CoverageJsonParseError as exc:
+        return CoverageUnavailable(
+            reason=REASON_NATIVE_PAYLOAD_CORRUPT,
+            detail=str(exc),
+            run_reference=record.run_reference,
+        )
+
+    # §2.4: drop FileCoverage entries whose resolved path doesn't exist
+    # on disk. Empty raw_fact_set.files (XML had no classes at all) is
+    # NOT a sources-not-found condition — it's a valid empty report.
+    surviving_files: tuple[FileCoverage, ...] = tuple(
+        fc
+        for fc in raw_fact_set.files
+        if (workspace_root / fc.file_path).is_file()
+    )
+
+    if raw_fact_set.files and not surviving_files:
+        # XML had classes but NONE resolved to on-disk files — the
+        # source tree appears to have moved post-run.
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"Cobertura XML at {coverage_path} described "
+                f"{len(raw_fact_set.files)} source files but NONE exist "
+                f"on disk under workspace {workspace_root} — has the "
+                f"project tree moved post-run? "
+                f"(cobertura-sources-not-found)"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    if len(surviving_files) != len(raw_fact_set.files):
+        # Partial survival — rebuild with filtered files + recomputed
+        # summary so downstream consumers see a consistent fact set.
+        fact_set = replace(
+            raw_fact_set,
+            files=surviving_files,
+            summary=_aggregate_file_summary(surviving_files),
+        )
+    else:
+        fact_set = raw_fact_set
+
+    write_coverage_facts(store, fact_set)
+    return fact_set
+
+
+def _aggregate_file_summary(files: tuple[FileCoverage, ...]) -> CoverageSummary:
+    """Recompute a top-level ``CoverageSummary`` after dropping files.
+
+    Mirrors ``cobertura_parser._aggregate_summary`` — kept here so
+    ``derive`` can rebuild the summary without re-parsing the XML when
+    §2.4 drops unresolvable files.
+    """
+    num_statements = sum(f.summary.num_statements for f in files)
+    covered_statements = sum(f.summary.covered_statements for f in files)
+    missing_statements = sum(f.summary.missing_statements for f in files)
+    excluded_statements = sum(f.summary.excluded_statements for f in files)
+    percent_covered = (
+        round(100.0 * covered_statements / num_statements, 2)
+        if num_statements > 0
+        else 100.0
+    )
+    return CoverageSummary(
+        num_statements=num_statements,
+        covered_statements=covered_statements,
+        missing_statements=missing_statements,
+        excluded_statements=excluded_statements,
+        num_branches=0,
+        covered_branches=0,
+        missing_branches=0,
+        percent_covered=percent_covered,
+    )

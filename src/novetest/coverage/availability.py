@@ -13,9 +13,18 @@ Pure filesystem/record probing. Two probes:
    charter rule ("must agree without importing Memory's private helpers").
 
 2. **Derivable from native payload?** Probe whether the Run Record
-   advertises EITHER a ``coverage_json`` artifact (pytest / jest /
-   go-test) OR a ``coverage_lcov`` artifact (cargo-test) AND that
-   file exists on disk.
+   advertises ANY of:
+
+   - ``coverage_json`` — pytest / jest / go-test (coverage.py JSON or
+     Istanbul JSON)
+   - ``coverage_lcov`` — cargo-test (cargo-llvm-cov LCOV text)
+   - ``coverage_xml`` — junit (JaCoCo XML) or xunit (.NET Coverlet
+     Cobertura XML)
+
+   The probe accepts the artifact pointing to a FILE or a DIRECTORY
+   (the latter is the dotnet adapter's forward-compat per-test mode,
+   which registers the parent directory of one-or-more Cobertura XMLs).
+   Uses ``.exists()`` so both shapes count as "native payload present".
 
 A run is *available* when either probe succeeds. Orchestration's stage
 eligibility uses this signal to decide whether to call ``derive`` /
@@ -33,15 +42,19 @@ from novetest.models.run_reference import RunReference
 
 
 # Mirror the pinned artifact keys from derive.py so the two stay in sync
-# if Run Team ever renames either (the rename would land in a single
+# if Run Team ever renames any (the rename would land in a single
 # decision). ``coverage_json`` covers pytest / jest / go-test;
-# ``coverage_lcov`` covers cargo-test. The native-payload probe accepts
-# EITHER — derive's engine dispatch picks the right parser at derive time.
+# ``coverage_lcov`` covers cargo-test; ``coverage_xml`` covers junit
+# (JaCoCo XML) and xunit (Coverlet Cobertura XML). The native-payload
+# probe accepts ANY of them — derive's engine dispatch picks the right
+# parser at derive time.
 _COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
 _COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
+_COVERAGE_XML_ARTIFACT_KEY = "coverage_xml"
 _COVERAGE_ARTIFACT_KEYS: tuple[str, ...] = (
     _COVERAGE_JSON_ARTIFACT_KEY,
     _COVERAGE_LCOV_ARTIFACT_KEY,
+    _COVERAGE_XML_ARTIFACT_KEY,
 )
 
 
@@ -98,7 +111,13 @@ def check_coverage_availability(
     native_payload_present = False
     for artifact_key in _COVERAGE_ARTIFACT_KEYS:
         rel_path = entry.run_record.artifact_paths.get(artifact_key)
-        if rel_path and (store.path / rel_path).is_file():
+        # ``.exists()`` (not ``.is_file()``) so the dotnet adapter's
+        # forward-compat per-test mode — where ``coverage_xml`` points
+        # at the parent directory of one-or-more Cobertura XMLs — also
+        # counts as native payload present. Existing file-based
+        # artifacts (coverage_json, coverage_lcov, aggregate-mode
+        # coverage_xml) remain matched.
+        if rel_path and (store.path / rel_path).exists():
             native_payload_present = True
             break
 

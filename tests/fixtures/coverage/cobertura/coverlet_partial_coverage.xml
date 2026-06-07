@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.5" branch-rate="0" lines-covered="3" lines-valid="6"
+          branches-covered="1" branches-valid="4"
+          timestamp="1717733000" version="6.0.2" complexity="5">
+  <!--
+    Two classes across two packages; ``MathLib.MathOps`` is fully covered,
+    ``MathLib.Classifier`` has uncovered branches (lines 8 and 12 missing).
+    Branches (`branch="true"` + ``condition-coverage``) are ignored by the
+    v1 parser per task brief §2.3 — kept here to verify forward-compat
+    indifference (parser must tolerate the attributes without surfacing
+    spurious branch facts).
+  -->
+  <sources>
+    <source>/abs/path/to/workspace</source>
+  </sources>
+  <packages>
+    <package name="MathLib" line-rate="1" branch-rate="1" complexity="2">
+      <classes>
+        <class name="MathLib.MathOps" filename="MathLib/MathOps.cs"
+               line-rate="1" branch-rate="1" complexity="2">
+          <lines>
+            <line number="14" hits="2" branch="false"/>
+            <line number="15" hits="2" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+    <package name="MathLib" line-rate="0.25" branch-rate="0.25" complexity="3">
+      <classes>
+        <class name="MathLib.Classifier" filename="MathLib/Classifier.cs"
+               line-rate="0.25" branch-rate="0.25" complexity="3">
+          <lines>
+            <line number="5" hits="1" branch="false"/>
+            <line number="8" hits="0" branch="true" condition-coverage="50% (1/2)">
+              <conditions>
+                <condition number="0" type="jump" coverage="50%"/>
+              </conditions>
+            </line>
+            <line number="9" hits="1" branch="false"/>
+            <line number="12" hits="0" branch="true" condition-coverage="0% (0/2)">
+              <conditions>
+                <condition number="0" type="jump" coverage="0%"/>
+              </conditions>
+            </line>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>
