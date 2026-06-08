@@ -226,3 +226,76 @@ async def test_coverage_missing_plugin_raises_missing_plugin(
     # report lands. Both routes converge on a typed error; we only require
     # that *some* AdapterInvocationError is raised with a well-known kind.
     assert exc_info.value.kind in {"missing-plugin", "unparseable-output"}
+
+
+# ---------------------------------------------------------------------------
+# artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
+# ---------------------------------------------------------------------------
+#
+# `run_pytest` calls ``artifact_dir = artifact_dir.resolve()`` as the first
+# line of the function body. The pair below pins the defensive behavior:
+# (a) a relative ``artifact_dir`` lands artifacts at the cwd-anchored
+# absolute path (silently writing under the wrong directory is the
+# original-TODO failure mode); (b) an absolute ``artifact_dir`` is
+# unchanged by the resolve. Both tests use the real pytest subprocess
+# against ``basic_workspace`` because pytest is always present in the dev
+# venv — the resolve is a path-shape invariant, not a subprocess
+# invariant, so the runtime cost is identical to the existing happy-path
+# test above.
+
+
+async def test_relative_artifact_dir_resolves_against_cwd(
+    basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``artifact_dir`` should resolve against the test's cwd.
+
+    Hardens against the long-standing TODO from 2026-05-16. Future callers
+    that pass a relative path (intentionally or by bug) must land artifacts
+    at a predictable absolute location, not silently under whatever cwd
+    the subprocess inherits.
+    """
+
+    monkeypatch.chdir(tmp_path)
+    rel_artifact_dir = Path("rel-art")
+    expected_root = (tmp_path / "rel-art").resolve()
+
+    target = resolve_test_target("", basic_workspace)
+    result = await run_pytest(target, artifact_dir=rel_artifact_dir, timeout=60.0)
+
+    # The native/ directory must exist at the cwd-anchored absolute path.
+    assert (expected_root / "native").is_dir()
+    # Every registered artifact path must be absolute AND nested under
+    # the resolved root — proves the resolve flowed through to all
+    # downstream Path compositions, not just the initial mkdir.
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert expected_root in path.parents, (
+            f"{key} → {path} is not under {expected_root}"
+        )
+
+
+async def test_absolute_artifact_dir_unchanged_after_resolve(
+    basic_workspace: Path,
+    tmp_path: Path,
+) -> None:
+    """An absolute ``artifact_dir`` should round-trip through resolve.
+
+    The resolve call is idempotent on absolute paths (no-op + symlink
+    follow). The existing production caller shape — orchestration builds
+    absolute paths under ``.novetest/run/artifacts/run_<ulid>/`` — must
+    continue producing artifacts at exactly the input path, byte-identical
+    to pre-hardening behavior.
+    """
+
+    abs_artifact_dir = (tmp_path / "abs-art").resolve()
+    target = resolve_test_target("", basic_workspace)
+    result = await run_pytest(target, artifact_dir=abs_artifact_dir, timeout=60.0)
+
+    assert (abs_artifact_dir / "native").is_dir()
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert abs_artifact_dir in path.parents, (
+            f"{key} → {path} is not under {abs_artifact_dir}"
+        )

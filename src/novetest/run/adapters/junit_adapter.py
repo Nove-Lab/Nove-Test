@@ -128,6 +128,13 @@ async def run_junit(
     that detail is needed for the argv composition.
     """
 
+    # Defensive resolve: hardens against future callers passing a relative
+    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
+    # downstream code composes ``native_dir = artifact_dir / "native"``
+    # and forwards ``artifact_dir`` into ``_run_maven`` / ``_run_gradle``
+    # which itself derive further paths. Idempotent on absolute paths.
+    artifact_dir = artifact_dir.resolve()
+
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)
     failures_dir = native_dir / FAILURES_DIR_NAME

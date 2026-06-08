@@ -273,6 +273,15 @@ async def run_xunit(
     needed for argv composition.
     """
 
+    # Defensive resolve: hardens against future callers passing a relative
+    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
+    # downstream code composes the runsettings path, results dir, and
+    # failures dir without re-resolving, and the runsettings absolute
+    # path is passed as ``--settings`` to ``dotnet test`` (the .NET CLI
+    # tolerates either shape but the contract surface should be
+    # invariant). Idempotent on absolute paths.
+    artifact_dir = artifact_dir.resolve()
+
     workspace = test_target.workspace_path
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)

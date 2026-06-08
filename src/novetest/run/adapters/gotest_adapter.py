@@ -78,6 +78,11 @@ async def run_gotest(
     the artifact key ``coverage_profile``.
     """
 
+    # Defensive resolve: hardens against future callers passing a relative
+    # ``artifact_dir``. See pytest_adapter.py for the full rationale.
+    # Idempotent on absolute paths.
+    artifact_dir = artifact_dir.resolve()
+
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)
     events_path = native_dir / EVENTS_JSONL_FILENAME
