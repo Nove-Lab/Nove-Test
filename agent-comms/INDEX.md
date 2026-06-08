@@ -8,7 +8,9 @@ Last regenerated: 2026-06-08
 _(none)_
 
 ## Pending
-_(none)_
+- [coverage-team-2026-06-08-outside-workspace-path-harmonization.md](./tasks/coverage-team-2026-06-08-outside-workspace-path-harmonization.md) — `novetest-pm-team → novetest-coverage-team` (outside-workspace-path-harmonization)
+- [localization-team-2026-06-08-ux-normalize-metadata-and-paths.md](./tasks/localization-team-2026-06-08-ux-normalize-metadata-and-paths.md) — `novetest-pm-team → novetest-localization-team` (ux-normalize-metadata-and-paths)
+- [run-team-2026-06-08-artifact-dir-resolve-hardening.md](./tasks/run-team-2026-06-08-artifact-dir-resolve-hardening.md) — `novetest-pm-team → novetest-run-team` (artifact-dir-resolve-hardening)
 
 ## Blocked
 _(none)_
