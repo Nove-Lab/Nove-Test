@@ -41,6 +41,7 @@ from __future__ import annotations
 import re
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Final
 
 from novetest.memory.project_store import ProjectStore
@@ -263,6 +264,15 @@ def derive_failure_proximity(
     file_to_failed_tests: dict[str, set[str]] = defaultdict(set)
     file_to_evidence_lines: dict[str, set[int]] = defaultdict(set)
 
+    # Workspace root for path normalization (B2-2 UX normalization,
+    # 2026-06-08). ``store.path`` is ``<workspace>/.novetest/``; the
+    # workspace root sits one level up. Same pattern as
+    # ``derive.py::_resolve_repo_path`` but the OPPOSITE direction
+    # (abs → rel here; rel → abs there). Hoisted out of the loop so the
+    # one-level-up resolution runs once per derivation, not once per
+    # parsed tuple.
+    workspace_root = store.path.parent
+
     for tr in record.test_results:
         if tr.outcome not in _FAILED_OUTCOMES:
             continue
@@ -287,8 +297,18 @@ def derive_failure_proximity(
             )
             continue
         for file_path, line in tuples:
-            file_to_failed_tests[file_path].add(tr.node_id)
-            file_to_evidence_lines[file_path].add(line)
+            # B2-2: normalize the parser's emitted file path to
+            # workspace-relative form. Most failure-log parsers (pytest's
+            # ``crash.path``, cargo nextest's panic frame, etc.) carry
+            # absolute paths verbatim; the other Localization modes
+            # source from CoverageFactSet whose adapter contract yields
+            # repo-relative paths. Normalize here so all three modes
+            # emit a single mode-invariant ``code_location.file`` shape.
+            relative_file = _normalize_to_workspace_relative(
+                file_path, workspace_root
+            )
+            file_to_failed_tests[relative_file].add(tr.node_id)
+            file_to_evidence_lines[relative_file].add(line)
 
     changed_files = _changed_files_from_regression(regression_facts)
     regression_reweighted = bool(changed_files) and bool(file_to_failed_tests)
@@ -476,5 +496,57 @@ def _dense_ranks(sorted_scores: list[float]) -> list[int]:
             previous_score = score
         ranks.append(current_rank)
     return ranks
+
+
+def _normalize_to_workspace_relative(
+    file_path: str, workspace_root: Path
+) -> str:
+    """Normalize a parsed failure-log file path to workspace-relative form.
+
+    Returns workspace-relative path when the input is absolute AND lies
+    under ``workspace_root``; otherwise returns ``file_path`` unchanged.
+    Idempotent on already-relative inputs (the common case for the
+    existing fixture tests).
+
+    Brief (B2-2 UX normalization, 2026-06-08): failure_proximity emits
+    absolute paths in production because pytest's ``crash.path``, cargo
+    nextest's panic frame, jest stack traces, etc. carry absolute paths
+    verbatim. Other Localization modes (sbfl_per_test, sbfl_aggregate)
+    are sourced from CoverageFactSet whose adapter contract yields
+    repo-relative paths. This helper aligns failure_proximity with the
+    envelope-wide convention. Spec pinned in
+    ``design/interace-contract/localization.md`` §"Result shape —
+    mode-invariant".
+
+    Paths OUTSIDE the workspace (e.g. ``/usr/lib/python/.../stdlib.py``
+    in pytest tracebacks, or ``/rustc/<hash>/.../panicking.rs`` frames
+    in cargo) are left absolute — they cannot be made workspace-
+    relative meaningfully and surface as an obvious "not your code" cue
+    to consumers. This is a defensive contract: the parser's catch-all
+    patterns (notably the dropped cargo catch-all from Defect 3, 2026-
+    05-31) historically leaked stdlib paths; preserving absolute form
+    for such paths keeps the existing Defect-3 defensive posture intact
+    (the aggregate mode's covered-files intersection drops them; the
+    failure_proximity mode does NOT have an analogous filter and the
+    absolute form is the next-best disambiguation signal).
+
+    Note: this helper does NOT call ``Path.resolve()`` on either side.
+    Symlinks / case-insensitive filesystems / NFS mounts may cause a
+    workspace path to look like ``/A/ws/file.py`` while the failure log
+    emits ``/B/ws/file.py`` (same underlying inode via symlink). Such
+    paths fall through to the "kept absolute" branch — same posture as
+    paths genuinely outside the workspace. A future cycle can add a
+    symlink-resolving variant if the corner case surfaces in Manual
+    Test; for v1 the conservative non-resolving form is sufficient.
+    """
+    candidate = Path(file_path)
+    if not candidate.is_absolute():
+        return file_path
+    try:
+        relative = candidate.relative_to(workspace_root)
+    except ValueError:
+        # Not under workspace_root (e.g. stdlib path); keep absolute as-is.
+        return file_path
+    return str(relative)
 
 

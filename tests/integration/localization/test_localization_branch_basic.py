@@ -108,6 +108,19 @@ async def test_localization_ranks_buggy_function_top(
         for nodeid in top.related_failed_tests
     )
 
+    # B2-1 (UX normalization, 2026-06-08): mode-invariant metadata key
+    # set. sbfl_per_test emits both base keys with ``None`` values
+    # (the mode does not consult RegressionFactSet — structural noop
+    # discriminator vs sbfl_aggregate / failure_proximity which return
+    # concrete ``int`` / ``bool`` whether or not the change set is
+    # empty). Spec pinned in
+    # ``design/interace-contract/localization.md`` §"Result shape —
+    # mode-invariant".
+    assert "changed_files_count" in finding.metadata
+    assert "regression_reweighted" in finding.metadata
+    assert finding.metadata["changed_files_count"] is None
+    assert finding.metadata["regression_reweighted"] is None
+
     # Cache file landed at the load-bearing path; Memory's flag flipped.
     findings_path = localization_findings_path(init.store, run_reference.run_id)
     assert findings_path.is_file()

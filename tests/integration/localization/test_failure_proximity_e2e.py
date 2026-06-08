@@ -105,9 +105,43 @@ async def test_failure_proximity_ranks_buggy_file_top(tmp_path: Path) -> None:
         f"expected ``statistics.py`` somewhere in failure_proximity entries; "
         f"got entries={[e.code_location.file for e in finding.entries]!r}"
     )
+    # B2-2 (UX normalization, 2026-06-08): every emitted file path is
+    # workspace-relative (NOT absolute). Pre-normalization pytest's
+    # ``crash.path`` carried absolute form through to the envelope; the
+    # other Localization modes emit repo-relative paths. Pinning the
+    # whole entry set so a future regression on the normalization helper
+    # surfaces here, not just on the top entry.
+    for entry in finding.entries:
+        assert not Path(entry.code_location.file).is_absolute(), (
+            f"failure_proximity entry must emit workspace-relative path; "
+            f"got absolute {entry.code_location.file!r}"
+        )
+    # The SuT bug file's path should be exactly the workspace-relative
+    # form ``localization_no_coverage/statistics.py`` (package dir + .py).
+    sut_entry = next(
+        (e for e in finding.entries if "statistics.py" in e.code_location.file),
+        None,
+    )
+    assert sut_entry is not None
+    assert sut_entry.code_location.file == (
+        "localization_no_coverage/statistics.py"
+    ), (
+        f"expected exact workspace-relative SuT path; "
+        f"got {sut_entry.code_location.file!r}"
+    )
     # Per-entry alternate_scores is the documented empty-dict deviation.
     for entry in finding.entries:
         assert entry.alternate_scores == {}
+
+    # B2-1 (UX normalization, 2026-06-08): mode-invariant metadata key
+    # set. failure_proximity emits both base keys with concrete (int /
+    # bool) values; the symmetric assertions in the sbfl_per_test
+    # (None / None) and sbfl_aggregate (int / bool) E2E tests close the
+    # 3-mode matrix the brief mandates.
+    assert "changed_files_count" in finding.metadata
+    assert "regression_reweighted" in finding.metadata
+    assert isinstance(finding.metadata["changed_files_count"], int)
+    assert isinstance(finding.metadata["regression_reweighted"], bool)
 
     # Cache file landed at the load-bearing path so the canonical
     # localization_findings.json exists for downstream consumers.
