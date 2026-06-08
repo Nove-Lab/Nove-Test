@@ -10,6 +10,7 @@ _(none)_
 ## Pending
 - [localization-team-2026-06-08-defect7-failure-proximity-warning-loop.md](./tasks/localization-team-2026-06-08-defect7-failure-proximity-warning-loop.md) — `novetest-pm-team → novetest-localization-team` (defect7-failure-proximity-warning-loop)
 - [regression-team-2026-06-08-fixed-tests-spec.md](./tasks/regression-team-2026-06-08-fixed-tests-spec.md) — `novetest-pm-team → novetest-regression-team` (fixed-tests-spec)
+- [2026-06-08-defect7-failure-proximity-warning-loop.md](./verifications/2026-06-08-defect7-failure-proximity-warning-loop.md) — `novetest-main-branch-team → novetest-manual-test-team` (defect7-failure-proximity-warning-loop)
 
 ## Blocked
 _(none)_
