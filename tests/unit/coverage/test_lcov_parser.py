@@ -217,14 +217,22 @@ def test_absolute_paths_relativized_against_workspace_root(tmp_path: Path) -> No
     assert set(paths) == {"src/lib.rs", "src/arithmetic.rs", "src/classifier.rs"}
 
 
-# --- §5 case 6: outside-workspace path preserved + warning emitted -----------
+# --- §5 case 6: outside-workspace path normalized to ../-prefixed relpath ----
 
 
-def test_path_outside_workspace_root_preserved_with_warning(tmp_path: Path) -> None:
-    """Per the task brief §4 (deviating from istanbul precedent):
-    paths NOT under workspace_root keep the absolute form AND surface
-    in metadata["lcov_warnings"] — so an operator can see why a
-    non-relative path is present.
+def test_path_outside_workspace_root_normalized_to_relpath_with_forensic_warning(
+    tmp_path: Path,
+) -> None:
+    """Per the 2026-06-08 amendment to decision 2026-05-15
+    (outside-workspace path harmonization, scenario A): paths NOT under
+    workspace_root are normalized to a ``../``-prefixed POSIX relpath via
+    ``os.path.relpath`` — matching the istanbul / cobertura parsers so
+    cross-ecosystem consumers see one uniform shape. The original
+    absolute ``SF:`` value is preserved in ``metadata['lcov_warnings']``
+    for forensic continuity (debuggers can still recover the native
+    cargo-llvm-cov string without re-reading the LCOV file). Absolute
+    paths in ``file_path`` are a contract violation even for
+    outside-workspace cases (decision §6 amend).
     """
     body = """\
 SF:/elsewhere/cargo-build-script/generated.rs
@@ -237,16 +245,37 @@ end_of_record
 """
     fact_set = _parse(tmp_path, body)
     by_path = {f.file_path: f for f in fact_set.files}
-    # The outside path is preserved verbatim (absolute), not relpath'd.
-    assert "/elsewhere/cargo-build-script/generated.rs" in by_path
-    assert by_path["/elsewhere/cargo-build-script/generated.rs"].executed_lines == (1,)
+    # The outside path is normalized to a ../-prefixed relpath.
+    # Workspace is /ws/cargo-project, outside file is /elsewhere/...
+    # os.path.relpath yields ../../elsewhere/cargo-build-script/generated.rs.
+    outside_paths = [p for p in by_path if p.startswith("..")]
+    assert len(outside_paths) == 1, (
+        f"expected exactly one ../-prefixed outside path, got {list(by_path)!r}"
+    )
+    outside_rel = outside_paths[0]
+    assert outside_rel.endswith("elsewhere/cargo-build-script/generated.rs"), (
+        f"expected outside path to end with elsewhere/...generated.rs, "
+        f"got {outside_rel!r}"
+    )
+    # No file path is absolute (contract violation under decision §6 amend).
+    for p in by_path:
+        assert not Path(p).is_absolute(), (
+            f"outside-workspace harmonization: no file_path may be "
+            f"absolute, got {p!r}"
+        )
+    # Line counts survive normalization unchanged.
+    assert by_path[outside_rel].executed_lines == (1,)
     # The inside path is workspace-relative as usual.
     assert "src/lib.rs" in by_path
-    # The warning surfaces in fact-set metadata.
+    # The warning surfaces in fact-set metadata (forensic continuity)
+    # and carries BOTH the original absolute path and the normalized
+    # relpath so an operator debugging "why is ../../elsewhere/foo here?"
+    # sees the native cargo-llvm-cov string alongside it.
     warnings = fact_set.metadata.get("lcov_warnings")
     assert isinstance(warnings, list)
     assert len(warnings) == 1
-    assert "elsewhere/cargo-build-script/generated.rs" in warnings[0]
+    assert "/elsewhere/cargo-build-script/generated.rs" in warnings[0]
+    assert outside_rel in warnings[0]
     assert "/ws/cargo-project" in warnings[0]
 
 

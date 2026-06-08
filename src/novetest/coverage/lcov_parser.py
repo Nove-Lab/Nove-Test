@@ -54,9 +54,13 @@ Mapping decisions (cargo-test → frozen-schema)
   ``ProjectStore.path.parent`` — i.e. the ``.novetest/`` directory's
   parent IS the workspace root). Paths NOT under ``workspace_root``
   (rare: cargo build-script generated code, vendored
-  ``target/...`` paths) are preserved verbatim AND surface as a
-  ``metadata["lcov_warnings"]`` entry; downstream consumers can see why
-  a non-relative path is present rather than guess.
+  ``target/...`` paths) are normalized to a ``../``-prefixed POSIX
+  relpath via ``os.path.relpath`` against ``workspace_root`` — harmonized
+  with the istanbul / cobertura parsers per the 2026-06-08 amendment to
+  ``decisions/2026-05-15-coverage-facts-json-layout.md``. The original
+  absolute ``SF:`` path is preserved in ``metadata["lcov_warnings"]``
+  for forensic continuity (debuggers see the unresolved native string
+  alongside the normalized one) but never appears in ``file_path``.
 
 - ``line_contexts = {}`` and ``executed_lines`` / ``missing_lines`` are
   derived directly from ``DA`` records. A line counts as executed when
@@ -528,21 +532,28 @@ def _workspace_relative(
 
     Rare edge case: ``cargo-llvm-cov`` can report files OUTSIDE the
     workspace root (build-script generated code under ``target/``, paths
-    walking up into rustc's standard library, etc.). The brief
-    (``tasks/coverage-team-2026-05-31-cargo-lcov-dispatch.md`` §4)
-    pins the handling for that case as "preserve the absolute path AND
-    emit a warning" rather than the istanbul precedent of producing a
-    ``../``-prefixed relative path. The reasoning: a ``../../var/...``
-    string is more confusing than the original absolute path, and the
-    warning gives the operator the signal that the path is intentionally
-    outside the workspace.
+    walking up into rustc's standard library, etc.). Per the 2026-06-08
+    amendment to ``decisions/2026-05-15-coverage-facts-json-layout.md``,
+    the parser normalizes these to a ``../``-prefixed POSIX relpath via
+    ``os.path.relpath`` — matching the istanbul and cobertura parsers so
+    cross-ecosystem consumers see one uniform shape for outside-workspace
+    paths. The original absolute ``SF:`` value is still surfaced in
+    ``metadata['lcov_warnings']`` for forensic continuity (an operator
+    debugging "why is `../../elsewhere/foo.rs` here?" can recover the
+    native cargo-llvm-cov string without re-reading the LCOV file).
     """
     path = Path(abs_path)
     try:
         return path.relative_to(workspace_root).as_posix()
     except ValueError:
+        # Outside-workspace: fall back to relpath (istanbul / cobertura
+        # precedent) so `file_path` is never absolute. ``os.path.relpath``
+        # is platform-aware; we POSIX-flavor the result to keep the
+        # persisted form deterministic across platforms.
+        relpath = Path(os.path.relpath(path, workspace_root)).as_posix()
         warnings.append(
-            f"path outside workspace_root={os.fspath(workspace_root)!r}: "
-            f"{abs_path}"
+            f"outside-workspace path (preserved as relpath "
+            f"against workspace_root={os.fspath(workspace_root)!r}): "
+            f"{abs_path} -> {relpath}"
         )
-        return abs_path
+        return relpath
