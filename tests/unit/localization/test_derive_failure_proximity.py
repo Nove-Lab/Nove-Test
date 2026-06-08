@@ -420,6 +420,196 @@ def test_top_n_truncation(tmp_path: Path) -> None:
     assert len(finding.entries) == 1
 
 
+# ---------------------------------------------------------------------------
+# B2-2 file-path absoluteness normalization (UX, 2026-06-08)
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_workspace_internal_path_normalized_to_relative(
+    tmp_path: Path,
+) -> None:
+    """B2-2: an absolute file path under the workspace root is rewritten
+    to workspace-relative form.
+
+    Pytest's ``crash.path`` (and most other engines' tracebacks) carry
+    absolute paths verbatim. Pre-normalization the failure_proximity
+    mode emitted those paths absolute, while the other Localization
+    modes emit repo-relative paths (because they source from
+    CoverageFactSet whose adapter contract pre-normalizes). This test
+    pins that the normalization actually fires on the production-shape
+    input.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+    abs_path_under_ws = workspace / "src" / "foo.py"
+    store, record = _make_run(
+        workspace=workspace,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference=(
+                    f"{abs_path_under_ws}:5: AssertionError\n"
+                    f"+ assert add(2,3) == 6"
+                ),
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert len(finding.entries) == 1
+    top = finding.entries[0]
+    # The emitted file path is workspace-relative (NOT the absolute form
+    # the parser extracted from the failure log).
+    assert top.code_location.file == "src/foo.py", (
+        f"expected workspace-relative path; got {top.code_location.file!r}"
+    )
+    # Sanity: not absolute, and is exactly the relative form.
+    assert not Path(top.code_location.file).is_absolute()
+
+
+def test_absolute_path_outside_workspace_kept_absolute(tmp_path: Path) -> None:
+    """B2-2 edge case: a parsed absolute path that lies OUTSIDE the
+    workspace (e.g. stdlib / installed-package frame) is emitted
+    verbatim as-is.
+
+    Such paths cannot be made workspace-relative meaningfully; emitting
+    them absolute surfaces an obvious "not your code" cue to consumers.
+    Mirrors the Defect 3 defensive posture (2026-05-31, cargo stdlib
+    catch-all dropped) — failure_proximity does not have an analogous
+    covered-files intersection filter, so absolute-out-of-workspace is
+    the next-best disambiguation signal.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+    # A clearly out-of-workspace path. Use a sibling of the workspace
+    # so the path actually exists on disk but is not under the workspace
+    # root.
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    outside_path = outside_dir / "stdlib_sim.py"
+    store, record = _make_run(
+        workspace=workspace,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference=f"{outside_path}:10: TypeError\n",
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert len(finding.entries) == 1
+    top = finding.entries[0]
+    # Kept absolute verbatim because the path is outside workspace.
+    assert top.code_location.file == str(outside_path), (
+        f"expected absolute path preserved; got {top.code_location.file!r}"
+    )
+    assert Path(top.code_location.file).is_absolute()
+
+
+def test_relative_path_passes_through_unchanged(tmp_path: Path) -> None:
+    """B2-2 idempotence: an already-relative input parses + emits the
+    same string. Pins that the normalization helper does not mangle
+    already-relative inputs (the existing happy-path tests rely on
+    this; this test makes the contract explicit).
+    """
+    store, record = _make_run(
+        workspace=tmp_path / "ws",
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:3: e",
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert len(finding.entries) == 1
+    top = finding.entries[0]
+    assert top.code_location.file == "src/foo.py"
+
+
+def test_absolute_and_relative_for_same_file_collapse_to_relative(
+    tmp_path: Path,
+) -> None:
+    """B2-2 collapse-on-normalization: two failing tests, one reporting
+    the file absolute (the production pytest path) and the other
+    reporting it relative (a hand-rolled hypothetical), should both
+    aggregate into a single candidate at the normalized relative key.
+
+    Pins that the normalization runs BEFORE aggregation — if it ran
+    AFTER, the two forms would land in two distinct dict keys, the
+    file would be ranked twice, and the ``score_raw`` would be ``1.0``
+    for each instead of ``2.0`` for the combined entry.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+    abs_path = workspace / "src" / "foo.py"
+    store, record = _make_run(
+        workspace=workspace,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_abs",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference=f"{abs_path}:5: AssertionError",
+            ),
+            TestResult(
+                node_id="tests/t.py::t_rel",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:9: AssertionError",
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset(
+            {"tests/t.py::t_abs", "tests/t.py::t_rel"}
+        ),
+        regression_facts=None,
+        top_n=10,
+    )
+    foo = next(
+        (e for e in finding.entries if e.code_location.file == "src/foo.py"),
+        None,
+    )
+    assert foo is not None, (
+        f"expected unified ``src/foo.py`` entry; got entries="
+        f"{[e.code_location.file for e in finding.entries]!r}"
+    )
+    # Both tests contributed → score_raw == 2.0 (not 1.0 if the two
+    # forms had landed in separate dict keys).
+    assert foo.score_raw == pytest.approx(2.0)
+    assert tuple(sorted(foo.code_location.evidence_lines)) == (5, 9)
+    assert set(foo.related_failed_tests) == {
+        "tests/t.py::t_abs",
+        "tests/t.py::t_rel",
+    }
+
+
 def test_failure_proximity_envelope_shape_deviation_pinned(tmp_path: Path) -> None:
     """Pin the brief §7 deviation: empty alternate_scores fields.
 

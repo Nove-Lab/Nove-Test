@@ -128,6 +128,18 @@ async def test_aggregate_mode_ranks_buggy_file_top(tmp_path: Path) -> None:
         f"{[e.code_location.file for e in finding.entries]!r}"
     )
 
+    # B2-1 (UX normalization, 2026-06-08): mode-invariant metadata key
+    # set. sbfl_aggregate emits both base keys with concrete (int /
+    # bool) values reflecting whether FLUCCS reweighting fired against
+    # an available change set. The symmetric assertions in
+    # test_localization_branch_basic.py (sbfl_per_test: None / None)
+    # and test_failure_proximity_e2e.py (failure_proximity: int / bool)
+    # close the 3-mode matrix the brief mandates.
+    assert "changed_files_count" in finding.metadata
+    assert "regression_reweighted" in finding.metadata
+    assert isinstance(finding.metadata["changed_files_count"], int)
+    assert isinstance(finding.metadata["regression_reweighted"], bool)
+
     # Cache file landed at the load-bearing path; Memory flag flipped.
     findings_path = localization_findings_path(store, run_reference.run_id)
     assert findings_path.is_file()

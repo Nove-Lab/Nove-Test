@@ -438,3 +438,99 @@ def test_file_level_fallback_for_module_level_code(
     assert file_entry is not None
     assert file_entry.code_location.symbol is None
     assert file_entry.code_location.line_range is None
+
+
+# ---------------------------------------------------------------------------
+# B2-1 metadata shape normalization (UX, 2026-06-08)
+# ---------------------------------------------------------------------------
+
+
+def test_per_test_metadata_has_mode_invariant_keys_with_none_values(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """B2-1: per-test mode emits the same ``metadata`` key set as the
+    aggregate / failure_proximity modes (``changed_files_count`` +
+    ``regression_reweighted``) with ``None`` values.
+
+    The asymmetry pre-2026-06-08 was that ``sbfl_per_test`` returned an
+    empty ``metadata`` dict, while ``sbfl_aggregate`` /
+    ``failure_proximity`` returned the two regression-tracking keys.
+    AI consumers had to branch on ``finding.mode`` before reading
+    metadata. Post-normalization the three modes share a single key set
+    contract.
+
+    ``None`` (vs ``0`` / ``False``) is the principled discriminator:
+    per-test mode does NOT consult Regression Facts (no FLUCCS
+    reweighting in this mode per strategy doc §2), so ``None`` reads
+    as "this mode does not consult Regression Facts at all" — distinct
+    from the aggregate / failure_proximity modes returning ``0`` /
+    ``False`` when Regression Facts are absent or the change set is
+    empty.
+
+    Spec pinned in ``design/interace-contract/localization.md``
+    §"Result shape — mode-invariant".
+    """
+    workspace = _seed_buggy_project(
+        tmp_path=tmp_path,
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(workspace / ".novetest")
+    result = derive_localization_findings(store, default_ref)
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_per_test"
+
+    # Both base keys present.
+    assert "changed_files_count" in result.metadata
+    assert "regression_reweighted" in result.metadata
+    # Both base keys have None values (per-test mode does not consult
+    # RegressionFactSet — structural noop discriminator).
+    assert result.metadata["changed_files_count"] is None
+    assert result.metadata["regression_reweighted"] is None
+
+
+def test_per_test_metadata_survives_persistence_roundtrip(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """B2-1: the per-test normalized ``metadata`` keys survive
+    ``LocalizationFinding.to_dict()`` → JSON → ``from_dict()`` so the
+    cache reader returns the same shape the producer wrote.
+
+    The persistence-layer ``write_localization_findings`` /
+    ``read_localization_findings_raw`` pair is the same path
+    ``derive_localization_findings`` follows on cache hit; pinning the
+    roundtrip explicitly prevents a future ``dict[str, Any]`` →
+    ``dict[str, SomethingTighter`` refactor from accidentally dropping
+    ``None`` values during JSON serialization.
+    """
+    workspace = _seed_buggy_project(
+        tmp_path=tmp_path,
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(workspace / ".novetest")
+    derive_localization_findings(store, default_ref)
+    # Second call goes through the cache reader.
+    cached = derive_localization_findings(store, default_ref)
+    assert isinstance(cached, LocalizationFinding)
+    assert cached.mode == "sbfl_per_test"
+    assert cached.metadata["changed_files_count"] is None
+    assert cached.metadata["regression_reweighted"] is None

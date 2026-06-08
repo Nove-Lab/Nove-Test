@@ -319,6 +319,22 @@ def _derive_per_test(
     # ``confidence: high`` because the per-test path is the strong SBFL
     # story (strategy doc §2 table). Aggregate / proximity modes will
     # carry ``"medium"`` / ``"low"`` respectively when those slices land.
+    #
+    # ``metadata`` carries the same two keys
+    # (``changed_files_count`` / ``regression_reweighted``) as the
+    # aggregate + failure_proximity modes so AI consumers see a single
+    # mode-invariant ``metadata`` shape across the envelope (B2-1 UX
+    # normalization, 2026-06-08). The keys are ``None`` here because
+    # the per-test pipeline does not consult RegressionFactSet — there
+    # is no FLUCCS-style reweighting in this mode (strategy doc §2:
+    # regression-aware reweighting is the aggregate-mode trick).
+    # ``None`` (vs ``0`` / ``False``) is the principled choice: it
+    # discriminates "this mode does not consult regression facts at
+    # all" (per-test) from "consulted, no boost applied" (aggregate /
+    # failure_proximity returning ``0`` / ``False`` when regression
+    # facts are absent or empty). Spec pinned in
+    # ``design/interace-contract/localization.md`` §"Result shape —
+    # mode-invariant".
     return LocalizationFinding(
         run_reference=record.run_reference,
         engine_name=record.engine_name,
@@ -330,6 +346,10 @@ def _derive_per_test(
         top_n=top_n,
         entries=tuple(entries),
         derived_at=int(time.time() * 1000),
+        metadata={
+            "changed_files_count": None,
+            "regression_reweighted": None,
+        },
     )
 
 
