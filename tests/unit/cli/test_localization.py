@@ -74,8 +74,62 @@ def _make_finding(
     formula: str = "ochiai",
     top_n: int = 10,
     derived_at: int = 9_000,
+    mode: str = "sbfl_per_test",
 ) -> LocalizationFinding:
+    """Construct a deterministic ``LocalizationFinding`` for unit tests.
+
+    The ``mode`` parameter lets a test exercise mode-aware orchestration
+    branches (Defect 7 — formula noop in ``failure_proximity``). When
+    ``mode == "failure_proximity"`` the per-mode constraints from
+    ``localization/failure_proximity.py`` are honored: ``confidence`` is
+    ``"low"``, the entry's ``code_location.kind`` is ``"file"``,
+    ``alternate_scores`` is empty (no SBFL formulas computed), and
+    ``alternate_scores_available`` is the empty tuple. Otherwise the
+    SBFL-mode shape (per-test, with alternate formulas populated) is
+    returned. Both shapes pass the model's closed-enum validators.
+    """
     ref = RunReference(run_id=run_id, created_at=1_700_000_000_000)
+    citation = EvidenceCitation(
+        kind="test_result",
+        run_reference=ref,
+        selector={"test_id": "tests/test_calc.py::test_buggy", "outcome": "failed"},
+    )
+    if mode == "failure_proximity":
+        # File-level entry (kind="file"), empty alternates — matches the
+        # shape ``derive_failure_proximity`` actually emits.
+        fp_loc = CodeLocation(
+            kind="file",
+            file="src/calc.py",
+            symbol=None,
+            line_range=None,
+            primary_line=5,
+            evidence_lines=(5,),
+        )
+        fp_entry = LocalizationEntry(
+            rank=1,
+            tied_with=(),
+            code_location=fp_loc,
+            score_raw=1.0,
+            score_normalized=1.0,
+            formula=formula,
+            alternate_scores={},
+            related_failed_tests=("tests/test_calc.py::test_buggy",),
+            evidence_citations=(citation,),
+        )
+        return LocalizationFinding(
+            run_reference=ref,
+            engine_name="pytest",
+            ecosystem="python",
+            mode="failure_proximity",
+            confidence="low",
+            formula=formula,
+            alternate_scores_available=(),
+            top_n=top_n,
+            entries=(fp_entry,),
+            derived_at=derived_at,
+            metadata={},
+        )
+    # SBFL shape — symbol-level entry, populated alternate scores.
     loc = CodeLocation(
         kind="symbol",
         file="src/calc.py",
@@ -83,11 +137,6 @@ def _make_finding(
         line_range=(4, 5),
         primary_line=5,
         evidence_lines=(5,),
-    )
-    citation = EvidenceCitation(
-        kind="test_result",
-        run_reference=ref,
-        selector={"test_id": "tests/test_calc.py::test_buggy", "outcome": "failed"},
     )
     entry = LocalizationEntry(
         rank=1,
@@ -105,7 +154,7 @@ def _make_finding(
         run_reference=ref,
         engine_name="pytest",
         ecosystem="python",
-        mode="sbfl_per_test",
+        mode=mode,
         confidence="high",
         formula=formula,
         alternate_scores_available=alt_scores_available,
@@ -794,3 +843,277 @@ def test_localization_run_no_warning_when_outcome_is_unavailable(
     outcome = payload["data"]["localization_outcome"]
     assert outcome["kind"] == "unavailable"
     assert stub_cache_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Defect 7 fix (2026-06-08) — ``failure_proximity`` mode formula-noop suite
+#
+# Background: ``failure_proximity`` is a heuristic frequency-count mode
+# that runs when no coverage data is available (``CoverageFactSet``
+# unavailable). It is NOT an SBFL formula — it pins
+# ``finding.formula = "ochiai"`` as a structural placeholder regardless
+# of ``--formula`` input (see ``localization/failure_proximity.py::
+# _PLACEHOLDER_FORMULA``). Pre-Defect-7, the cache-rederived warning
+# path treated this placeholder mismatch as a legitimate cache hit-vs-
+# explicit-flags collision and entered an infinite loop: every retry
+# unlinked the cache, re-derived, got the same placeholder back, and
+# emitted the same warning. Post-Defect-7, the CLI's
+# ``_rederive_if_cache_overrode_flags`` recognizes the placeholder
+# scenario and emits a single ``localization-formula-noop-in-mode``
+# warning WITHOUT triggering a re-derive — breaking the loop and
+# giving AI consumers a distinct "structural noop, do not retry"
+# signal instead of "fixable misconfig, retry".
+#
+# Test matrix (per the 2026-06-08 task brief §"Test 매트릭스"):
+#   1. failure_proximity + default formula → no warning, no mismatch
+#   2. failure_proximity + non-default formula → noop warning 1, no loop
+#   3. sbfl mode + default formula → unchanged baseline
+#   4. sbfl mode + non-default formula → unchanged cache-rederive path
+#   5. failure_proximity + non-default formula cache state pre/post
+#      assertions (derives called exactly once, cache file still
+#      present — explicit proof of the no-loop guarantee).
+# ---------------------------------------------------------------------------
+
+
+_NOOP_WARN_CODE = "localization-formula-noop-in-mode"
+
+
+def test_localization_run_failure_proximity_default_formula_no_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Matrix #1: ``failure_proximity`` + no ``--formula`` flag (default
+    ``"ochiai"``). The placeholder matches the resolved default so the
+    ``formula_explicit`` gate is False; ``formula_mismatch`` cannot
+    fire. Engine called exactly once, no warning, cache file untouched.
+
+    This is the regression-pin for the "happy path" of failure_proximity:
+    a user who doesn't pass ``--formula`` sees zero noise."""
+
+    finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
+    fake_derive = _two_phase_derive(finding, finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID)
+    assert exc_info.value.code == 0
+
+    # Single derive call — no re-derive triggered.
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    payload = _captured_envelope(capsys)
+    assert payload["warnings"] == []
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["mode"] == "failure_proximity"
+    assert outcome["formula"] == "ochiai"
+    # Cache file was NOT unlinked.
+    assert stub_cache_path.exists()
+
+
+def test_localization_run_failure_proximity_non_default_formula_emits_noop_warning_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Matrix #2: ``failure_proximity`` + ``--formula=op2`` (explicit,
+    non-default). The engine pins ``formula="ochiai"`` as a placeholder
+    regardless of input, so ``resolved_formula="op2"`` mismatches the
+    returned ``cached_formula="ochiai"``. The new Defect 7 carve-out
+    recognizes this as structural-noop-in-mode rather than a fixable
+    cache-stale-vs-flag collision: re-derive is SKIPPED, and a single
+    ``localization-formula-noop-in-mode`` warning is emitted with
+    details ``{requested_formula, returned_formula, mode}``.
+
+    Pre-Defect-7 the same input triggered a ``localization-cache-
+    rederived`` warning AND a second derive call — the start of the
+    warning loop. This test pins the new non-loop behavior."""
+
+    finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
+    fake_derive = _two_phase_derive(finding, finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID, formula="op2")
+    assert exc_info.value.code == 0
+
+    # The crucial assertion: engine called EXACTLY ONCE. Pre-Defect-7 this
+    # would be 2 (initial + post-invalidation re-derive). The single-call
+    # invariant is the wire-level proof that no re-derive happened.
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    # Cache file untouched (no unlink).
+    assert stub_cache_path.exists()
+
+    payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    # Engine's placeholder is preserved — user sees what the engine
+    # actually computed, not a fictional ``formula="op2"`` finding.
+    assert outcome["mode"] == "failure_proximity"
+    assert outcome["formula"] == "ochiai"
+
+    warnings = payload["warnings"]
+    assert isinstance(warnings, list)
+    # The brief's DoD #1: noop warning code emitted EXACTLY ONCE per
+    # invocation.
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["code"] == _NOOP_WARN_CODE
+    # Message names both the requested formula and the placeholder + mode
+    # so an AI consumer reading the message alone (without parsing
+    # details) sees the noop nature.
+    assert "op2" in warning["message"]
+    assert "ochiai" in warning["message"]
+    assert "failure_proximity" in warning["message"]
+    details = warning["details"]
+    assert details["requested_formula"] == "op2"
+    assert details["returned_formula"] == "ochiai"
+    assert details["mode"] == "failure_proximity"
+    # No stale ``previous`` / ``requested`` / ``cache_path`` fields —
+    # this is the new structural-noop shape, NOT the cache-rederived
+    # shape. Asserting absence pins the schema decision.
+    assert "previous" not in details
+    assert "requested" not in details
+    assert "cache_path" not in details
+
+
+def test_localization_run_sbfl_default_formula_unchanged_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Matrix #3: ``sbfl_per_test`` mode + no ``--formula`` flag. The
+    Defect 7 carve-out MUST NOT change behavior here — engine called
+    exactly once (whatever the cached formula is matches the resolved
+    default since the user didn't pass it explicitly). Regression-pin
+    that the new mode-aware branch only activates for failure_proximity.
+
+    (This mirrors the pre-existing "no warning when flags omitted
+    despite cache diff" assertion above but explicitly pins the
+    ``mode = "sbfl_per_test"`` axis.)"""
+
+    cached_finding = _make_finding(
+        formula="dstar2", top_n=7, mode="sbfl_per_test"
+    )
+    fake_derive = _two_phase_derive(cached_finding, cached_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID)
+    assert exc_info.value.code == 0
+
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    payload = _captured_envelope(capsys)
+    assert payload["warnings"] == []
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["mode"] == "sbfl_per_test"
+    assert outcome["formula"] == "dstar2"
+    assert stub_cache_path.exists()
+
+
+def test_localization_run_sbfl_non_default_formula_unchanged_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Matrix #4: ``sbfl_per_test`` mode + ``--formula=op2`` explicit. The
+    Defect 7 carve-out MUST NOT change behavior here — this is the
+    existing cache-rederived path: engine called twice, cache unlinked,
+    fresh finding returned at ``op2``, single
+    ``localization-cache-rederived`` warning emitted (NOT the new noop
+    warning).
+
+    Regression-pin that the noop carve-out only fires when
+    ``outcome.mode == "failure_proximity"``."""
+
+    cached_finding = _make_finding(formula="ochiai", top_n=10, mode="sbfl_per_test")
+    fresh_finding = _make_finding(formula="op2", top_n=10, mode="sbfl_per_test")
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID, formula="op2")
+    assert exc_info.value.code == 0
+
+    # Two derive calls — cache-rederive flow ran end-to-end.
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
+    # Cache file was unlinked (re-derive did happen).
+    assert not stub_cache_path.exists()
+
+    payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    # Fresh finding's formula reflects the user's request — SBFL can
+    # actually honor it.
+    assert outcome["mode"] == "sbfl_per_test"
+    assert outcome["formula"] == "op2"
+
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    # Pre-existing cache-rederived warning, NOT the new noop warning.
+    assert warning["code"] == _CACHE_WARN_CODE
+    # Defense-in-depth: assert the noop warning code is NOT present so
+    # the carve-out can't silently fire on the SBFL path.
+    assert all(w["code"] != _NOOP_WARN_CODE for w in warnings)
+
+
+def test_localization_run_failure_proximity_non_default_formula_no_rederive_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Matrix #5: dedicated no-loop assertion. Pre-Defect-7 the infinite-
+    loop reproduction was: every retry triggered ``unlink + re-derive +
+    re-warn`` because the re-derive returned the same placeholder.
+
+    The unit-test seam can't loop the CLI (each invocation is independent),
+    but we CAN pin the load-bearing single-invocation invariant: within
+    one ``localization_run`` call, ``derive_localization_findings`` is
+    invoked EXACTLY ONCE (the first call returns the placeholder finding;
+    the carve-out short-circuits before any re-derive). This proves the
+    "no infinite loop" property at the load-bearing seam.
+
+    The cache file's pre-state is "exists" (the stub fixture creates it);
+    the cache file's post-state MUST also be "exists" (no unlink ran).
+    This pre/post pair is the wire-level evidence requested in the
+    brief's matrix item #5 ("cache state pre/post 호출 검증")."""
+
+    # Pre-state assertion — fixture creates the cache file.
+    assert stub_cache_path.exists()
+
+    finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
+    # Sentinel: if a re-derive ever happens, we'd see calls.count > 1.
+    # We make the "fresh" return identical to "cached" so a buggy
+    # implementation that calls twice would still pass the formula
+    # assertions but FAIL the call-count + cache-existence checks below.
+    fake_derive = _two_phase_derive(finding, finding)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID, formula="dstar2")
+    assert exc_info.value.code == 0
+
+    # Load-bearing assertion #1: exactly one engine call.
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    # Load-bearing assertion #2: cache file still present (no unlink).
+    assert stub_cache_path.exists()
+
+    payload = _captured_envelope(capsys)
+    # Single noop warning — same shape as matrix #2 but the focal point
+    # here is the call-count + cache-existence invariant above.
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == _NOOP_WARN_CODE

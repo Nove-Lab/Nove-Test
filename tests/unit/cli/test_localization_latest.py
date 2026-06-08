@@ -55,8 +55,54 @@ def _make_finding(
     formula: str = "ochiai",
     top_n: int = 10,
     derived_at: int = 7_000,
+    mode: str = "sbfl_per_test",
 ) -> LocalizationFinding:
+    """Construct a deterministic ``LocalizationFinding`` for unit tests.
+
+    Mirrors ``tests/unit/cli/test_localization.py::_make_finding`` with
+    the ``mode`` parameter wired through so the latest-verb tests can
+    exercise the Defect 7 carve-out (``failure_proximity`` formula-noop)
+    end-to-end.
+    """
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
+    citation = EvidenceCitation(
+        kind="test_result",
+        run_reference=ref,
+        selector={"test_id": "tests/test_calc.py::test_buggy", "outcome": "failed"},
+    )
+    if mode == "failure_proximity":
+        fp_loc = CodeLocation(
+            kind="file",
+            file="src/calc.py",
+            symbol=None,
+            line_range=None,
+            primary_line=5,
+            evidence_lines=(5,),
+        )
+        fp_entry = LocalizationEntry(
+            rank=1,
+            tied_with=(),
+            code_location=fp_loc,
+            score_raw=1.0,
+            score_normalized=1.0,
+            formula=formula,
+            alternate_scores={},
+            related_failed_tests=("tests/test_calc.py::test_buggy",),
+            evidence_citations=(citation,),
+        )
+        return LocalizationFinding(
+            run_reference=ref,
+            engine_name="pytest",
+            ecosystem="python",
+            mode="failure_proximity",
+            confidence="low",
+            formula=formula,
+            alternate_scores_available=(),
+            top_n=top_n,
+            entries=(fp_entry,),
+            derived_at=derived_at,
+            metadata={},
+        )
     loc = CodeLocation(
         kind="symbol",
         file="src/calc.py",
@@ -64,11 +110,6 @@ def _make_finding(
         line_range=(4, 5),
         primary_line=5,
         evidence_lines=(5,),
-    )
-    citation = EvidenceCitation(
-        kind="test_result",
-        run_reference=ref,
-        selector={"test_id": "tests/test_calc.py::test_buggy", "outcome": "failed"},
     )
     entry = LocalizationEntry(
         rank=1,
@@ -86,7 +127,7 @@ def _make_finding(
         run_reference=ref,
         engine_name="pytest",
         ecosystem="python",
-        mode="sbfl_per_test",
+        mode=mode,
         confidence="high",
         formula=formula,
         alternate_scores_available=alt_scores_available,
@@ -455,3 +496,71 @@ def test_localization_latest_no_warning_when_outcome_unavailable(
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
     assert stub_cache_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Defect 7 fix (2026-06-08) — formula noop in ``failure_proximity`` mode
+# also applies to the ``latest`` verb (same shared
+# ``_rederive_if_cache_overrode_flags`` carve-out). The run-verb's
+# ``test_localization.py`` carries the full 5-case matrix; this single
+# mirror test pins the wire-level behavior on the latest verb so the
+# carve-out can't regress on one verb without breaking the other.
+# ---------------------------------------------------------------------------
+
+
+_NOOP_WARN_CODE = "localization-formula-noop-in-mode"
+
+
+def test_localization_latest_failure_proximity_non_default_formula_emits_noop_warning_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_cache_path: Path,
+) -> None:
+    """``latest`` resolves to a failure_proximity run; user passes
+    ``--formula=dstar2``. The placeholder ``formula="ochiai"`` would
+    pre-Defect-7 trigger an infinite cache-rederive loop. Post-Defect-7
+    the carve-out emits a single ``localization-formula-noop-in-mode``
+    warning and skips the re-derive (no second engine call, cache file
+    untouched). Same load-bearing assertion shape as
+    ``test_localization.py::...failure_proximity_non_default_formula_
+    emits_noop_warning_once`` but exercising the latest verb path."""
+
+    finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
+    latest_calls: list[int] = []
+    fresh_calls: list[int] = []
+
+    def fake_latest(_store: Any, *, formula: str, top_n: int) -> LocalizationFinding:
+        latest_calls.append(1)
+        return finding
+
+    def fake_fresh(*_a: Any, **_k: Any) -> LocalizationFinding:
+        fresh_calls.append(1)
+        return finding
+
+    monkeypatch.setattr(app_module, "derive_latest_localization", fake_latest)
+    monkeypatch.setattr(app_module, "derive_localization_findings", fake_fresh)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_latest(formula="dstar2")
+    assert exc_info.value.code == 0
+
+    # latest derive called once; fresh-derive NEVER called (no re-derive).
+    assert len(latest_calls) == 1
+    assert len(fresh_calls) == 0
+    # Cache file untouched.
+    assert stub_cache_path.exists()
+
+    payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["mode"] == "failure_proximity"
+    assert outcome["formula"] == "ochiai"
+
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["code"] == _NOOP_WARN_CODE
+    assert warning["details"]["requested_formula"] == "dstar2"
+    assert warning["details"]["returned_formula"] == "ochiai"
+    assert warning["details"]["mode"] == "failure_proximity"

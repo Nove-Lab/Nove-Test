@@ -978,6 +978,41 @@ def _rederive_if_cache_overrode_flags(
     if not (formula_mismatch or top_n_mismatch):
         return outcome, None
 
+    # Defect 7 fix (2026-06-08): ``failure_proximity`` mode reports
+    # ``formula = "ochiai"`` as a structural placeholder regardless of
+    # ``--formula`` input (the mode runs a heuristic frequency count, not
+    # any SBFL formula — see ``localization/failure_proximity.py::
+    # _PLACEHOLDER_FORMULA``). A formula-mismatch against this placeholder
+    # is therefore a structural noop: re-deriving cannot resolve it
+    # (engine returns the same placeholder on every call), and the
+    # cache-rederived warning would keep firing on every user retry —
+    # an infinite warning loop visible to AI agents iterating on the
+    # ``--formula`` flag. Skip the re-derive and surface a distinct
+    # ``localization-formula-noop-in-mode`` warning so the AI consumer
+    # recognizes this as "structural noop, do not retry" rather than
+    # "fixable misconfig, retry with a different value".
+    #
+    # NOTE: a ``top_n`` mismatch in ``failure_proximity`` mode IS still
+    # meaningful (the entry-count of the heuristic ranking changes), so
+    # this carve-out only applies when ``formula_mismatch`` is the
+    # *sole* trigger. A failure_proximity run with ``top_n_mismatch``
+    # (whether or not formula also mismatches) still goes through the
+    # normal re-derive path so the user's top_n request takes effect;
+    # the cache-rederived warning's ``previous`` field discloses the
+    # formula placeholder transition without needing a second warning.
+    is_failure_proximity_formula_noop = (
+        outcome.mode == "failure_proximity"
+        and formula_mismatch
+        and not top_n_mismatch
+    )
+    if is_failure_proximity_formula_noop:
+        warning = _build_localization_formula_noop_warning(
+            requested_formula=resolved_formula,
+            returned_formula=cached_formula,
+            mode=outcome.mode,
+        )
+        return outcome, warning
+
     # Cache hit served stale-vs-explicit-flags. Invalidate the persisted
     # findings file so the second derive call sees a cache miss and runs
     # the full pipeline at the requested flags.
@@ -1053,6 +1088,56 @@ def _build_localization_cache_rederived_warning(
                 "top_n_explicit": top_n_explicit,
             },
             "cache_path": cache_path,
+        },
+    )
+
+
+def _build_localization_formula_noop_warning(
+    *,
+    requested_formula: str,
+    returned_formula: str,
+    mode: str,
+) -> EnvelopeWarning:
+    """Format the ``localization-formula-noop-in-mode`` warning payload.
+
+    Emitted by ``_rederive_if_cache_overrode_flags`` when the user passes
+    an explicit ``--formula`` that mismatches the cached/returned value
+    AND the engine's mode is one whose formula field is a structural
+    placeholder rather than a real selection (today: only
+    ``failure_proximity``, which always reports ``formula = "ochiai"``
+    regardless of input — see ``localization/failure_proximity.py::
+    _PLACEHOLDER_FORMULA``).
+
+    This warning is the AI-agent-facing signal that the requested
+    ``--formula`` is a noop in the current mode: re-running with a
+    different formula value will NOT produce different results, so the
+    consumer should not retry. The single-shot ``EnvelopeWarning`` —
+    rather than the pre-Defect-7 ``localization-cache-rederived`` loop —
+    is what the 2026-06-08 task brief calls "structural noop signal,
+    not a fixable misconfig signal".
+
+    The details schema is intentionally minimal (three flat fields
+    matching the task brief literal): ``requested_formula`` (what the
+    user passed), ``returned_formula`` (the placeholder the engine
+    served), ``mode`` (the mode that pins the formula). Forward-compat:
+    if a future mode is added with a different placeholder, this
+    warning's shape requires no change — only the ``mode`` carve-out
+    in the caller broadens.
+    """
+    message = (
+        f"requested --formula='{requested_formula}' is a no-op in "
+        f"'{mode}' mode; engine pins formula='{returned_formula}' as a "
+        f"placeholder for this mode (no SBFL formula is computed). "
+        f"Re-running with a different --formula value will not change "
+        f"the result."
+    )
+    return EnvelopeWarning(
+        code="localization-formula-noop-in-mode",
+        message=message,
+        details={
+            "requested_formula": requested_formula,
+            "returned_formula": returned_formula,
+            "mode": mode,
         },
     )
 
