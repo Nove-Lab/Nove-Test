@@ -645,3 +645,68 @@ async def test_engine_version_read_from_local_node_modules(
     target = resolve_test_target("", workspace)
     result = await run_jest(target, artifact_dir=artifact_dir, timeout=60.0)
     assert result.engine_version == "29.7.0"
+
+
+# ---------------------------------------------------------------------------
+# artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
+# ---------------------------------------------------------------------------
+#
+# `run_jest` calls ``artifact_dir = artifact_dir.resolve()`` as the first
+# line of the function body. See ``test_pytest_adapter.py``'s parallel
+# block for the long-form rationale (originates from the 2026-05-16
+# pytest-only TODO; this cycle generalizes to all six adapters).
+
+
+async def test_relative_artifact_dir_resolves_against_cwd(
+    jest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``artifact_dir`` should resolve against the test's cwd."""
+
+    import novetest.run.adapters.jest_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(returncode=0, write_report=True),
+    )
+    monkeypatch.chdir(tmp_path)
+    rel_artifact_dir = Path("rel-art")
+    expected_root = (tmp_path / "rel-art").resolve()
+
+    target = resolve_test_target("", jest_basic_workspace)
+    result = await run_jest(target, artifact_dir=rel_artifact_dir, timeout=60.0)
+
+    assert (expected_root / "native").is_dir()
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert expected_root in path.parents, (
+            f"{key} → {path} is not under {expected_root}"
+        )
+
+
+async def test_absolute_artifact_dir_unchanged_after_resolve(
+    jest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absolute ``artifact_dir`` should round-trip through resolve."""
+
+    import novetest.run.adapters.jest_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(returncode=0, write_report=True),
+    )
+    abs_artifact_dir = (tmp_path / "abs-art").resolve()
+    target = resolve_test_target("", jest_basic_workspace)
+    result = await run_jest(target, artifact_dir=abs_artifact_dir, timeout=60.0)
+
+    assert (abs_artifact_dir / "native").is_dir()
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert abs_artifact_dir in path.parents, (
+            f"{key} → {path} is not under {abs_artifact_dir}"
+        )

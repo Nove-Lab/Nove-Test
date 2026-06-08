@@ -71,6 +71,13 @@ async def run_jest(
     False so non-coverage callers see byte-identical behavior.
     """
 
+    # Defensive resolve: hardens against future callers passing a relative
+    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
+    # the contract here is path-shape-agnostic but downstream construction
+    # (``native_dir = artifact_dir / "native"`` and below) does not
+    # re-resolve. Idempotent on absolute paths.
+    artifact_dir = artifact_dir.resolve()
+
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)
     report_path = native_dir / JEST_REPORT_FILENAME

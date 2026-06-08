@@ -1857,3 +1857,63 @@ def test_engine_name_constant() -> None:
     it. Changing this string is a breaking contract change."""
 
     assert ENGINE_NAME == "xunit"
+
+
+# ---------------------------------------------------------------------------
+# artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
+# ---------------------------------------------------------------------------
+#
+# `run_xunit` calls ``artifact_dir = artifact_dir.resolve()`` as the
+# first line of the function body. See ``test_pytest_adapter.py``'s
+# parallel block for the long-form rationale.
+
+
+class TestArtifactDirResolveHardening:
+    async def test_relative_artifact_dir_resolves_against_cwd(
+        self,
+        dotnet_test_basic_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A relative ``artifact_dir`` should resolve against the test's cwd."""
+
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(),
+        )
+        monkeypatch.chdir(tmp_path)
+        rel_artifact_dir = Path("rel-art")
+        expected_root = (tmp_path / "rel-art").resolve()
+
+        target = resolve_test_target("", dotnet_test_basic_workspace)
+        result = await run_xunit(target, artifact_dir=rel_artifact_dir, timeout=60.0)
+
+        assert (expected_root / "native").is_dir()
+        for key, path in result.artifact_paths.items():
+            assert path.is_absolute(), f"{key} → {path} is not absolute"
+            assert expected_root in path.parents, (
+                f"{key} → {path} is not under {expected_root}"
+            )
+
+    async def test_absolute_artifact_dir_unchanged_after_resolve(
+        self,
+        dotnet_test_basic_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An absolute ``artifact_dir`` should round-trip through resolve."""
+
+        monkeypatch.setattr(
+            adapter, "run_subprocess",
+            _make_run_subprocess_stub(),
+        )
+        abs_artifact_dir = (tmp_path / "abs-art").resolve()
+        target = resolve_test_target("", dotnet_test_basic_workspace)
+        result = await run_xunit(target, artifact_dir=abs_artifact_dir, timeout=60.0)
+
+        assert (abs_artifact_dir / "native").is_dir()
+        for key, path in result.artifact_paths.items():
+            assert path.is_absolute(), f"{key} → {path} is not absolute"
+            assert abs_artifact_dir in path.parents, (
+                f"{key} → {path} is not under {abs_artifact_dir}"
+            )

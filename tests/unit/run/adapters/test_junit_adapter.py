@@ -1254,3 +1254,80 @@ class TestGradleCoverageArgv:
         assert "--continue" not in argv
         assert "--init-script" not in argv
         assert "jacocoTestReport" not in argv
+
+
+# ---------------------------------------------------------------------------
+# artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
+# ---------------------------------------------------------------------------
+#
+# `run_junit` calls ``artifact_dir = artifact_dir.resolve()`` as the first
+# line of the function body. See ``test_pytest_adapter.py``'s parallel
+# block for the long-form rationale.
+#
+# The two tests below use the "no build tool found" early-raise path —
+# `run_junit` raises ``AdapterInvocationError(kind="build-tool-undetermined")``
+# AFTER the ``native_dir = artifact_dir / "native"`` + ``native_dir.mkdir()``
+# pair runs. Verifying the on-disk side-effect proves the resolve flowed
+# through to the immediate downstream Path composition without requiring
+# a full build-tool subprocess stub.
+
+
+class TestArtifactDirResolveHardening:
+    async def test_relative_artifact_dir_resolves_against_cwd(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A relative ``artifact_dir`` should resolve against the test's cwd."""
+
+        from novetest.run.errors import AdapterInvocationError
+
+        workspace = tmp_path / "ws-no-build-tool"
+        workspace.mkdir()
+        monkeypatch.chdir(tmp_path)
+        rel_artifact_dir = Path("rel-art")
+        expected_root = (tmp_path / "rel-art").resolve()
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        with pytest.raises(AdapterInvocationError) as exc_info:
+            await junit_adapter.run_junit(
+                target,
+                artifact_dir=rel_artifact_dir,
+                timeout=10.0,
+                collect_coverage=False,
+            )
+        assert exc_info.value.kind == "build-tool-undetermined"
+        # The resolve ran, so the mkdir landed at the absolute path even
+        # though the raise happened in the same function.
+        assert (expected_root / "native").is_dir()
+
+    async def test_absolute_artifact_dir_unchanged_after_resolve(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """An absolute ``artifact_dir`` should round-trip through resolve."""
+
+        from novetest.run.errors import AdapterInvocationError
+
+        workspace = tmp_path / "ws-no-build-tool"
+        workspace.mkdir()
+        abs_artifact_dir = (tmp_path / "abs-art").resolve()
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        with pytest.raises(AdapterInvocationError) as exc_info:
+            await junit_adapter.run_junit(
+                target,
+                artifact_dir=abs_artifact_dir,
+                timeout=10.0,
+                collect_coverage=False,
+            )
+        assert exc_info.value.kind == "build-tool-undetermined"
+        assert (abs_artifact_dir / "native").is_dir()

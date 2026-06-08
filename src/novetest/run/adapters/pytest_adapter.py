@@ -58,6 +58,16 @@ async def run_pytest(
     change.
     """
 
+    # Defensive resolve: hardens against future callers passing a relative
+    # ``artifact_dir``. Production callers (the orchestration layer) build
+    # absolute paths under ``.novetest/run/artifacts/run_<ulid>/``, but the
+    # entry-point contract is path-shape-agnostic and downstream code
+    # composes ``artifact_dir / "native"`` etc. without re-resolving. A
+    # relative input would silently write artifacts under whatever cwd
+    # ``run_subprocess`` inherits — invisible at the unit boundary, painful
+    # to debug. Idempotent on absolute paths (no-op + symlink follow).
+    artifact_dir = artifact_dir.resolve()
+
     native_dir = artifact_dir / "native"
     native_dir.mkdir(parents=True, exist_ok=True)
     report_path = native_dir / PYTEST_REPORT_FILENAME

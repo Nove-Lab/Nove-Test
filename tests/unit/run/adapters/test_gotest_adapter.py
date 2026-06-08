@@ -747,3 +747,67 @@ async def test_engine_version_returns_none_on_unparseable_output(
     target = resolve_test_target("", gotest_basic_workspace)
     result = await run_gotest(target, artifact_dir=tmp_path, timeout=60.0)
     assert result.engine_version is None
+
+
+# ---------------------------------------------------------------------------
+# artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
+# ---------------------------------------------------------------------------
+#
+# `run_gotest` calls ``artifact_dir = artifact_dir.resolve()`` as the
+# first line of the function body. See ``test_pytest_adapter.py``'s
+# parallel block for the long-form rationale.
+
+
+async def test_relative_artifact_dir_resolves_against_cwd(
+    gotest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``artifact_dir`` should resolve against the test's cwd."""
+
+    import novetest.run.adapters.gotest_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(returncode=0, events=_passing_events()),
+    )
+    monkeypatch.chdir(tmp_path)
+    rel_artifact_dir = Path("rel-art")
+    expected_root = (tmp_path / "rel-art").resolve()
+
+    target = resolve_test_target("", gotest_basic_workspace)
+    result = await run_gotest(target, artifact_dir=rel_artifact_dir, timeout=60.0)
+
+    assert (expected_root / "native").is_dir()
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert expected_root in path.parents, (
+            f"{key} → {path} is not under {expected_root}"
+        )
+
+
+async def test_absolute_artifact_dir_unchanged_after_resolve(
+    gotest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absolute ``artifact_dir`` should round-trip through resolve."""
+
+    import novetest.run.adapters.gotest_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(returncode=0, events=_passing_events()),
+    )
+    abs_artifact_dir = (tmp_path / "abs-art").resolve()
+    target = resolve_test_target("", gotest_basic_workspace)
+    result = await run_gotest(target, artifact_dir=abs_artifact_dir, timeout=60.0)
+
+    assert (abs_artifact_dir / "native").is_dir()
+    for key, path in result.artifact_paths.items():
+        assert path.is_absolute(), f"{key} → {path} is not absolute"
+        assert abs_artifact_dir in path.parents, (
+            f"{key} → {path} is not under {abs_artifact_dir}"
+        )
