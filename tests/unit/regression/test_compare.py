@@ -283,6 +283,58 @@ def test_category_removed(
     assert result.summary.total_target_tests == 0
 
 
+# --- set-semantics headline pin (D6 F+ carry-forward, 2026-06-08) -----------
+
+
+def test_disjoint_test_sets_yield_zero_regressed_and_zero_fixed(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Manual Test 2026-06-01 D6 Scenario F+: two runs over the same target
+    can yield ``summary.regressed == 0 AND summary.fixed == 0`` when their
+    ``node_id`` sets are disjoint — this is INTENT, not bug.
+
+    Per ``decisions/2026-05-26-regression-facts-json-layout.md`` §3 and
+    ``design/interace-contract/regression.md`` "Transition Detection
+    Semantics", ``fixed`` and ``regressed`` require the same ``node_id``
+    on both sides. Baseline-only and target-only ``node_id``s land in
+    ``removed`` / ``added`` respectively, regardless of their outcome.
+
+    This unit test pins the headline finding at the unit level so future
+    operators reading ``test_compare.py`` (the canonical grep target for
+    transition semantics) find the D6 carry-forward resolution next to
+    the 9 ``test_category_*`` cases.
+    """
+    _seed_pair(
+        initialized_store,
+        seed_run_record,
+        {"tests/x.py::test_only_in_baseline": "failed"},
+        {"tests/x.py::test_only_in_target": "passed"},
+    )
+    store = get_project_store_state(initialized_store)
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(result, RegressionFactSet)
+
+    # Neither same-set bucket populates — disjoint ``node_id`` sets.
+    assert result.summary.regressed == 0
+    assert result.summary.fixed == 0
+    assert result.summary.still_failing == 0
+    assert result.summary.still_passing == 0
+    # The signal lives in added + removed.
+    assert result.summary.added == 1
+    assert result.summary.removed == 1
+
+    added = _find_transition(result, "tests/x.py::test_only_in_target")
+    assert added.category == "added"
+    assert added.baseline_outcome is None
+    assert added.target_outcome == "passed"
+
+    removed = _find_transition(result, "tests/x.py::test_only_in_baseline")
+    assert removed.category == "removed"
+    assert removed.baseline_outcome == "failed"
+    assert removed.target_outcome is None
+
+
 # --- bucketing edge cases ---------------------------------------------------
 
 
