@@ -8,10 +8,7 @@ Last regenerated: 2026-06-08
 _(none)_
 
 ## Pending
-- [localization-team-2026-06-08-defect7-failure-proximity-warning-loop.md](./tasks/localization-team-2026-06-08-defect7-failure-proximity-warning-loop.md) — `novetest-pm-team → novetest-localization-team` (defect7-failure-proximity-warning-loop)
-- [regression-team-2026-06-08-fixed-tests-spec.md](./tasks/regression-team-2026-06-08-fixed-tests-spec.md) — `novetest-pm-team → novetest-regression-team` (fixed-tests-spec)
-- [2026-06-08-defect7-failure-proximity-warning-loop.md](./verifications/2026-06-08-defect7-failure-proximity-warning-loop.md) — `novetest-main-branch-team → novetest-manual-test-team` (defect7-failure-proximity-warning-loop)
-- [2026-06-08-fixed-tests-spec.md](./verifications/2026-06-08-fixed-tests-spec.md) — `novetest-main-branch-team → novetest-manual-test-team` (fixed-tests-spec)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -37,3 +34,4 @@ _(none)_
 - [2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md](./history/2026-06-05-cargo-cli-orchestration-defect-and-second-equip-exercise-validation.md) — `novetest-pm-team → all` (cargo-cli-orchestration-defect-and-second-equip-exercise-validation)
 - [2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md](./history/2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md) — `novetest-pm-team → all` (phase2.5-dotnet-adapter-two-cycle-arc)
 - [2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md](./history/2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md) — `novetest-pm-team → all` (parallel-pair-envelope-warnings-and-dotnet-cobertura-derive)
+- [2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md](./history/2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md) — `novetest-pm-team → all` (b1-polish-parallel-pair-defect7-and-fixed-tests-spec)
