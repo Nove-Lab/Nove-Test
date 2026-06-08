@@ -8,9 +8,7 @@ Last regenerated: 2026-06-08
 _(none)_
 
 ## Pending
-- [coverage-team-2026-06-08-outside-workspace-path-harmonization.md](./tasks/coverage-team-2026-06-08-outside-workspace-path-harmonization.md) — `novetest-pm-team → novetest-coverage-team` (outside-workspace-path-harmonization)
-- [localization-team-2026-06-08-ux-normalize-metadata-and-paths.md](./tasks/localization-team-2026-06-08-ux-normalize-metadata-and-paths.md) — `novetest-pm-team → novetest-localization-team` (ux-normalize-metadata-and-paths)
-- [run-team-2026-06-08-artifact-dir-resolve-hardening.md](./tasks/run-team-2026-06-08-artifact-dir-resolve-hardening.md) — `novetest-pm-team → novetest-run-team` (artifact-dir-resolve-hardening)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -37,3 +35,4 @@ _(none)_
 - [2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md](./history/2026-06-06-phase2.5-dotnet-adapter-two-cycle-arc.md) — `novetest-pm-team → all` (phase2.5-dotnet-adapter-two-cycle-arc)
 - [2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md](./history/2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md) — `novetest-pm-team → all` (parallel-pair-envelope-warnings-and-dotnet-cobertura-derive)
 - [2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md](./history/2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md) — `novetest-pm-team → all` (b1-polish-parallel-pair-defect7-and-fixed-tests-spec)
+- [2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md](./history/2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md) — `novetest-pm-team → all` (b2-ux-normalize-parallel-triple-coverage-localization-run)
