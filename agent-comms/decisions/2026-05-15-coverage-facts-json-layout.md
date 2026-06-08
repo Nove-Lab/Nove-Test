@@ -94,7 +94,13 @@ authoritative shape is:
 6. **`file_path` is workspace-relative.** The pytest adapter enforces this via
    `[run] relative_files = True` in its generated `.coveragerc`; other
    engine adapters MUST do the equivalent. Absolute paths are a contract
-   violation.
+   violation. Outside-workspace files (cargo build-script generated code,
+   vendored paths, etc.) MUST be expressed as a `../`-prefixed POSIX
+   relpath via `os.path.relpath` against `workspace_root` — see
+   "Amendment 2026-06-08" below for the harmonized rule. Engine-specific
+   `metadata` channels (e.g. `metadata['lcov_warnings']`) MAY surface the
+   original absolute native string for forensics but MUST NOT replace the
+   relpath in `file_path`.
 7. **`metadata` is explicitly NOT part of the wire contract.** It carries
    engine-specific debug info (e.g. `coverage_py_version`); consumers MUST
    NOT pattern-match on its keys for behavior. A future contract change to
@@ -175,9 +181,36 @@ This decision freezes the **persisted on-disk shape only**.
   this decision when next edited by Coverage Team; not required by this
   decision.
 
+## Amendment 2026-06-08 (outside-workspace path harmonization)
+
+The original decision left outside-workspace `file_path` representation
+unspecified, which led to per-parser drift: `istanbul_parser` and
+`cobertura_parser` already produced `../`-prefixed POSIX relpaths via
+`os.path.relpath`, but `lcov_parser` preserved the absolute LCOV `SF:`
+path verbatim and surfaced it through `metadata['lcov_warnings']`. The
+B2 UX normalization cycle (`tasks/coverage-team-2026-06-08-outside-workspace-path-harmonization.md`)
+harmonized lcov to match istanbul / cobertura — see constraint #6 above
+for the binding rule. `metadata['lcov_warnings']` is retained as a
+forensic-only channel: it still emits when a `SF:` path falls outside
+`workspace_root`, but the path itself is now the normalized
+`../`-prefixed relpath in `file_path` and the warning carries both the
+original absolute path and the normalized relpath for debugging
+continuity. Parsers that synthesize paths by construction (jacoco) or
+receive workspace-relative paths from the Run-side adapter
+(coverage.py via `[run] relative_files = True`) are unaffected. No
+`schema_version` bump: the on-disk shape is unchanged; only the value
+of `file_path` shifts from absolute to relpath for the
+previously-undefined outside-workspace case. Downstream consumers
+that rely on `metadata['lcov_warnings']` continue to see it; consumers
+that pattern-match `not file_path.startswith('/')` (or `not is_absolute()`)
+gain a universal guarantee that previously held only for the common
+in-workspace case.
+
 ## Effective date
 
 2026-05-15. Already on `main` as of commit `dee3252`.
+Amendment 2026-06-08 effective on landing of the B2-3 harmonization
+slice (`coverage-team-2026-06-08-outside-workspace-path-harmonization`).
 
 ## Supersedes
 
