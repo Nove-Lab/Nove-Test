@@ -366,3 +366,193 @@ def test_localization_latest_rederives_when_explicit_flag_overrides_cache(
         f".novetest/localization/findings/run_{run_id}/localization_findings.json"
     )
     assert details["cache_path"] == expected_path
+
+
+# ---------------------------------------------------------------------------
+# E2E Test 5: failure_proximity formula-noop warning (Defect 7 fix,
+# 2026-06-08).
+#
+# Pre-Defect-7: a no-coverage run that triggers ``failure_proximity`` mode
+# pinned ``finding.formula = "ochiai"`` as a structural placeholder. Any
+# user passing ``--formula <non-ochiai>`` against that cached finding
+# triggered an infinite warning loop: every retry unlinked the cache,
+# re-derived, got the same placeholder back, and emitted the
+# ``localization-cache-rederived`` warning again.
+#
+# Post-Defect-7: the CLI recognizes the structural-noop case and emits a
+# distinct ``localization-formula-noop-in-mode`` warning WITHOUT
+# re-deriving (no cache invalidation either). This subprocess test
+# reproduces the original Defect 7 trigger end-to-end against the
+# ``localization-no-coverage`` fixture and pins the wire-level behavior.
+# ---------------------------------------------------------------------------
+
+
+_NO_COVERAGE_FIXTURE_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "projects"
+    / "localization-no-coverage"
+)
+
+
+def _materialize_no_coverage_fixture(dest: Path) -> Path:
+    """Copy the no-coverage fixture project tree into ``dest``."""
+    target = dest / "localization-no-coverage"
+    shutil.copytree(
+        _NO_COVERAGE_FIXTURE_ROOT,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".novetest"),
+    )
+    return target
+
+
+@pytest.fixture(scope="module")
+def seeded_no_coverage_workspace(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Materialize the no-coverage fixture, run WITHOUT coverage, derive
+    localization findings — exercises the ``failure_proximity`` mode path.
+
+    Module-scoped so the expensive pytest subprocess runs once.
+    """
+    tmp = tmp_path_factory.mktemp("loc_e2e_no_cov")
+    workspace = _materialize_no_coverage_fixture(tmp)
+    clear_resolver_cache()
+
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        init = loop.run_until_complete(initialize_project_workspace(workspace))
+        # CRITICAL: ``collect_coverage=False`` so the run has no
+        # CoverageFactSet — that's what pushes the engine into
+        # ``failure_proximity`` mode.
+        outcome = loop.run_until_complete(
+            run_target_in_store(
+                "tests/", init.store, timeout=120.0, collect_coverage=False
+            )
+        )
+    finally:
+        loop.close()
+
+    run_reference = outcome.memory_entry.run_record.run_reference
+    finding = derive_localization_findings(init.store, run_reference)
+
+    return {
+        "workspace": workspace,
+        "run_id": run_reference.run_id,
+        "run_reference": run_reference,
+        "store": init.store,
+        "finding": finding,
+    }
+
+
+def test_localization_failure_proximity_non_default_formula_emits_noop_warning(
+    seeded_no_coverage_workspace: dict[str, object],
+) -> None:
+    """``novetest localization <run_id> --formula op2`` against a
+    failure_proximity-mode finding emits exactly ONE
+    ``localization-formula-noop-in-mode`` warning, exit 0, and DOES NOT
+    re-derive (the engine's placeholder formula stays ``"ochiai"``).
+
+    Defect 7 reproduction: pre-Defect-7 the same invocation would have
+    triggered a ``localization-cache-rederived`` warning AND re-derived;
+    a second invocation would have repeated the same warning, forming the
+    infinite loop. Post-Defect-7 a single noop warning is emitted and the
+    cache file on disk is left untouched.
+
+    This is the load-bearing wire-level assertion the 2026-06-08 task
+    brief DoD #4 requires."""
+
+    workspace = seeded_no_coverage_workspace["workspace"]
+    run_id = seeded_no_coverage_workspace["run_id"]
+
+    # Capture the cache file's mtime BEFORE the noop call so we can assert
+    # below that it was NOT touched by the request.
+    cache_path = (
+        workspace
+        / ".novetest"
+        / "localization"
+        / "findings"
+        / f"run_{run_id}"
+        / "localization_findings.json"
+    )
+    assert cache_path.exists(), (
+        "Test precondition broken: failure_proximity derive should have "
+        f"persisted a findings file at {cache_path}"
+    )
+    pre_mtime = cache_path.stat().st_mtime
+
+    code, envelope, stderr = _run_cli(
+        workspace, ["localization", run_id, "--formula", "op2"]
+    )
+    assert code == 0, f"Expected exit 0, got {code}. stderr={stderr!r}"
+    assert envelope.get("command") == "localization"
+    assert envelope.get("ok") is True
+
+    data = envelope.get("data")
+    assert isinstance(data, dict)
+    outcome = data.get("localization_outcome")
+    assert isinstance(outcome, dict)
+    # Engine's placeholder is preserved — user sees what the engine
+    # actually computed, not a fictional ``formula="op2"`` finding.
+    assert outcome["kind"] == "fact-set"
+    assert outcome["mode"] == "failure_proximity"
+    assert outcome["formula"] == "ochiai", (
+        f"Expected placeholder formula='ochiai' in failure_proximity, got "
+        f"{outcome.get('formula')!r}"
+    )
+
+    warnings = envelope.get("warnings")
+    assert isinstance(warnings, list)
+    assert len(warnings) == 1, (
+        f"Expected exactly one noop warning, got {warnings!r}"
+    )
+    warning = warnings[0]
+    assert warning["code"] == "localization-formula-noop-in-mode"
+    assert "op2" in warning["message"]
+    assert "failure_proximity" in warning["message"]
+    details = warning["details"]
+    assert details["requested_formula"] == "op2"
+    assert details["returned_formula"] == "ochiai"
+    assert details["mode"] == "failure_proximity"
+
+    # Load-bearing no-loop evidence: the cache file's mtime is
+    # unchanged. Pre-Defect-7 the same call would have unlinked + re-
+    # written this file. Same-mtime + same on-disk content == no
+    # re-derive ran.
+    assert cache_path.exists(), (
+        "Cache file disappeared — Defect 7 carve-out is supposed to "
+        "SKIP the re-derive (which includes the unlink). The file must "
+        "still be on disk post-call."
+    )
+    assert cache_path.stat().st_mtime == pre_mtime, (
+        "Cache file mtime changed — Defect 7 carve-out is supposed to "
+        "leave the on-disk findings untouched."
+    )
+
+
+def test_localization_failure_proximity_default_formula_no_warning(
+    seeded_no_coverage_workspace: dict[str, object],
+) -> None:
+    """Symmetric companion to the noop-warning test: a user who does NOT
+    pass ``--formula`` against the same failure_proximity run sees NO
+    warning. Regression-pin that the noop carve-out doesn't fire on the
+    default path."""
+
+    workspace = seeded_no_coverage_workspace["workspace"]
+    run_id = seeded_no_coverage_workspace["run_id"]
+
+    code, envelope, stderr = _run_cli(workspace, ["localization", run_id])
+    assert code == 0, f"Expected exit 0, got {code}. stderr={stderr!r}"
+    assert envelope.get("ok") is True
+
+    outcome = envelope["data"]["localization_outcome"]
+    assert outcome["mode"] == "failure_proximity"
+    assert outcome["formula"] == "ochiai"
+
+    warnings = envelope.get("warnings")
+    assert warnings == [], (
+        f"Default-formula failure_proximity should emit no warnings; got "
+        f"{warnings!r}"
+    )
