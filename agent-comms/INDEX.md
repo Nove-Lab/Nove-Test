@@ -8,7 +8,7 @@ Last regenerated: 2026-06-08
 _(none)_
 
 ## Pending
-_(none)_
+- [release-team-2026-06-08-mvp-release-readiness-assessment.md](./tasks/release-team-2026-06-08-mvp-release-readiness-assessment.md) — `novetest-pm-team → novetest-release-team` (mvp-release-readiness-assessment)
 
 ## Blocked
 _(none)_
