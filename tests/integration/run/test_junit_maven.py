@@ -36,10 +36,20 @@ from novetest.run.adapters.junit_adapter import run_junit
 from novetest.run.types import TestTarget
 
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("java") is None or shutil.which("mvn") is None,
-    reason="JDK 17+ and Maven 3.9+ required (see scripts/dev-host-setup.md §5)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform.startswith("win"),
+        reason=(
+            "JUnit adapter gates Windows per decision "
+            "2026-06-03-junit-console-launcher-vendor.md §R5; "
+            "Open Question #16 (Windows binary pipeline) pending."
+        ),
+    ),
+    pytest.mark.skipif(
+        shutil.which("java") is None or shutil.which("mvn") is None,
+        reason="JDK 17+ and Maven 3.9+ required (see scripts/dev-host-setup.md §5)",
+    ),
+]
 
 
 FIXTURE_DIR = (
