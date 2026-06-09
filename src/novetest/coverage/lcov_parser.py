@@ -111,13 +111,13 @@ unknown-record extensions:
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from novetest.coverage._paths import relpath_or_drive_stripped
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
@@ -547,13 +547,20 @@ def _workspace_relative(
         return path.relative_to(workspace_root).as_posix()
     except ValueError:
         # Outside-workspace: fall back to relpath (istanbul / cobertura
-        # precedent) so `file_path` is never absolute. ``os.path.relpath``
-        # is platform-aware; we POSIX-flavor the result to keep the
-        # persisted form deterministic across platforms.
-        relpath = Path(os.path.relpath(path, workspace_root)).as_posix()
+        # precedent) so `file_path` is never absolute. The shared
+        # helper covers Windows cross-drive — ``os.path.relpath`` itself
+        # raises ``ValueError`` when the drives differ, so a third
+        # drive-stripped step is required for the 2026-06-09 Windows-CI
+        # fix.
+        relpath = relpath_or_drive_stripped(path, workspace_root)
+        # The forensic warning text MUST stay POSIX-flavored — operators
+        # and AI consumers see it across platforms, and the unit test
+        # asserts a literal ``"/ws/cargo-project"`` substring. Coerce
+        # workspace_root via ``Path.as_posix()`` so Windows-native
+        # backslashes never leak into the warning.
         warnings.append(
             f"outside-workspace path (preserved as relpath "
-            f"against workspace_root={os.fspath(workspace_root)!r}): "
+            f"against workspace_root={Path(workspace_root).as_posix()!r}): "
             f"{abs_path} -> {relpath}"
         )
         return relpath
