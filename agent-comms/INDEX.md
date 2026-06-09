@@ -8,7 +8,7 @@ Last regenerated: 2026-06-09
 _(none)_
 
 ## Pending
-_(none)_
+- [release-team-2026-06-09-mvp-release-ready-positive-sign-off.md](./tasks/release-team-2026-06-09-mvp-release-ready-positive-sign-off.md) — `novetest-pm-team → novetest-release-team` (mvp-release-ready-positive-sign-off)
 
 ## Blocked
 _(none)_
