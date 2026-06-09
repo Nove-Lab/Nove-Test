@@ -119,6 +119,41 @@ initialized project does nothing destructive.
 
 This is the single command that does everything.
 
+> **Where do I run this from?** `novetest test` — and every other
+> non-`init` verb (`run`, `status`, `inspect`, `compare`,
+> `coverage *`, `regression *`, `localization *`, `replay`,
+> `memory *`) — locates the Project Store the same way `git`
+> locates `.git/`: it starts at your current working directory
+> and walks up the parent chain looking for a `.novetest/`
+> directory. So after `novetest init` at the project root, you
+> can run any of these verbs from **the project root or any
+> descendant subdirectory**. Running from outside the project
+> tree (or from any directory whose ancestors do not contain
+> `.novetest/`) returns the following error envelope and exits
+> with code `2`:
+>
+> ```json
+> {
+>   "schema": "novetest/v1",
+>   "command": "test",
+>   "ok": false,
+>   "data": {},
+>   "errors": [
+>     {
+>       "code": "uninitialized",
+>       "message": "No Project Store found in this directory or any ancestor. Run `novetest init` to create one.",
+>       "details": {}
+>     }
+>   ],
+>   "warnings": []
+> }
+> ```
+>
+> Override: setting `NOVETEST_HOME=/absolute/path/to/.novetest`
+> pins the active store explicitly and skips the walk-up. This
+> is mainly used by hermetic test harnesses; AI agents driving a
+> single project should not need it.
+
 ```bash
 novetest test
 ```
