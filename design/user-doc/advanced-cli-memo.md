@@ -105,9 +105,16 @@ into the happy-case follow-up flow:
 - **`--output {json | text | ndjson}`** — global flag, may be
   set per invocation or via `NOVETEST_OUTPUT=...`. `json` is
   the default when piped; `text` is the default on a TTY.
-  `ndjson` streams one envelope per line — useful for the few
-  long-running verbs (`replay --reruns 20`, future
-  `regression --watch`).
+  **All three modes emit the same `novetest/v1` JSON envelope at
+  MVP**; the difference is purely formatting (`text` and `json`
+  both pretty-print with `indent=2`; `ndjson` packs the same
+  payload onto a single line). A true human-rendered surface
+  (tables, color, summary lines instead of raw JSON) is **not
+  implemented at MVP** — it sits in the post-MVP polish queue
+  alongside the `--licenses` CLI and the Windows install script.
+  AI agents should set `NOVETEST_OUTPUT=json` (or pass
+  `--output json`) once at session start; that pins the output
+  shape regardless of whether stdout is a TTY or a pipe.
 
 ---
 
