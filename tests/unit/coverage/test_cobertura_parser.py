@@ -148,6 +148,50 @@ class TestParseCoberturaXmlBasic:
         rel = fact_set.files[0].file_path
         assert rel.startswith("../"), f"expected relpath fallback, got {rel!r}"
 
+    def test_cross_drive_value_error_falls_back_to_drive_stripped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Windows cross-drive simulation: when ``os.path.relpath`` itself
+        raises ``ValueError`` (e.g. ``GITHUB_WORKSPACE`` on D: vs
+        ``runner.temp`` on C:), the parser falls through to the shared
+        helper's drive-stripped POSIX form. The result is workspace-
+        relative (never absolute) and the parse does NOT propagate the
+        ``ValueError``. Reproduces the 2026-06-09 Windows CI fault for
+        ``test_fixture_coverlet_basic_yields_one_file_fully_covered``
+        and ``test_fixture_partial_coverage_yields_two_files`` on the
+        Linux host so a future regression is caught BEFORE escaping to
+        Windows-only CI."""
+        import os as _os
+
+        def _raising_relpath(path: object, start: object = _os.curdir) -> str:  # noqa: ARG001
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+        monkeypatch.setattr(_os.path, "relpath", _raising_relpath)
+
+        outside = tmp_path.parent / "outside-workspace"
+        xml_path = _write_xml(
+            tmp_path, _coverlet_one_class(str(outside)), name="cov.xml"
+        )
+        # The parse must succeed despite the simulated cross-drive
+        # ValueError from os.path.relpath.
+        fact_set = parse_cobertura_xml(
+            [xml_path],
+            run_reference=_RUN_REF,
+            engine_name="xunit",
+            ecosystem="dotnet",
+            workspace_root=tmp_path,
+        )
+        rel = fact_set.files[0].file_path
+        # Universal contract: never absolute.
+        assert not Path(rel).is_absolute(), (
+            f"absolute path leaked in cross-drive fallback: {rel!r}"
+        )
+        # Forward slashes only (POSIX-flavored persisted form).
+        assert "\\" not in rel, f"backslash leaked: {rel!r}"
+        # File structure preserved (MathOps.cs lands somewhere in the
+        # rel string).
+        assert rel.endswith("MathLib/MathOps.cs"), f"got {rel!r}"
+
     def test_no_sources_block_treats_filename_as_workspace_relative(
         self, tmp_path: Path
     ) -> None:

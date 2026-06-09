@@ -287,6 +287,57 @@ def test_inside_only_paths_omit_lcov_warnings_metadata(tmp_path: Path) -> None:
     assert "lcov_warnings" not in fact_set.metadata
 
 
+def test_outside_workspace_warning_text_is_posix_separator_agnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `lcov_warnings` text MUST use POSIX separators for
+    workspace_root so the assertion ``'/ws/cargo-project' in warning``
+    holds on every platform.
+
+    On Windows ``os.fspath(WindowsPath('/ws/cargo-project'))`` returns
+    ``'\\ws\\cargo-project'``, which previously leaked into the
+    warning text via ``!r`` formatting and made
+    `test_path_outside_workspace_root_normalized_to_relpath_with_forensic_warning`
+    fail on the ci.yml Windows × Python 3.11/3.12/3.13 matrix. The fix
+    coerces workspace_root via ``Path(...).as_posix()`` before formatting.
+    """
+    # Simulate the Windows cross-drive scenario by ALSO patching
+    # os.path.relpath to raise — this exercises the relpath_or_drive_stripped
+    # fallback path AND confirms the warning is still POSIX-formatted
+    # even when the third step fires.
+    import os as _os
+
+    def _raising_relpath(path: object, start: object = _os.curdir) -> str:  # noqa: ARG001
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(_os.path, "relpath", _raising_relpath)
+
+    body = """\
+SF:/elsewhere/cargo-build-script/generated.rs
+DA:1,1
+end_of_record
+"""
+    fact_set = _parse(tmp_path, body)
+    warnings = fact_set.metadata.get("lcov_warnings")
+    assert isinstance(warnings, list)
+    assert len(warnings) == 1
+    # The workspace_root appears in POSIX form (forward slashes only).
+    posix_workspace = Path(_WORKSPACE).as_posix()
+    assert posix_workspace in warnings[0], (
+        f"workspace_root not POSIX-normalized in warning: {warnings[0]!r}"
+    )
+    # No backslash leaks even when os.fspath would have used them.
+    assert "\\" not in warnings[0], (
+        f"backslash leaked into warning text: {warnings[0]!r}"
+    )
+    # The resulting file_path satisfies the universal `not is_absolute()`
+    # contract even in the cross-drive simulated branch.
+    for fc in fact_set.files:
+        assert not Path(fc.file_path).is_absolute(), (
+            f"absolute path leaked: {fc.file_path!r}"
+        )
+
+
 # --- §5 case 7: BRDA records present → parsed into branch fields -------------
 
 

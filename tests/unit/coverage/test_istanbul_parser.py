@@ -235,6 +235,45 @@ def test_path_outside_workspace_falls_back_to_relative_path() -> None:
     assert file_path.startswith("../")
 
 
+def test_cross_drive_value_error_falls_back_to_drive_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows cross-drive simulation: when ``os.path.relpath`` itself
+    raises ``ValueError`` (``GITHUB_WORKSPACE`` on D: vs path on C:),
+    the parser falls through to the shared helper's drive-stripped
+    POSIX form. Reproduces the 2026-06-09 Windows CI fault class on a
+    Linux host so future regressions are caught BEFORE escaping to
+    Windows-only CI."""
+    import os as _os
+
+    def _raising_relpath(path: object, start: object = _os.curdir) -> str:  # noqa: ARG001
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(_os.path, "relpath", _raising_relpath)
+
+    payload = {
+        "/elsewhere/vendor/lib.js": {
+            "path": "/elsewhere/vendor/lib.js",
+            "statementMap": {
+                "0": {
+                    "start": {"line": 1, "column": 0},
+                    "end": {"line": 1, "column": 5},
+                },
+            },
+            "s": {"0": 1},
+        }
+    }
+    fact_set = _parse(payload)
+    file_path = fact_set.files[0].file_path
+    # Universal contract: never absolute even in the simulated
+    # cross-drive ValueError branch.
+    assert not Path(file_path).is_absolute()
+    # POSIX-flavored (no backslashes).
+    assert "\\" not in file_path
+    # Drive-stripped: leading "/" gone, structure preserved.
+    assert file_path == "elsewhere/vendor/lib.js"
+
+
 def test_non_object_file_entry_raises() -> None:
     with pytest.raises(CoverageJsonParseError, match="not an object"):
         _parse({"/ws/project/src/a.js": [1, 2, 3]})

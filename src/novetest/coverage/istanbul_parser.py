@@ -48,11 +48,11 @@ Parse-shape errors raise ``CoverageJsonParseError`` (reused from
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Any
 
+from novetest.coverage._paths import to_workspace_relative_posix
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
@@ -231,12 +231,13 @@ def _workspace_relative(abs_path: str, workspace_root: Path) -> str:
     workspace-relative; absolute paths are a contract violation. POSIX
     separators keep the on-disk form deterministic across platforms and
     consistent with the pytest adapter's ``relative_files`` output.
+
+    The 2026-06-09 Windows-parser-fix slice extends the outside-workspace
+    fallback chain to a third step (drive-stripped POSIX) so the
+    ``os.path.relpath`` ValueError that fires on Windows cross-drive
+    setups (``C:\\runner.temp`` vs ``D:\\GITHUB_WORKSPACE``) no longer
+    propagates as an unhandled parse failure. Implementation moved to
+    :mod:`._paths`; all three native-path parsers (istanbul / lcov /
+    cobertura) share the same helper.
     """
-    path = Path(abs_path)
-    try:
-        relative = path.relative_to(workspace_root)
-    except ValueError:
-        # File outside the workspace root — fall back to a computed
-        # relative path so we never persist an absolute one.
-        relative = Path(os.path.relpath(path, workspace_root))
-    return relative.as_posix()
+    return to_workspace_relative_posix(Path(abs_path), workspace_root)

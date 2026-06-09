@@ -66,7 +66,10 @@ For each ``<class>``:
 2. Failing that, use the FIRST source dir as the best-effort root and
    compute ``os.path.relpath`` against ``workspace_root`` — mirrors the
    Istanbul parser's policy for absolute paths that fall outside the
-   workspace.
+   workspace. On Windows cross-drive setups ``os.path.relpath`` itself
+   raises ``ValueError``; a third drive-stripped POSIX fallback (shared
+   helper :func:`._paths.relpath_or_drive_stripped`) catches that case
+   so the persisted ``file_path`` is never absolute on any platform.
 3. If ``<sources>`` is empty or absent, treat ``filename`` as already
    workspace-relative (some Cobertura producers omit the block).
 
@@ -133,13 +136,13 @@ tolerant of optional attributes:
 
 from __future__ import annotations
 
-import os
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from novetest.coverage._paths import relpath_or_drive_stripped
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
@@ -369,7 +372,10 @@ def _resolve_workspace_relative(
        relativize and return.
     2. Failing that, take the FIRST source dir, build the joined path,
        and compute ``os.path.relpath`` against ``workspace_root`` —
-       mirrors the Istanbul parser's outside-workspace fallback.
+       mirrors the Istanbul parser's outside-workspace fallback. On
+       Windows cross-drive inputs ``os.path.relpath`` itself raises;
+       :func:`._paths.relpath_or_drive_stripped` appends a third
+       drive-stripped POSIX step so the result is always relative.
     3. If ``source_dirs`` is empty, treat ``filename`` as already
        workspace-relative (forward-compat with Cobertura producers
        that omit ``<sources>``).
@@ -392,10 +398,16 @@ def _resolve_workspace_relative(
             continue
         return relative.as_posix()
 
-    # Step 2: fall back to relpath against the first source-dir's join.
+    # Step 2/3: fall back to relpath against the first source-dir's join.
+    # The shared helper covers the Windows cross-drive case where
+    # ``os.path.relpath`` itself raises ``ValueError`` (one path's drive
+    # differs from the other) by appending a drive-stripped POSIX form
+    # as a third step. Without this, the 2026-06-09 Windows-CI matrix
+    # surfaces ``ValueError: path is on mount 'D:', start on mount 'C:'``
+    # whenever the Cobertura ``<source>`` refers to a path the runner's
+    # current cwd can't reach on the same drive.
     joined = source_dirs[0] / filename
-    relative = Path(os.path.relpath(joined, workspace_root))
-    return relative.as_posix()
+    return relpath_or_drive_stripped(joined, workspace_root)
 
 
 def _build_file_summary(
