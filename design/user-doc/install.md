@@ -75,8 +75,14 @@ novetest --version
 ```
 
 `--version` and `-v` are identical. The CLI emits the standard
-`novetest/v1` envelope; on a TTY you see the human-readable form,
-when piped (or under `NOVETEST_OUTPUT=json`) you see the JSON:
+`novetest/v1` envelope. **At MVP every output mode is JSON** — the
+only difference between modes is formatting: on a TTY (default
+`text` mode) you see pretty-printed JSON (`indent=2`), when piped
+(default `json` mode) you see the same payload also pretty-printed,
+and `ndjson` packs it onto a single line. A true human-rendered
+surface (tables, color, summary lines) is **not in scope for MVP**
+and is queued as a post-MVP polish item. So in practice both the
+TTY and the piped path return:
 
 ```json
 {
@@ -227,7 +233,7 @@ mainly for release testing, mirror operators, and CI pinning.
 | `NOVETEST_INSTALL_VERSION` | `latest` | A tag like `v0.1.0` to pin to. |
 | `NOVETEST_INSTALL_REPO` | `nove/novetest` | GitHub `owner/repo` for URL composition. |
 | `NOVETEST_INSTALL_BASE_URL` | (derived) | Full base URL override. Used by the integration tests that serve fixtures on `localhost`. |
-| `NOVETEST_OUTPUT` | (auto: text on TTY, json when piped) | Force `json` / `text` / `ndjson` envelope rendering. |
+| `NOVETEST_OUTPUT` | (auto: `text` on TTY, `json` when piped) | Force `json` / `text` / `ndjson` envelope serialization. **All three modes emit the same JSON envelope at MVP**; only formatting differs (`text`/`json` = `indent=2`, `ndjson` = single line). A separate human-rendered surface is post-MVP. |
 
 ---
 

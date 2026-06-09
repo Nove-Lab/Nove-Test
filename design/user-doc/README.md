@@ -151,3 +151,17 @@ what the CLI shells out to in order to **execute your tests**.
 
 All of these live in `advanced-cli-memo.md` as one-line pointers
 to the future advanced user document.
+
+### One MVP product gap worth knowing about up front
+
+This document shows every CLI output as a JSON envelope because
+**that is what the CLI actually emits at MVP** — even on a TTY,
+even in the so-called `text` output mode. A true human-rendered
+surface (tables, color, "3/3 tests passed ✓"-style summary lines)
+is **not in scope for MVP** and is queued as a post-MVP polish
+item. AI-agent users are unaffected (the envelope is what you
+want anyway); a human watching the terminal will see
+pretty-printed JSON until the renderer ships. See
+[install.md §2](./install.md#2-sanity-check-1--novetest---version)
+for the precise formatting differences between the three output
+modes.
