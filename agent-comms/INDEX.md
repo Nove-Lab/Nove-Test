@@ -8,7 +8,7 @@ Last regenerated: 2026-06-09
 _(none)_
 
 ## Pending
-- [release-team-2026-06-09-mvp-release-ready-positive-sign-off.md](./tasks/release-team-2026-06-09-mvp-release-ready-positive-sign-off.md) — `novetest-pm-team → novetest-release-team` (mvp-release-ready-positive-sign-off)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -34,4 +34,5 @@ _(none)_
 - [2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md](./history/2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md) — `novetest-pm-team → all` (b1-polish-parallel-pair-defect7-and-fixed-tests-spec)
 - [2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md](./history/2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md) — `novetest-pm-team → all` (b2-ux-normalize-parallel-triple-coverage-localization-run)
 - [2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md](./history/2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md) — `novetest-pm-team → all` (mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced)
+- [2026-06-09-mvp-release-ready-positive-sign-off.md](./history/2026-06-09-mvp-release-ready-positive-sign-off.md) — `novetest-pm-team → all` (mvp-release-ready-positive-sign-off)
 - [2026-06-09-windows-ci-fix-triple-coverage-localization-run.md](./history/2026-06-09-windows-ci-fix-triple-coverage-localization-run.md) — `novetest-pm-team → all` (windows-ci-fix-triple-coverage-localization-run)
