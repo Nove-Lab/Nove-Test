@@ -25,7 +25,12 @@ from pathlib import Path
 
 import pytest
 
-from novetest.localization.failure_proximity import derive_failure_proximity
+from novetest.localization.failure_proximity import (
+    _is_outside_workspace,
+    _normalize_to_workspace_relative,
+    derive_failure_proximity,
+    parse_failure_log,
+)
 from novetest.memory.project_store import (
     create_project_store,
     get_project_store_state,
@@ -608,6 +613,249 @@ def test_absolute_and_relative_for_same_file_collapse_to_relative(
         "tests/t.py::t_abs",
         "tests/t.py::t_rel",
     }
+
+
+# ---------------------------------------------------------------------------
+# Windows path normalization fix (2026-06-09)
+# ---------------------------------------------------------------------------
+#
+# Defect: the B2-2 slice (2026-06-08, commit 51ea1b6) added the
+# ``_normalize_to_workspace_relative`` helper to align failure_proximity's
+# ``code_location.file`` shape with the other Localization modes. Its
+# regex + helper combo was Linux/macOS-correct but introduced 4 Windows CI
+# failures the same day (CI run 27176933845, jobs 80227759401 / 404 / 408).
+# Root cause:
+#
+# 1. ``_FILE_PATH_CHARS`` character class did not include ``:`` — so the
+#    regex engine could not traverse the Windows drive prefix ``C:`` and
+#    started its capture AFTER the drive colon, producing a malformed
+#    drive-less path like ``Users\runneradmin\...\foo.py``. Downstream
+#    ``Path.is_absolute()`` returned False (the captured path has neither
+#    drive nor anchor), so the normalization helper returned the
+#    malformed path verbatim.
+#
+# 2. ``str(WindowsPath('src/foo.py'))`` emits ``'src\\foo.py'`` (backslash
+#    separator) on Windows. The envelope-wide contract is POSIX separators.
+#    Pre-fix the helper used bare ``str(relative)`` which violated this.
+#
+# 3. ``Path.relative_to`` raises ``ValueError`` on cross-drive comparison
+#    (``D:\\workspace`` vs ``C:\\Users\\...``) — the original ``try`` /
+#    ``except`` in the helper caught this, but the audit recommendation
+#    in the brief asked to factor the classification out as
+#    ``_is_outside_workspace`` so the cross-drive safety is visible at
+#    the call site.
+#
+# Tests pin the contract on Linux: the regex captures the drive prefix
+# in both backslash and forward-slash form; the helper classifies
+# cross-drive-like inputs as outside-workspace; the helper applies
+# ``as_posix()`` separator normalization across OSes; the
+# ``os.path.relpath`` fallback engages on the (currently-impossible
+# under pathlib semantics) ``relative_to`` ValueError that escapes the
+# ``_is_outside_workspace`` gate.
+
+
+def test_parse_failure_log_captures_windows_drive_prefix_backslash() -> None:
+    """Windows fix: the regex captures the ``C:\\`` drive prefix.
+
+    Pre-fix (2026-06-08), ``_FILE_PATH_CHARS = r"[A-Za-z_./][\\w\\-./\\\\]*"``
+    refused to traverse ``:`` between the drive letter and the path; the
+    regex engine started capturing AFTER the drive (at ``Users``), losing
+    the prefix. Post-fix the optional ``(?:[A-Za-z]:[\\\\/])?`` leading
+    group consumes ``C:\\`` and the augmented first-char class
+    ``[A-Za-z_./\\\\]`` lets the engine resume capture at the path
+    separator that follows the drive.
+
+    Linux-runnable because regex behavior depends only on the pattern +
+    input string, not on the OS's path semantics. Empirically reproduced
+    via ``python3 -c "import re; ..."`` on Linux before adding this pin.
+    """
+    text = r"C:\Users\runner\ws\src\foo.py:5: AssertionError"
+    tuples = parse_failure_log("pytest", text)
+    assert tuples == ((r"C:\Users\runner\ws\src\foo.py", 5),), (
+        f"expected drive prefix preserved in regex capture; got {tuples!r}"
+    )
+
+
+def test_parse_failure_log_captures_windows_drive_prefix_forward_slash() -> None:
+    """Windows fix: the regex captures the ``C:/`` (forward-slash) drive
+    prefix.
+
+    pytest's ``crash.path`` formatter on Windows sometimes emits the
+    forward-slash variant (``C:/Users/runner/...``) — particularly when
+    the path was constructed via ``PureWindowsPath`` and converted to
+    string for the failure log. The regex's drive prefix group
+    ``(?:[A-Za-z]:[\\\\/])?`` accepts both ``\\`` and ``/`` as the
+    post-drive separator so both spellings are captured.
+    """
+    text = "C:/Users/runner/ws/src/foo.py:5: AssertionError"
+    tuples = parse_failure_log("pytest", text)
+    assert tuples == (("C:/Users/runner/ws/src/foo.py", 5),), (
+        f"expected forward-slash drive prefix preserved; got {tuples!r}"
+    )
+
+
+def test_parse_failure_log_posix_paths_unchanged_post_windows_fix() -> None:
+    """Regression guard: Linux paths still parse correctly after the
+    Windows regex amendment.
+
+    The optional drive prefix group is structurally inert on inputs that
+    lack a drive segment — matches zero-length + the regex proceeds as
+    before. Same for relative paths (the most common production form on
+    every OS) and dotted ``./``-opening forms used by jest/cargo.
+    """
+    text = "/home/user/ws/src/foo.py:5: AssertionError"
+    tuples = parse_failure_log("pytest", text)
+    assert tuples == (("/home/user/ws/src/foo.py", 5),)
+
+
+def test_is_outside_workspace_classifies_disjoint_paths_as_outside(
+    tmp_path: Path,
+) -> None:
+    """The ``_is_outside_workspace`` audit helper returns True for any
+    path that cannot be expressed as relative to the workspace root.
+
+    On POSIX an unrelated absolute path triggers ``ValueError`` from
+    ``Path.relative_to`` — same machinery Windows uses for cross-drive
+    (``D:`` workspace vs ``C:`` file). The classifier's binary outcome
+    is identical across OSes; what differs is the ``ValueError`` text
+    (Windows: ``"path is on mount 'C:', start on mount 'D:'"``; POSIX:
+    ``"'/elsewhere/file.py' is not in the subpath of '/workspace'"``)
+    which the helper deliberately swallows.
+
+    Linux-runnable because ``tmp_path`` provides a real workspace + a
+    sibling out-of-workspace directory under a shared parent.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+
+    inside_path = ws / "src" / "foo.py"
+    outside_path = outside_dir / "file.py"
+
+    assert _is_outside_workspace(inside_path, ws) is False
+    assert _is_outside_workspace(outside_path, ws) is True
+    # Boundary: workspace_root itself is "inside" because
+    # ``ws.relative_to(ws) == PurePath('.')`` — the boundary belongs to
+    # the "inside" half-plane.
+    assert _is_outside_workspace(ws, ws) is False
+
+
+def test_normalize_relative_input_passes_through_as_posix(tmp_path: Path) -> None:
+    """Already-relative inputs round-trip through ``as_posix`` which is a
+    no-op on POSIX (the test runner). On Windows the same call rewrites
+    backslash separators to forward slashes — pinned via the regex test
+    above as a Linux-runnable proxy for the Windows side.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # POSIX-style relative input: idempotent.
+    assert _normalize_to_workspace_relative("src/foo.py", ws) == "src/foo.py"
+    # Dotted opener ``./src/foo.py`` collapses to ``src/foo.py`` via
+    # ``PurePath`` normalization at construction time.
+    assert _normalize_to_workspace_relative("./src/foo.py", ws) == "src/foo.py"
+
+
+def test_normalize_outside_workspace_input_preserved_verbatim(
+    tmp_path: Path,
+) -> None:
+    """Outside-workspace inputs are returned VERBATIM (NOT via
+    ``as_posix``).
+
+    Rationale (helper docstring): operators diagnosing a stdlib /
+    cross-drive frame benefit from seeing the OS-native form — Windows
+    operators recognize ``C:\\Users\\runneradmin\\...`` immediately;
+    ``C:/Users/runneradmin/...`` requires an extra cognitive step. The
+    helper preserves the input ``file_path`` string verbatim for
+    outside-workspace paths; only inside-workspace paths get the POSIX
+    separator rewrite. This deliberate asymmetry preserves the Defect-3
+    (2026-05-31) defensive posture that the absolute spelling itself is
+    the "not your code" semantic cue.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_path = outside_dir / "stdlib_sim.py"
+    # Helper returns the OS-native string we passed in (NOT POSIX-formatted).
+    result = _normalize_to_workspace_relative(str(outside_path), ws)
+    assert result == str(outside_path)
+
+
+def test_normalize_inside_workspace_input_emits_posix_separators(
+    tmp_path: Path,
+) -> None:
+    """Inside-workspace absolute inputs emit POSIX-separator output.
+
+    On POSIX this is trivially true because ``PosixPath.relative_to(...)
+    .as_posix()`` returns forward-slash form (the only form). The same
+    code path on Windows uses ``WindowsPath.as_posix()`` which rewrites
+    backslashes to forward slashes — pinned here as the Linux-runnable
+    contract surface.
+
+    The ``"\\\\" not in result`` sanity check is OS-invariant: even if
+    a future Path implementation changed semantics, the absence of
+    backslash in the envelope value is the load-bearing invariant the
+    other Localization modes (sbfl_*) implicitly rely on.
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    abs_inside = ws / "src" / "foo.py"
+    result = _normalize_to_workspace_relative(str(abs_inside), ws)
+    assert result == "src/foo.py", (
+        f"expected POSIX-form workspace-relative path; got {result!r}"
+    )
+    # Sanity: no backslashes in the result, regardless of OS.
+    assert "\\" not in result
+
+
+def test_normalize_relpath_fallback_engages_when_relative_to_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense-in-depth: if ``_is_outside_workspace`` classifies a path
+    as inside-workspace but ``Path.relative_to`` raises ``ValueError``
+    anyway (pathological — cannot happen under current pathlib
+    semantics, but future drift could surface it), the helper falls
+    back to ``os.path.relpath``.
+
+    The cross-drive case the brief specifically calls out as the
+    motivation for this fallback ('Windows D:↔C:') is upstream-caught
+    by ``_is_outside_workspace`` so the fallback is reached only by the
+    pathological surface where ``_is_outside_workspace`` and
+    ``relative_to`` disagree.
+
+    We construct that scenario by patching ``_is_outside_workspace`` to
+    return False (forcing the helper down the "inside" branch) AND
+    patching ``Path.relative_to`` to raise ``ValueError`` (forcing the
+    branch to engage the ``os.path.relpath`` fallback).
+    """
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    abs_path = ws / "src" / "foo.py"
+
+    # Force the inside-workspace branch.
+    monkeypatch.setattr(
+        "novetest.localization.failure_proximity._is_outside_workspace",
+        lambda *_: False,
+    )
+
+    # Force ``relative_to`` to raise so the helper engages the fallback.
+    call_state = {"count": 0}
+
+    def fake_relative_to(self: Path, *args: object, **kwargs: object) -> Path:
+        call_state["count"] += 1
+        raise ValueError("simulated disagreement with is_outside check")
+
+    monkeypatch.setattr(Path, "relative_to", fake_relative_to)
+
+    result = _normalize_to_workspace_relative(str(abs_path), ws)
+    # ``os.path.relpath`` produces forward-slash on POSIX; the helper's
+    # ``as_posix`` makes the result OS-invariant.
+    assert result == "src/foo.py", (
+        f"expected os.path.relpath fallback to produce POSIX-relative "
+        f"path; got {result!r}"
+    )
+    assert call_state["count"] >= 1, "expected relative_to to be invoked"
 
 
 def test_failure_proximity_envelope_shape_deviation_pinned(tmp_path: Path) -> None:

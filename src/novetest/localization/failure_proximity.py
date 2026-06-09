@@ -38,6 +38,7 @@ nf, np)`` interface.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections import defaultdict
@@ -86,7 +87,21 @@ _PLACEHOLDER_FORMULA: Final[str] = "ochiai"
 # Path chars: starts with an alpha/underscore/dot/slash (allow absolute and
 # relative forms), then alphanumerics + path separators + dashes/dots.
 # ``./`` and ``../`` opening segments are common in jest/cargo absolute frames.
-_FILE_PATH_CHARS = r"[A-Za-z_./][\w\-./\\]*"
+#
+# Windows safety (2026-06-09, defect surfaced by CI matrix run 27176933845):
+# the optional ``(?:[A-Za-z]:[\\/])?`` prefix captures the Windows drive
+# segment (e.g. ``C:\`` or ``C:/``) which would otherwise be lost. The
+# character class ``:`` is NOT a word-class character, so without this
+# leading optional group the regex engine starts the path capture AFTER
+# the drive colon, producing a malformed drive-less Windows path. The
+# pattern composes safely on POSIX: the optional group matches empty,
+# and the original first-char class ``[A-Za-z_./]`` is augmented with
+# ``\\`` so the engine can begin a capture at the path-separator that
+# follows the drive (e.g. position 2 in ``C:\Users\...`` lands on ``\``).
+# Pre-fix, the regex captured ``Users\runneradmin\...\foo.py``; post-fix
+# it captures ``C:\Users\runneradmin\...\foo.py`` — letting the absolute-
+# path check + workspace-relative normalization downstream do their job.
+_FILE_PATH_CHARS = r"(?:[A-Za-z]:[\\/])?[A-Za-z_./\\][\w\-./\\]*"
 _PYTHON_FILE_CHARS = _FILE_PATH_CHARS
 
 _PYTEST_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
@@ -498,15 +513,52 @@ def _dense_ranks(sorted_scores: list[float]) -> list[int]:
     return ranks
 
 
+def _is_outside_workspace(file_path: Path, workspace_root: Path) -> bool:
+    """Cross-drive-safe inside/outside-workspace classifier.
+
+    Returns ``True`` iff ``file_path`` cannot be expressed as a path
+    under ``workspace_root``. Mechanism: ``Path.relative_to`` raises
+    ``ValueError`` for any non-prefix relationship — same surface used
+    on Windows for **cross-drive** comparison (``D:\\workspace`` vs
+    ``C:\\Users\\...``) AND on POSIX for plain non-prefix paths
+    (``/workspace`` vs ``/elsewhere``). The platform's ``ValueError``
+    text differs (Windows: "path is on mount 'C:', start on mount 'D:'";
+    POSIX: "'/elsewhere/file.py' is not in the subpath of '/workspace'"
+    or similar) but the binary classification outcome is identical.
+
+    Carried as a separate helper (rather than inlined as a ``try`` block
+    in ``_normalize_to_workspace_relative``) so the audit recommendation
+    in ``tasks/localization-team-2026-06-09-windows-path-normalization-
+    fix.md`` §"outside-workspace 판정 자체도 cross-drive 안전 필요" is
+    visible at the call site: the helper IS the cross-drive safety net,
+    and its naming makes the intent explicit. The brief notes:
+
+      "cross-drive 도 outside로 분류 — workspace_root와 무관 ...
+      failure_proximity의 'not your code' semantic과 자연 정렬 (다른
+      drive면 사용자 코드 아닐 가능성 큼)"
+
+    Pinned by ``test_is_outside_workspace_classifies_disjoint_paths_as_outside``.
+    """
+    try:
+        file_path.relative_to(workspace_root)
+    except ValueError:
+        return True
+    return False
+
+
 def _normalize_to_workspace_relative(
     file_path: str, workspace_root: Path
 ) -> str:
-    """Normalize a parsed failure-log file path to workspace-relative form.
+    """Normalize a parsed failure-log file path to workspace-relative POSIX form.
 
-    Returns workspace-relative path when the input is absolute AND lies
-    under ``workspace_root``; otherwise returns ``file_path`` unchanged.
-    Idempotent on already-relative inputs (the common case for the
-    existing fixture tests).
+    Returns the workspace-relative form (POSIX separators) when the
+    input is absolute AND lies under ``workspace_root``; otherwise
+    returns ``file_path`` unchanged. Idempotent on already-relative
+    inputs (the common case for the existing fixture tests), with
+    backslash-to-forward-slash normalization applied via ``as_posix``
+    so a Windows ``WindowsPath`` constructed from a forward-slash
+    spelling round-trips back to forward slashes (NOT
+    ``WindowsPath.__str__``'s backslash form).
 
     Brief (B2-2 UX normalization, 2026-06-08): failure_proximity emits
     absolute paths in production because pytest's ``crash.path``, cargo
@@ -518,17 +570,26 @@ def _normalize_to_workspace_relative(
     ``design/interace-contract/localization.md`` §"Result shape —
     mode-invariant".
 
+    Windows fix (2026-06-09, defect surfaced by CI run 27176933845):
+    pre-fix the helper used bare ``str(rel)`` which on Windows emits the
+    ``WindowsPath`` backslash form (``'src\\foo.py'``) — incompatible
+    with the POSIX envelope shape the other Localization modes produce.
+    Post-fix ``rel.as_posix()`` normalizes to ``'src/foo.py'`` across
+    OSes. The cross-drive ValueError branch is also defensively handled
+    via ``os.path.relpath`` — though the ``_is_outside_workspace`` gate
+    catches the same case upstream, the fallback keeps the helper
+    robust against future ``pathlib`` semantics drift.
+
     Paths OUTSIDE the workspace (e.g. ``/usr/lib/python/.../stdlib.py``
-    in pytest tracebacks, or ``/rustc/<hash>/.../panicking.rs`` frames
-    in cargo) are left absolute — they cannot be made workspace-
-    relative meaningfully and surface as an obvious "not your code" cue
-    to consumers. This is a defensive contract: the parser's catch-all
-    patterns (notably the dropped cargo catch-all from Defect 3, 2026-
-    05-31) historically leaked stdlib paths; preserving absolute form
-    for such paths keeps the existing Defect-3 defensive posture intact
-    (the aggregate mode's covered-files intersection drops them; the
-    failure_proximity mode does NOT have an analogous filter and the
-    absolute form is the next-best disambiguation signal).
+    in pytest tracebacks, ``/rustc/<hash>/.../panicking.rs`` frames in
+    cargo, or cross-drive Windows paths like ``C:\\Users\\...\\foo.py``
+    against a ``D:\\workspace``) are left absolute — they cannot be
+    made workspace-relative meaningfully and surface as an obvious "not
+    your code" cue to consumers. This is the Defect-3 defensive posture
+    from 2026-05-31, preserved unchanged through this Windows fix; the
+    failure_proximity mode does NOT have an analogous covered-files
+    intersection filter (which aggregate mode uses), so the absolute
+    form is the next-best disambiguation signal.
 
     Note: this helper does NOT call ``Path.resolve()`` on either side.
     Symlinks / case-insensitive filesystems / NFS mounts may cause a
@@ -541,12 +602,40 @@ def _normalize_to_workspace_relative(
     """
     candidate = Path(file_path)
     if not candidate.is_absolute():
+        # Already-relative input: normalize separators to POSIX form so
+        # any Windows-spelled relative path (``src\\foo.py``) lands in
+        # the envelope as ``src/foo.py``. No-op on POSIX where backslash
+        # is a literal filename character with no separator semantics.
+        return candidate.as_posix()
+    if _is_outside_workspace(candidate, workspace_root):
+        # Outside workspace OR cross-drive (Windows). Kept verbatim as
+        # the "not your code" semantic cue per the Defect-3 posture.
+        # The input ``file_path`` is preserved (NOT ``candidate.as_posix()``)
+        # because operators benefit from seeing the OS-native form when
+        # diagnosing stdlib / cross-drive provenance — a Windows operator
+        # reading ``C:\Users\runneradmin\AppData\...`` recognizes that
+        # immediately; ``C:/Users/runneradmin/AppData/...`` requires an
+        # extra cognitive step.
         return file_path
+    # Inside workspace: compute the workspace-relative form.
     try:
-        relative = candidate.relative_to(workspace_root)
+        rel = candidate.relative_to(workspace_root)
     except ValueError:
-        # Not under workspace_root (e.g. stdlib path); keep absolute as-is.
-        return file_path
-    return str(relative)
+        # Defense-in-depth: ``_is_outside_workspace`` said inside but
+        # ``relative_to`` disagrees. Cannot happen under current
+        # ``pathlib`` semantics (the two use identical mechanics), but
+        # we don't want a regression on some future Python release to
+        # bubble up as a ``ValueError`` from this helper. Fall back to
+        # ``os.path.relpath`` which is more permissive about path
+        # relationships (it'll produce ``..``-prefixed results when
+        # needed; failure_proximity does NOT want that, but the
+        # subsequent ``as_posix`` keeps the result well-formed).
+        rel = Path(os.path.relpath(str(candidate), str(workspace_root)))
+    # ``as_posix`` normalizes the separator across OSes:
+    # - On POSIX: no-op (already forward-slash).
+    # - On Windows: ``WindowsPath('src/foo.py').as_posix() == 'src/foo.py'``;
+    #   ``str(WindowsPath('src/foo.py'))`` would yield ``'src\\foo.py'``
+    #   which violates the envelope's POSIX-path contract.
+    return rel.as_posix()
 
 
