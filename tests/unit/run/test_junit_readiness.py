@@ -9,15 +9,43 @@ Covers the brief §5 + §10 doctor probe table for the JUnit path:
 
 The `shutil.which` seam is monkey-patched per-test so the cases are
 hermetic and don't depend on the host's installed toolchain.
+
+**Windows OS-gate skip** (2026-06-09 cycle): the JUnit adapter is
+intentionally gated against Windows per decision
+``2026-06-03-junit-console-launcher-vendor.md`` §R5 (foundations Open
+Question #16 — Windows binary pipeline not yet shipped). The
+non-Windows-asserting tests below would observe ``engine-misconfigured``
+on a real Windows host (the gate IS firing — which is correct) instead
+of their expected ``ready`` / missing-binary diagnostics that assume the
+host can actually run JUnit. We skip those tests on Windows with the
+``_SKIP_IF_WINDOWS`` mark. The ``test_windows_os_gate`` case below uses
+``monkeypatch.setattr(... sys.platform, "win32")`` to verify the gate
+fires from a Linux/macOS CI host AND continues to pass on a real
+Windows host — that is the gate-firing regression detection on both
+sides of the OS axis. Restore by removing the per-test marks when Open
+Question #16 lands.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
 from novetest.run.readiness import assess_engine_readiness
+
+
+_SKIP_IF_WINDOWS = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason=(
+        "JUnit adapter gates Windows per decision "
+        "2026-06-03-junit-console-launcher-vendor.md §R5; "
+        "Open Question #16 (Windows binary pipeline) pending. "
+        "Gate-firing verification lives in test_windows_os_gate "
+        "(monkeypatches sys.platform → runs on both Windows and non-Windows)."
+    ),
+)
 
 
 _POM_WITH_JUPITER = """<project>
@@ -40,6 +68,7 @@ def maven_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@_SKIP_IF_WINDOWS
 async def test_ready_when_java_and_mvn_present(
     maven_workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -56,6 +85,7 @@ async def test_ready_when_java_and_mvn_present(
     assert result.engine_context.engine_version == "5.10.2"
 
 
+@_SKIP_IF_WINDOWS
 async def test_missing_jdk(
     maven_workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -68,6 +98,7 @@ async def test_missing_jdk(
     assert any("java" in issue for issue in result.issues)
 
 
+@_SKIP_IF_WINDOWS
 async def test_missing_mvn(
     maven_workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -80,6 +111,7 @@ async def test_missing_mvn(
     assert any("mvn" in issue.lower() for issue in result.issues)
 
 
+@_SKIP_IF_WINDOWS
 async def test_missing_jupiter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -99,6 +131,7 @@ async def test_missing_jupiter(
     assert any("Jupiter" in issue or "jupiter" in issue for issue in result.issues)
 
 
+@_SKIP_IF_WINDOWS
 async def test_junit4_specific_diagnostic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -123,6 +156,7 @@ async def test_junit4_specific_diagnostic(
     assert any("JUnit 4" in issue for issue in result.issues)
 
 
+@_SKIP_IF_WINDOWS
 async def test_testng_specific_diagnostic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -145,6 +179,7 @@ async def test_testng_specific_diagnostic(
     assert any("TestNG" in issue for issue in result.issues)
 
 
+@_SKIP_IF_WINDOWS
 async def test_gradle_wrapper_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

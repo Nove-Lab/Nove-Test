@@ -50,6 +50,16 @@ from novetest.run.adapters.junit_adapter import (
 )
 
 
+pytestmark = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason=(
+        "JUnit adapter gates Windows per decision "
+        "2026-06-03-junit-console-launcher-vendor.md §R5; "
+        "Open Question #16 (Windows binary pipeline) pending."
+    ),
+)
+
+
 FIXTURE_ROOT = (
     Path(__file__).resolve().parents[2] / "fixtures" / "projects"
 )

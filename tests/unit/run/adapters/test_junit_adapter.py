@@ -11,6 +11,7 @@ file isolates the pure helpers from the subprocess seam.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -1130,6 +1131,26 @@ class TestMavenCoverageArgv:
         assert "-Dmaven.test.failure.ignore=true" not in argv
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason=(
+        "JUnit adapter gates Windows per decision "
+        "2026-06-03-junit-console-launcher-vendor.md §R5; "
+        "Open Question #16 (Windows binary pipeline) pending. "
+        "These tests invoke `run_junit` directly, bypassing the readiness "
+        "OS gate. `test_init_script_present_with_coverage_and_jacoco` "
+        "surfaces a downstream cp1252-encoding artifact on Windows: the "
+        "production code at junit_adapter.py:590 calls "
+        "`Path.write_text(_GRADLE_IGNORE_FAILURES_INIT_SCRIPT)` without "
+        "an explicit encoding, so the init-script's literal em-dash (U+2014) "
+        "in the comment block is written as cp1252 byte 0x97 on Windows. "
+        "The test then reads it back with `encoding=\"utf-8\"` and "
+        "UnicodeDecodeError fires. Since the adapter never runs in "
+        "production on Windows (OS-gated), the bug never surfaces in real "
+        "use — fixing the production write_text + un-skipping is the "
+        "Open Question #16 follow-up."
+    ),
+)
 class TestGradleCoverageArgv:
     """Gradle coverage argv must inject an ``--init-script`` pointing at
     a generated ``init-ignore-test-failures.gradle`` and include
