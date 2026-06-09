@@ -254,6 +254,42 @@ PM-acknowledged backlog (not auto-queued; CEO sequences):
    | grep NOTICES` to a future Release verification surface, or
    codify as a distinct integration test. Low priority.
 
+### Addendum — items surfaced post-cycle during user-doc work (2026-06-09 evening)
+
+Two additional candidates surfaced during the `design/user-doc/`
+authoring session that ran after this cycle closed (commits
+`271417a` → `4fb4e2e`). Recorded here so the canonical Future-cycle
+queue is the single source of truth:
+
+9. **Human-readable text renderer** — `src/novetest/cli/output.py`
+   currently emits pretty-printed JSON for `OutputMode.TEXT` (same
+   payload as `JSON` mode, only `indent=2`). The `foundations.md`
+   §"Output Modes" design intent ("AI agents will set
+   `NOVETEST_OUTPUT=json`; humans get pretty output by default")
+   implies a true human-rendered surface (tables, color, a single
+   "3/3 passed" summary line per verb) that is currently absent.
+   Scope: per-verb renderers under `src/novetest/cli/handlers/` or
+   a sibling `cli/renderers/` module, plus a feature-detection
+   matrix for ANSI/TTY. Orchestration team territory.
+   Estimated effort: 1-2 cycles. Surfaced 2026-06-09 during
+   user-doc commit `2d5a0af`; mentioned in `install.md §2`,
+   `advanced-cli-memo.md §"Output format override"`, and
+   `README.md §"One MVP product gap worth knowing about up front"`
+   as a known post-MVP polish item.
+10. **(Optional) Workspace-level orchestrator (`novetest workspaces
+    test`)** — a Bazel/Nx/Turborepo-style convenience wrapper for
+    polyglot monorepos. Walks down from CWD to find every
+    `.novetest/` subdirectory, executes `novetest test` in each as
+    a subprocess, aggregates exit codes and emits a meta-envelope
+    wrapping per-workspace results. Design A from the polyglot
+    discussion in `languages.md §"Working with a polyglot
+    repository"`; zero schema changes anywhere (each per-workspace
+    `.novetest/` keeps its single-engine assumption intact).
+    Orchestration team territory; estimated 1-2 weeks; sequence
+    after v0.1.0 if user feedback surfaces polyglot UX requests.
+    Surfaced 2026-06-09 during user-doc commit `4fb4e2e`;
+    reasoning lives in `languages.md` polyglot section.
+
 ## Cycle transcript (commits)
 
 - `bd4d300` — PM brief: MVP release readiness assessment (2026-06-08
