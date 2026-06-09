@@ -12,11 +12,76 @@ workspace markers (`pyproject.toml`, `package.json`, `go.mod`,
 `Cargo.toml`, `pom.xml`/`build.gradle`, `*.csproj`/`*.sln`). You
 **do not** pass an `--engine` flag in the happy case.
 
-If multiple ecosystem markers are present (e.g. a polyglot repo),
-the detection priority is: `python` > `javascript-typescript` >
-`go` > `rust` > `java` > `dotnet`. When the auto-pick is wrong,
-re-run from the subdirectory of the engine you want — `init` and
-`test` walk the workspace from the current directory.
+### One `novetest test` call = exactly one engine invocation
+
+`novetest test` (and every other non-`init` verb) runs **one
+engine at a time**. The detection logic at
+`src/novetest/run/engine_selector.py::_ecosystem_for_workspace`
+walks a fixed priority list and **returns on the first marker
+match** — it does not enumerate every ecosystem present and run
+them all.
+
+The priority order, taken verbatim from the code's
+`_ECOSYSTEM_MARKERS` tuple plus the trailing `.NET` glob check, is:
+
+| # | Ecosystem | Engine | Marker(s) |
+|---|---|---|---|
+| 1 | `python` | `pytest` | `pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini` |
+| 2 | `javascript-typescript` | `jest` | `package.json` |
+| 3 | `java` | `junit` | `pom.xml`, `build.gradle`, `build.gradle.kts` |
+| 4 | `go` | `go-test` | `go.mod` |
+| 5 | `rust` | `cargo-test` | `Cargo.toml` |
+| 6 | `dotnet` | `xunit` | `*.csproj` (1-depth glob), `*.sln` |
+
+So if your workspace root has, say, both `pyproject.toml` AND
+`package.json`, `novetest test` from that root will only run
+**pytest** — the JavaScript suite is silently ignored on that
+invocation. The CLI emits no warning today; this is by design at
+MVP (the single-engine assumption is baked into the Run Record
+schema, the Coverage / Regression / Localization engines, and the
+recommendation synthesizer).
+
+### Working with a polyglot repository
+
+The supported MVP pattern is **one `.novetest/` per ecosystem
+subdirectory**. For example, given a backend-frontend split:
+
+```
+polyglot-repo/
+├── backend/
+│   ├── pyproject.toml
+│   ├── my_module/
+│   ├── tests/
+│   └── .novetest/        ← created by `cd backend && novetest init`
+└── frontend/
+    ├── package.json
+    ├── src/
+    ├── __tests__/
+    └── .novetest/        ← created by `cd frontend && novetest init`
+```
+
+Then:
+
+```bash
+( cd backend  && novetest test )   # runs pytest only
+( cd frontend && novetest test )   # runs jest only
+```
+
+Each subdirectory's `.novetest/` carries its own run history,
+coverage facts, regression baselines, and SBFL findings —
+completely isolated from the other ecosystem. The walk-up rule
+([quick-start.md §"Where do I run this from?"](./quick-start.md#step-2--novetest-test))
+guarantees that `novetest test` inside `backend/tests/` finds
+`backend/.novetest/`, not the frontend one.
+
+> **Why not "one root init, run them all"?** Detection itself
+> would be trivial — `readiness.detect_engine_candidates` already
+> enumerates every ecosystem present. The hard part is everything
+> downstream of the Run Record (single-engine schema, per-engine
+> coverage formats, per-engine SBFL, recommendation synthesis
+> assumptions). True polyglot orchestration in a single envelope
+> is a meaningful chunk of post-MVP design work; the workspace-
+> level workaround above is the supported pattern today.
 
 Quick prerequisites overview:
 
