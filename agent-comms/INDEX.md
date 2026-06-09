@@ -14,7 +14,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [release-team-2026-06-08-ci-matrix-windows-red-blocks-mvp.md](./questions/release-team-2026-06-08-ci-matrix-windows-red-blocks-mvp.md) — `novetest-release-team → novetest-pm-team` (ci-matrix-windows-red-blocks-mvp)
 
 ## Recent decisions (last 7 days)
 - [2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md](./decisions/2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md) — `novetest-pm-team → all` (phase5-sqlite-deferred-until-cross-run-verb)
