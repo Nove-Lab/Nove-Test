@@ -31,6 +31,24 @@ exit code in your wrapper, then parse the envelope.
 | `4` | `EXIT_ENGINE_MISSING` | Native test engine not ready (missing on PATH, misconfigured, missing dep). | Install the missing tool. Envelope's `data.engine_readiness.issues[]` is the actionable list. |
 | `5` | `EXIT_STORAGE` | Project Store corrupt or unreadable. | Inspect `.novetest/store.json`. If lost, `rm -rf .novetest && novetest init` recreates it (you lose history). |
 
+### Common `errors[].code` values
+
+When `ok: false`, the `errors[]` array carries a stable
+machine-friendly `code` per error. Route on `errors[0].code`
+first, then surface `errors[0].message` to humans. The codes
+you will see most often in practice:
+
+| `errors[].code` | Typical exit | When you see it |
+|---|---|---|
+| `uninitialized` | 2 | A non-`init` verb was run from a directory whose tree contains no `.novetest/` (walk-up from CWD found nothing). Fix: `cd` into the project (or any subdirectory of it), or run `novetest init` if you have not yet. See [quick-start.md §"Where do I run this from?"](./quick-start.md#step-2--novetest-test). |
+| `store-corrupt` | 5 | `.novetest/` exists but `store.json` is unreadable. Fix: inspect the file; in the worst case `rm -rf .novetest && novetest init` recreates from scratch (you lose run history). |
+| `not-found` | 2 | A `run_id` you passed (e.g. to `inspect`, `coverage show`, `replay`) does not match any Memory Entry. Fix: list available IDs with `novetest memory list`. |
+| `engine-missing` / `engine-misconfigured` / `engine-not-ready` | 4 | Native test runner not installed, not on PATH, or missing a required plugin. Fix: `data.engine_readiness.issues[]` carries the actionable hint list. |
+| `invalid-flag` | 2 | A flag value is outside the allowed set (e.g. `--formula somethingelse`). Fix: read `errors[0].message` for the allowed values. |
+| `adapter-<kind>` | 4 (usually) | A native adapter invocation failed (e.g. `adapter-pytest`, `adapter-cargo`). `details.install_hint` often carries a one-line fix. |
+| `not-implemented` | 2 | A verb stub reserved for a future phase. Should not occur on the happy path at MVP. |
+| `cli-error` | 1 | Unexpected internal exception. Report with the envelope payload if you can. |
+
 Crucial nuance:
 
 - **`ok: true` does NOT imply exit 0.** Exit 3 (tests failed) is
