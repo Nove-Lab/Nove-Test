@@ -8,13 +8,15 @@ Last regenerated: 2026-06-09
 _(none)_
 
 ## Pending
-- [release-team-2026-06-08-mvp-release-readiness-assessment.md](./tasks/release-team-2026-06-08-mvp-release-readiness-assessment.md) — `novetest-pm-team → novetest-release-team` (mvp-release-readiness-assessment)
+- [coverage-team-2026-06-09-windows-parser-fixes.md](./tasks/coverage-team-2026-06-09-windows-parser-fixes.md) — `novetest-pm-team → novetest-coverage-team` (windows-parser-fixes)
+- [localization-team-2026-06-09-windows-path-normalization-fix.md](./tasks/localization-team-2026-06-09-windows-path-normalization-fix.md) — `novetest-pm-team → novetest-localization-team` (windows-path-normalization-fix)
+- [run-team-2026-06-09-junit-windows-os-gate-test-fix.md](./tasks/run-team-2026-06-09-junit-windows-os-gate-test-fix.md) — `novetest-pm-team → novetest-run-team` (junit-windows-os-gate-test-fix)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [release-team-2026-06-08-ci-matrix-windows-red-blocks-mvp.md](./questions/release-team-2026-06-08-ci-matrix-windows-red-blocks-mvp.md) — `novetest-release-team → novetest-pm-team` (ci-matrix-windows-red-blocks-mvp)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md](./decisions/2026-06-02-phase5-sqlite-deferred-until-cross-run-verb.md) — `novetest-pm-team → all` (phase5-sqlite-deferred-until-cross-run-verb)
@@ -33,3 +35,4 @@ _(none)_
 - [2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md](./history/2026-06-07-parallel-pair-envelope-warnings-and-dotnet-cobertura-derive.md) — `novetest-pm-team → all` (parallel-pair-envelope-warnings-and-dotnet-cobertura-derive)
 - [2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md](./history/2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md) — `novetest-pm-team → all` (b1-polish-parallel-pair-defect7-and-fixed-tests-spec)
 - [2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md](./history/2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md) — `novetest-pm-team → all` (b2-ux-normalize-parallel-triple-coverage-localization-run)
+- [2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md](./history/2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md) — `novetest-pm-team → all` (mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced)
