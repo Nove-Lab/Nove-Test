@@ -8,9 +8,7 @@ Last regenerated: 2026-06-09
 _(none)_
 
 ## Pending
-- [coverage-team-2026-06-09-windows-parser-fixes.md](./tasks/coverage-team-2026-06-09-windows-parser-fixes.md) — `novetest-pm-team → novetest-coverage-team` (windows-parser-fixes)
-- [localization-team-2026-06-09-windows-path-normalization-fix.md](./tasks/localization-team-2026-06-09-windows-path-normalization-fix.md) — `novetest-pm-team → novetest-localization-team` (windows-path-normalization-fix)
-- [run-team-2026-06-09-junit-windows-os-gate-test-fix.md](./tasks/run-team-2026-06-09-junit-windows-os-gate-test-fix.md) — `novetest-pm-team → novetest-run-team` (junit-windows-os-gate-test-fix)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -36,3 +34,4 @@ _(none)_
 - [2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md](./history/2026-06-08-b1-polish-parallel-pair-defect7-and-fixed-tests-spec.md) — `novetest-pm-team → all` (b1-polish-parallel-pair-defect7-and-fixed-tests-spec)
 - [2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md](./history/2026-06-08-b2-ux-normalize-parallel-triple-coverage-localization-run.md) — `novetest-pm-team → all` (b2-ux-normalize-parallel-triple-coverage-localization-run)
 - [2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md](./history/2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md) — `novetest-pm-team → all` (mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced)
+- [2026-06-09-windows-ci-fix-triple-coverage-localization-run.md](./history/2026-06-09-windows-ci-fix-triple-coverage-localization-run.md) — `novetest-pm-team → all` (windows-ci-fix-triple-coverage-localization-run)
