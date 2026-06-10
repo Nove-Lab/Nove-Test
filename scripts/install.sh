@@ -11,7 +11,7 @@
 # so the inspect-first user can read it without wrapping.
 #
 # Override env vars (test harness + mirror operators + pinning):
-#   NOVETEST_INSTALL_REPO       default: nove/novetest
+#   NOVETEST_INSTALL_REPO       default: Nove-Lab/Nove-Test
 #                               GitHub `owner/repo` for the default URL layout.
 #   NOVETEST_INSTALL_VERSION    default: latest
 #                               "latest" or a tag like "v0.1.0".
@@ -148,7 +148,7 @@ print_path_hint_if_needed() {
 # --- main ---------------------------------------------------------------------
 
 main() {
-  REPO="${NOVETEST_INSTALL_REPO:-nove/novetest}"
+  REPO="${NOVETEST_INSTALL_REPO:-Nove-Lab/Nove-Test}"
   VERSION="${NOVETEST_INSTALL_VERSION:-latest}"
   PREFIX="${NOVETEST_INSTALL_PREFIX:-${HOME}/.local/bin}"
 
