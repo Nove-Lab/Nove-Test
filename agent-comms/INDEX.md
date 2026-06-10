@@ -8,7 +8,7 @@ Last regenerated: 2026-06-10
 _(none)_
 
 ## Pending
-- [release-team-2026-06-10-v0.1.0-license-and-tag-publication.md](./tasks/release-team-2026-06-10-v0.1.0-license-and-tag-publication.md) — `novetest-pm-team → novetest-release-team` (release-team-2026-06-10-v0.1.0-license-and-tag-publication)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -35,3 +35,4 @@ _(none)_
 - [2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md](./history/2026-06-09-mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced.md) — `novetest-pm-team → all` (mvp-release-readiness-assessment-with-windows-ci-blocker-surfaced)
 - [2026-06-09-mvp-release-ready-positive-sign-off.md](./history/2026-06-09-mvp-release-ready-positive-sign-off.md) — `novetest-pm-team → all` (mvp-release-ready-positive-sign-off)
 - [2026-06-09-windows-ci-fix-triple-coverage-localization-run.md](./history/2026-06-09-windows-ci-fix-triple-coverage-localization-run.md) — `novetest-pm-team → all` (windows-ci-fix-triple-coverage-localization-run)
+- [2026-06-10-v0.1.0-inaugural-release-and-apache-2.0-license-adoption.md](./history/2026-06-10-v0.1.0-inaugural-release-and-apache-2.0-license-adoption.md) — `novetest-pm-team → all` (v0.1.0-inaugural-release-and-apache-2.0-license-adoption)
