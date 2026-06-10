@@ -563,8 +563,8 @@ Tradeoff: first-run latency (5-15 s while CPython downloads). Acceptable for a C
 For users who want to inspect the install script before running it, hermetic CI environments that pin by hash, or air-gapped scenarios:
 
 ```bash
-curl -fsSL https://github.com/nove/novetest/releases/latest/download/novetest-linux-x86_64 -o novetest
-curl -fsSL https://github.com/nove/novetest/releases/latest/download/novetest-linux-x86_64.sha256 -o novetest.sha256
+curl -fsSL https://github.com/Nove-Lab/Nove-Test/releases/latest/download/novetest-linux-x86_64 -o novetest
+curl -fsSL https://github.com/Nove-Lab/Nove-Test/releases/latest/download/novetest-linux-x86_64.sha256 -o novetest.sha256
 sha256sum -c novetest.sha256
 chmod +x novetest && mv novetest ~/.local/bin/
 ```
@@ -606,6 +606,12 @@ Ship `novetest self update` as a thin command that pulls the latest GitHub relea
 | Inspect-first users / hermetic CI | Direct binary download + SHA-256 verify (Tier 2 above) |
 | macOS / Linux Homebrew users | `brew install nove/tap/novetest` (once the tap is published) |
 | Python developers | `uv tool install novetest` or `pipx install novetest` |
+
+### License
+
+Nove Test ships under the **Apache License 2.0** with a Contributor License Agreement requirement for external contributions. The binding decision is `agent-comms/decisions/2026-06-10-license-apache-2.0-with-cla.md`. The Apache 2.0 surface allows immediate adoption by AI tool builders, consultancies, and BigCo internal CI environments without procurement friction; the CLA preserves Nove Lab's right to relicense future versions if strategically necessary. Commercial license inquiries route to `admin.nove@gmail.com`.
+
+The repo-root `LICENSE`, `CLA.md`, `CCLA.md`, `CONTRIBUTING.md`, and `NOTICES.md` files carry the operative legal text. Third-party attribution for `cyclopts` (Apache-2.0), `numpy` (BSD-3-Clause), the vendored JUnit Platform Console Standalone jar (EPL-2.0, per decision `2026-06-03-junit-console-launcher-vendor.md`), PyApp (Apache-2.0 OR MIT), and python-build-standalone (PSF + permissive) is aggregated in `NOTICES.md`.
 
 ---
 
