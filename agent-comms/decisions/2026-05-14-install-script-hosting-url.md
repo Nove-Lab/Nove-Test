@@ -81,3 +81,64 @@ And the binding **brand namespace principle** for the whole product family:
 ## Supersedes
 
 None. First decision on distribution URLs. Resolves Open Question #15.
+
+
+---
+
+## Amendment 2026-06-10 — Interim primary install URL for v0.1.1 launch
+
+**Context**: The 2026-06-10 v0.1.1 launch cycle (first public-facing
+Nove Test release) proceeds before the original rollout step "CEO wires
+DNS + hosting so https://ailovestesting.com/novetest/install.sh
+rewrites/redirects to the repo's scripts/install.sh" has been completed.
+The `ailovestesting.com` domain is registered but homepage hosting +
+path routing are deferred to a later cycle when the marketing/homepage
+team activates.
+
+**Interim policy**: README's primary install surface uses the
+**GitHub raw URL** as a 1:1 functional equivalent:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
+```
+
+This is NOT a policy reversal. The canonical brand URL
+`https://ailovestesting.com/novetest/install.sh` remains the binding
+target per the original Decision §"Decision" + §"Brand namespace
+principle". `scripts/install.sh`'s in-file header keeps citing the
+canonical URL as the "canonical user invocation" — only the README's
+externally-visible primary URL is temporarily the raw GitHub form.
+
+**Why this is safe**:
+
+1. The raw GitHub URL is permanent as long as the repository at
+   `Nove-Lab/Nove-Test` exists on its `main` branch.
+2. `scripts/install.sh`'s URL composition logic (`NOVETEST_INSTALL_BASE_URL`
+   env var + version-resolution machinery) works transparently against
+   either URL.
+3. The transition from raw URL to canonical URL is a single-line
+   README edit; no `install.sh` change, no tag re-cut, no breaking
+   migration.
+
+**Migration plan when DNS is wired** (later CEO-triggered cycle):
+
+1. CEO sets up Cloudflare Page Rules (Free tier, 3 rules included):
+   - URL pattern: `ailovestesting.com/novetest/install.sh`
+   - Setting: Forwarding URL (301 or 302)
+   - Destination: `https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh`
+2. Verify with `curl -fsSL https://ailovestesting.com/novetest/install.sh | head` from a clean host.
+3. PM updates README primary install URL via single-line edit.
+4. (Optional) Pin Page Rule destination to a specific tagged version
+   per the original Decision §"Rollout / Refinement (later, non-blocking)":
+   "pin the redirect target to a released tag of `scripts/install.sh`
+   rather than the `main` branch, so the public install path is
+   immutable per release."
+
+**Status of original §"Rollout / Before MVP launch" step**: STILL
+PENDING (not retired). The interim raw GitHub URL is a stop-gap, not
+a replacement. The canonical brand URL remains the target end state.
+
+The raw GitHub URL remains supported indefinitely as a fallback /
+alternative install path even after the canonical URL is wired —
+similar to how many projects ship multiple equivalent install URLs
+for redundancy and inspect-first transparency.

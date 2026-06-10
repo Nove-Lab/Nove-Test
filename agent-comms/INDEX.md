@@ -8,7 +8,7 @@ Last regenerated: 2026-06-10
 _(none)_
 
 ## Pending
-_(none)_
+- [release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag.md](./tasks/release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag.md) — `novetest-pm-team → novetest-release-team` (release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag)
 
 ## Blocked
 _(none)_
