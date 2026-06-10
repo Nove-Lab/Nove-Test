@@ -8,13 +8,13 @@ Last regenerated: 2026-06-10
 _(none)_
 
 ## Pending
-- [release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag.md](./tasks/release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag.md) — `novetest-pm-team → novetest-release-team` (release-team-2026-06-10-v0.1.1-wheel-version-bump-and-tag)
+- [orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md](./tasks/orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md) — `novetest-pm-team → novetest-orchestration-team` (orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [release-team-2026-06-10-version-source-of-truth-architectural-followup.md](./questions/release-team-2026-06-10-version-source-of-truth-architectural-followup.md) — `novetest-release-team → novetest-pm-team` (release-team-2026-06-10-version-source-of-truth-architectural-followup)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-06-03-coverlet-pertestcoverage-key.md](./decisions/2026-06-03-coverlet-pertestcoverage-key.md) — `novetest-pm-team → all` (coverlet-pertestcoverage-key)
@@ -23,6 +23,7 @@ _(none)_
 - [2026-06-06-adapter-warning-surface-v1-metadata-channel.md](./decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md) — `novetest-pm-team → all` (adapter-warning-surface-v1-metadata-channel)
 - [2026-06-08-equip-and-exercise-default-verification-posture.md](./decisions/2026-06-08-equip-and-exercise-default-verification-posture.md) — `novetest-pm-team → all` (equip-and-exercise-default-verification-posture)
 - [2026-06-10-license-apache-2.0-with-cla.md](./decisions/2026-06-10-license-apache-2.0-with-cla.md) — `novetest-pm-team → all` (license-apache-2.0-with-cla)
+- [2026-06-10-version-source-of-truth-via-importlib-metadata.md](./decisions/2026-06-10-version-source-of-truth-via-importlib-metadata.md) — `novetest-pm-team → all` (version-source-of-truth-via-importlib-metadata)
 
 ## Recent history (last 7 days)
 - [2026-06-03-phase5-complete-replay-engine.md](./history/2026-06-03-phase5-complete-replay-engine.md) — `novetest-pm-team → all` (phase5-complete-replay-engine)
@@ -36,3 +37,4 @@ _(none)_
 - [2026-06-09-mvp-release-ready-positive-sign-off.md](./history/2026-06-09-mvp-release-ready-positive-sign-off.md) — `novetest-pm-team → all` (mvp-release-ready-positive-sign-off)
 - [2026-06-09-windows-ci-fix-triple-coverage-localization-run.md](./history/2026-06-09-windows-ci-fix-triple-coverage-localization-run.md) — `novetest-pm-team → all` (windows-ci-fix-triple-coverage-localization-run)
 - [2026-06-10-v0.1.0-inaugural-release-and-apache-2.0-license-adoption.md](./history/2026-06-10-v0.1.0-inaugural-release-and-apache-2.0-license-adoption.md) — `novetest-pm-team → all` (v0.1.0-inaugural-release-and-apache-2.0-license-adoption)
+- [2026-06-10-v0.1.1-first-public-release-and-version-source-of-truth-followup.md](./history/2026-06-10-v0.1.1-first-public-release-and-version-source-of-truth-followup.md) — `novetest-pm-team → all` (v0.1.1-first-public-release-and-version-source-of-truth-followup)
