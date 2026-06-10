@@ -8,8 +8,7 @@ Last regenerated: 2026-06-10
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md](./tasks/orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md) — `novetest-pm-team → novetest-orchestration-team` (orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration)
-- [orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md](./handoffs/orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration.md) — `novetest-orchestration-team → novetest-main-branch-team` (orchestration-team-2026-06-10-version-source-of-truth-importlib-metadata-migration)
+_(none)_
 
 ## Blocked
 _(none)_
