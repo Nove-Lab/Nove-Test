@@ -14,7 +14,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [release-team-2026-06-10-version-source-of-truth-architectural-followup.md](./questions/release-team-2026-06-10-version-source-of-truth-architectural-followup.md) — `novetest-release-team → novetest-pm-team` (release-team-2026-06-10-version-source-of-truth-architectural-followup)
 
 ## Recent decisions (last 7 days)
 - [2026-06-03-coverlet-pertestcoverage-key.md](./decisions/2026-06-03-coverlet-pertestcoverage-key.md) — `novetest-pm-team → all` (coverlet-pertestcoverage-key)
