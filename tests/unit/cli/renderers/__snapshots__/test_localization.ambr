@@ -1,0 +1,12 @@
+# serializer version: 1
+# name: test_localization_fact_set
+  '''
+  sbfl_per_test · ochiai · 3 entries · confidence=high · run_id=01TESTRUN000000000000000000
+    1. divide@7 in src/calc.py (1.000)
+    2. helper@4 in src/calc.py (0.707)
+    3. tests/test_calc.py:11 (0.000)
+  '''
+# ---
+# name: test_localization_unavailable
+  '— unavailable (no_failed_tests) · run_id=01TESTRUN000000000000000000'
+# ---

@@ -1,0 +1,21 @@
+# serializer version: 1
+# name: test_inspect_mixed_sub_reports
+  '''
+  ✓ 01TESTRUN000000000000000000 · passed · pytest (python) · target=<workspace>
+  
+    coverage      — unavailable (missing-derived-facts)
+    regression    ✓ clean · regressed=0 fixed=0 still_failing=0
+    localization  — unavailable (no_failed_tests)
+    replay        ? unavailable (missing-derived-facts)
+  '''
+# ---
+# name: test_inspect_tombstoned_with_localization
+  '''
+  ✗ 01TESTRUN000000000000000000 · failed · pytest (python) · target=tests/ · tombstoned
+  
+    coverage      — unavailable (missing-derived-facts)
+    regression    — unavailable (no-comparable-baseline)
+    localization  sbfl_per_test · ochiai · 1 entries · confidence=high
+    replay        ? unavailable (missing-derived-facts)
+  '''
+# ---

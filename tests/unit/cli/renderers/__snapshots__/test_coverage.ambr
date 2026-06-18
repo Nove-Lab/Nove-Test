@@ -1,0 +1,13 @@
+# serializer version: 1
+# name: test_coverage_diff
+  '''
+  coverage diff · 01TESTBASELINE00000000000000 → 01TESTRUN000000000000000000
+    80.0% → 90.0% (Δ +10.0%) · files +1/-0/~2
+  '''
+# ---
+# name: test_coverage_show_fact_set
+  '✓ per-test · 10/11 statements (86.7%) · branches 3/4 · run_id=01TESTRUN000000000000000000'
+# ---
+# name: test_coverage_show_unavailable
+  '— unavailable (missing-derived-facts) · run_id=01TESTRUN000000000000000000'
+# ---

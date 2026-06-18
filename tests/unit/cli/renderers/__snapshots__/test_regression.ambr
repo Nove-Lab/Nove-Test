@@ -1,0 +1,16 @@
+# serializer version: 1
+# name: test_regression_compare_clean
+  '''
+  ✓ clean · regressed=0 fixed=0 still_failing=0
+    baseline=01TESTBASELINE00000000000000 target=01TESTRUN000000000000000000
+  '''
+# ---
+# name: test_regression_compare_with_regressions
+  '''
+  ✗ regressions · regressed=2 fixed=1 still_failing=0
+    baseline=01TESTBASELINE00000000000000 target=01TESTRUN000000000000000000
+  '''
+# ---
+# name: test_regression_latest_unavailable
+  '— unavailable (no-comparable-baseline)'
+# ---

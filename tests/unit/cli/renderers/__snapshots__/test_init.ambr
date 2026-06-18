@@ -1,0 +1,14 @@
+# serializer version: 1
+# name: test_init_engine_ready
+  '''
+  ✓ Initialized .novetest/ at /work/.novetest
+    engine readiness: ready — python/pytest 9.0.3
+  '''
+# ---
+# name: test_init_no_engine_detected
+  '''
+  ✓ Initialized .novetest/ at /work/.novetest
+    engine readiness: no-engine — no engine detected
+    issue: no recognized test engine in workspace
+  '''
+# ---
