@@ -14,9 +14,18 @@
 #   - workflow_dispatch (manual; produces unpublished artifacts only)
 #   - push of a tag matching v* (produces a draft GitHub Release)
 #
-# Targets (Phase 0 scope per foundations.md §7):
-#   linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64
-# Windows is a follow-up via `install.ps1` and is NOT a Phase 0 blocker.
+# Targets (Tier 1 per foundations.md §7):
+#   linux-x86_64, linux-aarch64, macos-universal2 (lipo-fused x86_64+arm64),
+#   windows-x86_64.
+# Windows joined Tier 1 on 2026-06-18 (closes delivery-phasing.md Open Q #16);
+# windows-arm64 remains unsupported pending python-build-standalone (§54).
+#
+# All four build cells run under bash — on `windows-latest` that resolves to
+# Git Bash (`C:\Program Files\Git\bin\bash.exe`), which ships real `curl`,
+# `tar`, `sha256sum`, and `cp`. This keeps the four step bodies structurally
+# identical; the only platform-specific divergence is the `matrix.binary_suffix`
+# value (".exe" on Windows, "" elsewhere). The PowerShell-native install path
+# is exercised separately in the `install-ps1-e2e` job below.
 
 name: release-test
 
@@ -55,9 +64,11 @@ jobs:
           - target: linux-x86_64
             runner: ubuntu-latest
             shell: bash
+            binary_suffix: ""
           - target: linux-aarch64
             runner: ubuntu-22.04-arm
             shell: bash
+            binary_suffix: ""
           # Single macOS cell ships a universal2 fat binary covering both
           # Apple Silicon and Intel. We build on macos-latest (arm64, never
           # queues) and lipo-fuse two per-arch PyApp wraps. The macos-13
@@ -68,6 +79,20 @@ jobs:
           - target: macos-universal2
             runner: macos-latest
             shell: bash
+            binary_suffix: ""
+          # Windows x86_64 — added 2026-06-18 closing Open Q #16.
+          # `shell: bash` resolves to Git Bash on windows-latest, giving us
+          # the same POSIX tooling (curl, tar, sha256sum, cp) as the
+          # Linux/macOS cells. Cargo build emits `target/release/pyapp.exe`
+          # on this runner; the `binary_suffix: ".exe"` matrix value
+          # propagates that to every binary-path reference below. The
+          # PowerShell-native end-user install path is validated in the
+          # separate `install-ps1-e2e` job, which runs install.ps1 under
+          # pwsh against the artifact produced by this cell.
+          - target: windows-x86_64
+            runner: windows-latest
+            shell: bash
+            binary_suffix: ".exe"
 
     defaults:
       run:
@@ -139,7 +164,7 @@ jobs:
           export PYAPP_PROJECT_PATH="$wheel"
           cd pyapp-src
           mkdir -p ../out
-          out_path="../out/novetest-${{ matrix.target }}"
+          out_path="../out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }}"
           if [ "${{ matrix.target }}" = "macos-universal2" ]; then
             # PyApp v0.22.0 does not natively ship a universal2 distribution
             # (python-build-standalone publishes per-arch tarballs only). We
@@ -157,8 +182,11 @@ jobs:
             # Sanity check: must print "x86_64 arm64" (order may vary).
             lipo -archs "$out_path"
           else
+            # Linux + Windows: single-target host build. On Windows cargo
+            # emits `target/release/pyapp.exe`; matrix.binary_suffix carries
+            # the ".exe" so both source and destination paths agree.
             cargo build --release
-            cp target/release/pyapp "$out_path"
+            cp "target/release/pyapp${{ matrix.binary_suffix }}" "$out_path"
           fi
           ls -la ../out
 
@@ -166,7 +194,7 @@ jobs:
         run: |
           set -eu
           cd out
-          bin="novetest-${{ matrix.target }}"
+          bin="novetest-${{ matrix.target }}${{ matrix.binary_suffix }}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$bin" > "${bin}.sha256"
           else
@@ -179,16 +207,16 @@ jobs:
       - name: Smoke test the binary (`novetest --version`)
         run: |
           set -eu
-          ./out/novetest-${{ matrix.target }} --version --output json
-          ./out/novetest-${{ matrix.target }} --help --output json | head -c 400
+          ./out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }} --version --output json
+          ./out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }} --help --output json | head -c 400
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: novetest-${{ matrix.target }}
           path: |
-            out/novetest-${{ matrix.target }}
-            out/novetest-${{ matrix.target }}.sha256
+            out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }}
+            out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }}.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -252,11 +280,88 @@ jobs:
         run: |
           if [ -f /tmp/http.pid ]; then kill "$(cat /tmp/http.pid)" || true; fi
 
+  # End-to-end install.ps1 smoke. Parallels install-script-e2e but for the
+  # Windows surface — downloads the just-built windows-x86_64 artifact, serves
+  # it on localhost, runs install.ps1 (clean + idempotent re-install), asserts
+  # `novetest --version` works via the .exe in NOVETEST_INSTALL_PREFIX. This
+  # is the load-bearing PowerShell-native evidence for foundations.md §7's
+  # Tier-1 Windows claim.
+  install-ps1-e2e:
+    name: install.ps1 end-to-end (windows-x86_64)
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download built binary
+        uses: actions/download-artifact@v8
+        with:
+          name: novetest-windows-x86_64
+          path: srv
+
+      - name: Serve binary on localhost
+        run: |
+          New-Item -ItemType Directory -Path "www\dev" -Force | Out-Null
+          Copy-Item "srv\novetest-windows-x86_64.exe"        "www\dev\"
+          Copy-Item "srv\novetest-windows-x86_64.exe.sha256" "www\dev\"
+          Push-Location www
+          # Start Python's stdlib http.server in the background; capture the
+          # PID at an ABSOLUTE path under RUNNER_TEMP so the cleanup step can
+          # find it regardless of its own working directory. `python` is
+          # preinstalled on windows-latest.
+          $proc = Start-Process -FilePath "python" `
+                                -ArgumentList "-m","http.server","8000" `
+                                -WindowStyle Hidden -PassThru
+          Set-Content -Path "$env:RUNNER_TEMP\http.pid" `
+                      -Value $proc.Id -Encoding ascii
+          # Wait until the server is responsive (≤10 s).
+          for ($i = 0; $i -lt 40; $i++) {
+              try {
+                  Invoke-WebRequest -Uri "http://127.0.0.1:8000/dev/novetest-windows-x86_64.exe.sha256" `
+                                    -UseBasicParsing -TimeoutSec 2 | Out-Null
+                  break
+              } catch {
+                  Start-Sleep -Milliseconds 250
+              }
+          }
+          Pop-Location
+
+      - name: Run install.ps1 (clean install)
+        env:
+          NOVETEST_INSTALL_BASE_URL: "http://127.0.0.1:8000"
+          NOVETEST_INSTALL_VERSION: "dev"
+          NOVETEST_INSTALL_PREFIX: ${{ runner.temp }}\novetest-install
+        run: |
+          & .\scripts\install.ps1
+          & "$env:NOVETEST_INSTALL_PREFIX\novetest.exe" --version --output json
+
+      - name: Run install.ps1 again (idempotent upgrade)
+        env:
+          NOVETEST_INSTALL_BASE_URL: "http://127.0.0.1:8000"
+          NOVETEST_INSTALL_VERSION: "dev"
+          NOVETEST_INSTALL_PREFIX: ${{ runner.temp }}\novetest-install
+        run: |
+          & .\scripts\install.ps1
+          & "$env:NOVETEST_INSTALL_PREFIX\novetest.exe" --version --output json
+
+      - name: Stop HTTP server
+        if: always()
+        run: |
+          if (Test-Path "$env:RUNNER_TEMP\http.pid") {
+              $pidValue = (Get-Content "$env:RUNNER_TEMP\http.pid").Trim()
+              if (-not [string]::IsNullOrEmpty($pidValue)) {
+                  Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+              }
+          }
+
   # Draft GitHub Release on tag push. Skipped on workflow_dispatch so manual
   # runs do not pollute the release feed.
   release:
     name: draft GitHub Release
-    needs: [build, install-script-e2e]
+    needs: [build, install-script-e2e, install-ps1-e2e]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

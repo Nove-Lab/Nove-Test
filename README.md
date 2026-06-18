@@ -30,14 +30,28 @@ One line, Linux and macOS:
 curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
 ```
 
-The script detects your OS/arch, downloads a signed binary from the latest GitHub Release, verifies SHA-256, and installs to `~/.local/bin/novetest`. Re-running upgrades in place.
+One line, Windows (PowerShell 5.1+):
+
+```powershell
+irm https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.ps1 | iex
+```
+
+Both scripts detect your OS/arch, download a signed binary from the latest GitHub Release, verify SHA-256, and install to `~/.local/bin/novetest` (Linux/macOS) or `%USERPROFILE%\.local\bin\novetest.exe` (Windows). Re-running upgrades in place.
 
 Inspect-first (recommended):
 
 ```bash
+# Linux / macOS
 curl -fsSL -o install.sh https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh
 less install.sh   # read it
 sh install.sh
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.ps1 -OutFile install.ps1
+Get-Content install.ps1   # read it
+.\install.ps1
 ```
 
 Or download a binary directly:

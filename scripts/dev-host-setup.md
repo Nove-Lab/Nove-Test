@@ -34,15 +34,45 @@ MUST be mirrored here in the same commit.
 
 | OS | Status | Notes |
 |---|---|---|
-| Linux (Ubuntu 22.04+ / WSL2 Ubuntu) | ✅ supported | primary dev target |
-| macOS (12+, Apple Silicon or Intel) | ✅ supported | install commands provided where they differ |
-| Windows native (non-WSL) | ⚠️ untested | dev workflow assumes WSL2; CI matrix covers Windows runners |
+| Linux (Ubuntu 22.04+ / WSL2 Ubuntu)         | ✅ supported                                  | primary dev target |
+| macOS (12+, Apple Silicon or Intel)         | ✅ supported                                  | install commands provided where they differ |
+| Windows native (PowerShell, non-WSL)        | ⚠️ dev: untested · ✅ end-user: supported     | the **product** ships a Windows x86_64 binary + `scripts/install.ps1` (Tier 1 per `foundations.md §7`); the **dev test gate** (`uv run pytest -q tests/`) is not validated on PowerShell-native dev hosts — WSL2 below is the recommended path for dev work |
 
-WSL2 callout: on Windows hosts, install everything **inside** the
-WSL2 Linux distribution, NOT in Windows itself. The `shutil.which()`
-guards check Linux `PATH`; Windows-side binaries (e.g. Windows
-Node.js visible as `/mnt/c/Program Files/nodejs/`) do not satisfy
-them and will leave integration tests skipping.
+WSL2 callout: on Windows hosts that want to contribute code to *this
+repository*, install everything **inside** the WSL2 Linux distribution,
+NOT in Windows itself. The `shutil.which()` guards check Linux `PATH`;
+Windows-side binaries (e.g. Windows Node.js visible as
+`/mnt/c/Program Files/nodejs/`) do not satisfy them and will leave
+integration tests skipping.
+
+### Windows clarification — end user vs dev host
+
+The product (`novetest.exe` single binary) is **supported as a Tier-1
+end-user target** on Windows x86_64 as of 2026-06-18, via
+`release-test.yml`'s `windows-x86_64` build cell + the
+`scripts/install.ps1` one-line installer. End users install and run
+`novetest` natively on PowerShell 5.1+ without WSL — the
+`install-ps1-e2e` CI job is the binding evidence for that surface.
+
+For **development on this repository** (running `uv run pytest`,
+`uv run mypy`, snapshot regeneration, source edits, etc.), WSL2 Ubuntu
+remains the recommended path. Rationale:
+
+1. The `Verify` blocks throughout this file have only been empirically
+   run on Linux / WSL2 / macOS hosts. PowerShell-native dev hosts may
+   surface adapter edge cases (e.g. `shutil.which` guards finding a
+   non-functional Windows-side binary via PATH leak).
+2. CEO does not maintain a Windows-native dev environment; per-toolchain
+   PowerShell recipes are deferred to a future cycle.
+3. `ci.yml`'s `windows-latest × py3.{11,12,13}` matrix cells exercise the
+   full test gate on GitHub-Actions Windows runners. That is the binding
+   evidence for "the product works on Windows", not "the dev environment
+   works on Windows".
+
+If you choose to set up a PowerShell-native dev host anyway, sections 1-6
+below (uv, Node, Go, Rust, Java, .NET) all have Windows-native
+equivalents (`winget`, `scoop`, official installers), but this file does
+not currently prescribe them. PRs welcome.
 
 ---
 
