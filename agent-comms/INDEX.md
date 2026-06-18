@@ -8,8 +8,7 @@ Last regenerated: 2026-06-18
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-06-18-human-text-renderer-cli-text-mode.md](./tasks/orchestration-team-2026-06-18-human-text-renderer-cli-text-mode.md) — `novetest-pm-team → novetest-orchestration-team` (human-text-renderer-cli-text-mode)
-- [release-team-2026-06-18-windows-install-ps1-and-binary-pipeline.md](./tasks/release-team-2026-06-18-windows-install-ps1-and-binary-pipeline.md) — `novetest-pm-team → novetest-release-team` (windows-install-ps1-and-binary-pipeline)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -21,4 +20,5 @@ _(none)_
 _(none)_
 
 ## Recent history (last 7 days)
-_(none)_
+- [2026-06-18-human-text-renderer-cli-text-mode.md](./history/2026-06-18-human-text-renderer-cli-text-mode.md) — `novetest-pm-team → all` (human-text-renderer-cli-text-mode)
+- [2026-06-18-windows-install-ps1-and-binary-pipeline.md](./history/2026-06-18-windows-install-ps1-and-binary-pipeline.md) — `novetest-pm-team → all` (windows-install-ps1-and-binary-pipeline)

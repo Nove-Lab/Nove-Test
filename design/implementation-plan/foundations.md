@@ -546,7 +546,7 @@ What the script does:
 
 Re-running upgrades. Idempotent.
 
-Target platforms (Phase 0 scope): `linux-x86_64`, `linux-aarch64`, `macos-arm64`, `macos-x86_64`. Windows is a follow-up via a parallel `install.ps1`; it is not a Phase 0 blocker.
+Target platforms (Tier 1): `linux-x86_64`, `linux-aarch64`, `macos-universal2` (lipo-fused arm64 + x86_64), `windows-x86_64`. Windows was added on 2026-06-18 (closes Open Q #16; canonical install URL `https://ailovestesting.com/novetest/install.ps1` per the `decisions/2026-05-14-install-script-hosting-url.md` brand-namespace principle, interim raw GitHub URL per Amendment 2026-06-10; `windows-arm64` remains unsupported pending python-build-standalone — see §54).
 
 This is the only path the README headlines and the only path AI agents in onboarding flows are expected to suggest. It is also the path AI coding tools (Cursor, Claude Code, Cline, etc.) can run as a single tool call when a user asks them to set up Nove Test.
 
@@ -554,7 +554,7 @@ This is the only path the README headlines and the only path AI agents in onboar
 
 [PyApp](https://ofek.dev/pyapp/) (by Ofek Lev, Hatch maintainer) wraps a Python wheel into a Rust-built single binary. On first run, it downloads a pinned CPython distribution from `python-build-standalone` into the user's data dir and installs the bundled wheel. Subsequent runs are instant.
 
-Pipeline: GitHub Actions matrix builds wheels with `uv build`, then PyApp wraps the wheel per target. Each release publishes the binaries with sidecar `*.sha256` files via `gh release create`. Total release pipeline ~50 lines of YAML.
+Pipeline: GitHub Actions matrix builds wheels with `uv build`, then PyApp wraps the wheel per target. Each release publishes the binaries with sidecar `*.sha256` files via `gh release create`. Total release pipeline ~50 lines of YAML. As of 2026-06-18 the matrix covers `linux-x86_64`, `linux-aarch64`, `macos-universal2`, and `windows-x86_64`.
 
 Tradeoff: first-run latency (5-15 s while CPython downloads). Acceptable for a CLI installed once. Document in README.
 
@@ -602,7 +602,8 @@ Ship `novetest self update` as a thin command that pulls the latest GitHub relea
 
 | Audience | Command |
 | --- | --- |
-| **Default for everyone (any language SuT)** | `curl -fsSL https://ailovestesting.com/novetest/install.sh \| sh` |
+| **Default for everyone (any language SuT, Linux/macOS)** | `curl -fsSL https://ailovestesting.com/novetest/install.sh \| sh` |
+| **Default for everyone — Windows** | `irm https://ailovestesting.com/novetest/install.ps1 \| iex` |
 | Inspect-first users / hermetic CI | Direct binary download + SHA-256 verify (Tier 2 above) |
 | macOS / Linux Homebrew users | `brew install nove/tap/novetest` (once the tap is published) |
 | Python developers | `uv tool install novetest` or `pipx install novetest` |
