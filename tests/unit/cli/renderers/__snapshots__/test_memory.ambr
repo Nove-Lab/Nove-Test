@@ -1,0 +1,29 @@
+# serializer version: 1
+# name: test_memory_delete
+  '✓ Tombstoned run_id=01TESTRUN000000000000000000'
+# ---
+# name: test_memory_list
+  '''
+  2 runs
+  
+  run_id                       target       status               created_at
+  01TESTRUN000000000000000000  <workspace>  passed               2023-11-14T22:21:40Z
+  01TESTRUN111111111111111111  <workspace>  failed (tombstoned)  2023-11-14T22:13:20Z
+  '''
+# ---
+# name: test_memory_list_empty
+  '0 runs'
+# ---
+# name: test_memory_show
+  '''
+  run_id:     01TESTRUN000000000000000000
+  target:     <workspace>
+  status:     passed
+  engine:     pytest 9.0.3 (python)
+  created:    2023-11-14T22:13:20Z
+  duration:   91ms
+  tests:      collected=3 passed=3 total=3
+  evidence:   coverage=no regression=no localization=no replay=no
+  tombstoned: no
+  '''
+# ---

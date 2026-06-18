@@ -1,0 +1,13 @@
+# serializer version: 1
+# name: test_compare_coverage_unavailable
+  '''
+  regression: ✓ clean · regressed=0 fixed=0 still_failing=0
+  coverage:   — unavailable (missing-derived-facts)
+  '''
+# ---
+# name: test_compare_regression_and_coverage_delta
+  '''
+  regression: ✗ regressions · regressed=1 fixed=0 still_failing=0
+  coverage:   80.0% → 86.7% (Δ +6.7%) · files +1/-0/~1
+  '''
+# ---

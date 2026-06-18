@@ -1,0 +1,10 @@
+# serializer version: 1
+# name: test_replay_inconsistent
+  '✗ inconsistent · 2/5 failed · run_id=01TESTRUN000000000000000000'
+# ---
+# name: test_replay_reproducible
+  '✓ reproducible · 3/3 · run_id=01TESTRUN000000000000000000'
+# ---
+# name: test_replay_unable
+  '? unable_to_replay (no-replayed-runs) · run_id=01TESTRUN000000000000000000'
+# ---

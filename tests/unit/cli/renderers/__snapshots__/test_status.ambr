@@ -1,0 +1,14 @@
+# serializer version: 1
+# name: test_status_empty_store
+  'no runs yet · history: 0 runs'
+# ---
+# name: test_status_with_latest_run
+  '''
+  latest run · 01TESTRUN000000000000000000 · history: 2 runs
+  
+    ✓ coverage      available
+    — regression    unavailable
+    ✓ localization  available
+    — replay        unavailable
+  '''
+# ---

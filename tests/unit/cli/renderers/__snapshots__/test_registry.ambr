@@ -1,0 +1,27 @@
+# serializer version: 1
+# name: test_error_not_implemented_stub
+  '''
+  ✗ future.verb
+    not-implemented: future.verb is not yet implemented
+  '''
+# ---
+# name: test_error_uninitialized
+  '''
+  ✗ status
+    uninitialized: No Project Store found in this directory or any ancestor. Run `novetest init` to create one.
+  '''
+# ---
+# name: test_error_with_install_hint_detail
+  '''
+  ✗ run
+    adapter-engine-missing: pytest is not installed
+    pip install pytest
+  '''
+# ---
+# name: test_warnings_appended_after_body
+  '''
+  — unavailable (no_failed_tests) · run_id=01TESTRUN000000000000000000
+  warnings:
+    ⚠ localization-formula-noop-in-mode: requested --formula='op2' is a no-op in 'failure_proximity' mode
+  '''
+# ---

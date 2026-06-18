@@ -87,11 +87,20 @@ def apply_no_color(mode: OutputMode) -> None:
 
 def emit_envelope(envelope: Envelope, mode: OutputMode, stream: TextIO | None = None) -> None:
     target = stream if stream is not None else sys.stdout
-    payload = envelope.to_dict()
-    if mode == OutputMode.NDJSON:
+    if mode == OutputMode.TEXT:
+        # Deferred import keeps the dependency direction one-way: this module
+        # never imports ``cli/renderers`` at load time; the renderers import
+        # ``Envelope`` from here. ``render_text`` is the renderers package's
+        # only public entry point.
+        from novetest.cli.renderers import render_text
+
+        target.write(render_text(envelope) + "\n")
+    elif mode == OutputMode.NDJSON:
+        payload = envelope.to_dict()
         line = json.dumps(payload, separators=(",", ":"), sort_keys=True)
         target.write(line + "\n")
-    else:
+    else:  # OutputMode.JSON — byte-identical to the pre-renderer behavior.
+        payload = envelope.to_dict()
         text = json.dumps(payload, indent=2, sort_keys=True)
         target.write(text + "\n")
     flush = getattr(target, "flush", None)

@@ -1,0 +1,17 @@
+# serializer version: 1
+# name: test_help
+  '''
+  novetest — AI-first testing orchestration
+  
+  Onboarding:
+    novetest --version  Print CLI identity envelope.
+    novetest init       Initialize a Project Store under .novetest/.
+  
+  Operating:
+    novetest test       Run tests with integrated orchestration.
+    novetest run        Execute a Test Target via the native engine.
+  '''
+# ---
+# name: test_version
+  'novetest 0.1.1 (Python 3.11.9, linux-x86_64)'
+# ---

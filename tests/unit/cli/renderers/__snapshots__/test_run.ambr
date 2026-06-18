@@ -1,0 +1,17 @@
+# serializer version: 1
+# name: test_run_failed_lists_failures
+  '''
+  ✗ failed · 2/3 · run_id=01TESTRUN000000000000000000
+    failed tests:
+      ✗ tests/test_a.py::test_two
+  '''
+# ---
+# name: test_run_passed
+  '✓ passed · 3/3 · run_id=01TESTRUN000000000000000000'
+# ---
+# name: test_run_with_coverage_outcome
+  '''
+  ✓ passed · 2/2 · run_id=01TESTRUN000000000000000000
+    coverage: ✓ per-test · 10/11 statements (86.7%) · branches 3/4
+  '''
+# ---
