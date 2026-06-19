@@ -19,8 +19,9 @@ verified as it evolves — **not** a wrapper around test engines, and **not** a 
 
 ### A2. The message hierarchy (state in this order, everywhere)
 1. **Trust — deterministic & reproducible (first, always).** No LLM in the analysis path; the same
-   inputs always give the same output; every recommendation cites its evidence. Leads, including in
-   the hero.
+   inputs always give the same output; every recommendation cites its evidence. Leads the messaging;
+   in the hero the tension comes first (Line 1) and immediately resolves to trust on the definition
+   line + subhead — trust is never more than one beat away.
 2. **Local & private.** Runs in a per-project folder on the user's machine; no cloud, no account,
    no upload; works offline; no per-use token cost.
 3. **Cloud-grade intelligence, brought local.** Regression detection and fault localization —
@@ -59,14 +60,27 @@ disclaimer is needed.** Never imply novetest is itself an AI/LLM.
 
 ## Part B — The hero
 
+A **three-beat flow**: open with the tension, resolve with the payoff, land on the category. Trust
+pillars ride the definition line + subhead, so the "trust-first" hierarchy still holds (see A2).
+
 - **Eyebrow / badge (small, above or beside the headline):** **"Free & open source"**.
-- **Headline (decided):**
-  **"Accelerate your coding agents with continuous, reproducible, local test intelligence."**
-- **Subhead (carries determinism + no-cloud + trust):**
-  *"No LLM, no cloud — the same result every run, all on your machine. Test intelligence your
-  agents, and you, can trust."*
+- **Line 1 — kicker (the tension):**
+  **"AI writes your code — but it still uses testing engines built for humans."**
+- **Line 2 — headline (the payoff):**
+  **"Accelerate your coding agents with testing infrastructure built for them."**
+- **Line 3 — definition (the category):**
+  **"novetest is a continuous, reproducible, local testing intelligence layer for AI."**
+  (Brand rule: lowercase `novetest`, even sentence-initial.)
+- **Subhead (carries determinism + no-LLM + no-cloud + trust):**
+  *"Deterministic, no LLM in the loop — the same answer every run. No cloud, no account, all on
+  your machine."*
 - **Definition beat (directly under the hero):** the A3 paragraph.
 - **Primary CTA:** **Install** (targets the Get-started section).
+
+*Why the "built for humans" line doesn't contradict "wrap, never replace" (S10):* Line 1 says only
+that the AI *uses* human-era engines — true, and novetest wraps those same engines under the hood.
+Lines 2–3 promise *infrastructure / a layer*, never a replacement engine. Keep the S10 boundary
+visible so the distinction stays airtight.
 
 ---
 
@@ -100,8 +114,9 @@ Order below is the recommended flow. The *presence and content* of each section 
 layout is your call. Copy is draft.
 
 ### S1 — Hero
-See Part B. Must include: the **"Free & open source"** eyebrow, the headline, the trust subhead, the
-"continuous" definition beat, the primary Install CTA, and optionally the inline install command.
+See Part B. Must include: the **"Free & open source"** eyebrow, the three hero beats (kicker →
+headline → definition line), the trust subhead, the "continuous" definition beat, the primary
+Install CTA, and optionally the inline install command.
 
 ### S2 — Trust strip (determinism-first, + open source)
 Reinforce the #1 message immediately. Claims: **"No LLM in the loop"**, **"Deterministic &
@@ -126,8 +141,10 @@ Three tiles:
 it are **Live**. May be visually merged with S6.
 
 ### S4 — The problem
-AI generates/changes code faster than it can be trusted; the inner loop needs verification **now**,
-not 20 minutes later in CI; plain runners throw everything away after pass/fail.
+Echo the hero's gap, then go deeper: **AI writes the code now, but it still tests with engines — and
+test output — built for humans.** AI generates/changes code faster than it can be trusted; the inner
+loop needs verification **now**, not 20 minutes later in CI; and plain runners throw everything away
+after pass/fail instead of handing the agent structured, comparable facts.
 
 ### S5 — How it works (the local loop)
 Show the cycle **Execute → Store → Structure → Compare → Locate → Validate → Recommend** as a fast
@@ -167,7 +184,8 @@ trust — the same answer every time. The human supervises with the exact same f
 ### S10 — Supported ecosystems
 The six engines, each badged — pytest **(Live)**; jest, JUnit 5, go test, cargo test, dotnet test
 **(Building)** — plus the boundary: **"we wrap your engine, never replace it — and we don't install
-it for you."**
+it for you."** (This boundary is load-bearing for the hero: novetest adds the AI-facing
+*infrastructure / layer* on top of the engines you already use — it does not replace them.)
 
 ### S11 — Get started / install
 The one-line install command, **"free to install, free to use — and open source (Apache-2.0),"**
