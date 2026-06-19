@@ -96,14 +96,14 @@ def test_cli_smoke_coverage_absent_emits_envelope_warning(
     coverage_absent_workspace: Path,
 ) -> None:
     """``novetest run --coverage`` against a no-coverlet fixture surfaces the
-    ``engine-misconfigured`` warning at ``envelope.warnings[]`` AND keeps the
-    v1 metadata-channel bridge populated.
+    ``engine-misconfigured`` warning at ``envelope.warnings[]``.
 
-    Backward-compat criterion #2 of the 2026-06-06 decision is the load-
-    bearing assertion: the legacy
-    ``data.memory_entry.run_record.metadata.coverage_unavailable_kind``
-    + ``..._message`` pair MUST still be present alongside the new
-    ``envelope.warnings[]`` entry for one release cycle.
+    Post-2026-06-19 v1-metadata-channel sunset: ``envelope.warnings[]`` is the
+    sole canonical user-visible surface. The v1 metadata bridge keys on
+    ``RunRecord.metadata`` were removed per the 2026-06-19 amendment on
+    ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``;
+    the one-release-cycle backward-compat window closed cleanly with the
+    envelope projection already operational.
     """
 
     _require_dotnet()
@@ -139,13 +139,20 @@ def test_cli_smoke_coverage_absent_emits_envelope_warning(
     assert "coverlet.collector" in coverage_warning["message"]
     assert "PackageReference" in coverage_warning["message"]
 
-    # Backward-compat criterion #2: the v1 metadata-channel bridge MUST
-    # still populate alongside the new envelope.warnings[] projection.
+    # 2026-06-19 sunset proof: the v1 metadata-bridge keys MUST be
+    # absent on ``RunRecord.metadata`` now that envelope.warnings[] is
+    # the sole canonical surface. The other dotnet metadata keys
+    # (``dotnet_sdk_version``, ``xunit_version`` etc.) are unaffected
+    # and may still be present.
     run_record = envelope["data"]["memory_entry"]["run_record"]
     metadata = run_record["metadata"]
-    assert metadata.get("coverage_unavailable_kind") == "coverlet-absent-or-stale"
-    assert metadata.get("coverage_unavailable_message")
-    assert "coverlet.collector" in metadata["coverage_unavailable_message"]
+    bridge_keys_present = [
+        k for k in metadata if k.startswith("coverage_unavailable_")
+    ]
+    assert not bridge_keys_present, (
+        f"v1 metadata bridge keys leaked into envelope despite "
+        f"2026-06-19 sunset: {bridge_keys_present!r}"
+    )
 
 
 async def test_xunit_v3_deferral_emits_envelope_warning_via_adapter(
@@ -234,10 +241,11 @@ async def test_xunit_v3_deferral_emits_envelope_warning_via_adapter(
     assert "xUnit v3" in v3_warning.message
     assert v3_warning.details.get("xunit_major_version") == 3
 
-    # Backward-compat criterion #2: legacy payload["warnings"] still
-    # populated. xunit-v3 doesn't use the metadata bridge (it's a
-    # deferral, not a coverage_unavailable_kind path) — but the
-    # payload bridge stays.
+    # Forensic continuity: the in-process ``payload["warnings"]``
+    # debug surface stays populated for the v3 deferral. xunit-v3 was
+    # never routed through the sunset v1 metadata bridge (it's a
+    # deferral, not a coverage-unavailable path) so the 2026-06-19
+    # sunset has zero effect on this assertion.
     payload_warnings = result.payload.get("warnings", [])
     assert isinstance(payload_warnings, list)
     legacy_matching = [

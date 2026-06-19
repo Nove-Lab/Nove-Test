@@ -68,21 +68,19 @@ The fix has three parts:
    F1b safety-net fires if it then also fails). Placement is ONLY on
    the coverage path so non-coverage runs pay nothing extra.
 
-2. **F1b — envelope-level visibility via metadata.** When
-   ``--coverage`` is requested AND ``_probe_coverlet_version`` returns
-   ``None`` AFTER restore, the adapter surfaces a
-   ``coverage_unavailable_kind`` + ``coverage_unavailable_message`` pair
-   on ``NativeResult.metadata`` so the user-visible envelope at
-   ``data.memory_entry.run_record.metadata`` carries the warning. This
-   is the **v1 bridge channel** ratified by
-   ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``;
-   the same decision queued Option C (the envelope top-level
-   ``warnings`` projection) as the MVP-blocking follow-up. With the
-   2026-06-06 envelope-warnings-projection slice landed, this adapter
-   ALSO emits ``AdapterWarning`` records onto ``NativeResult.warnings``
-   so the envelope's top-level ``warnings`` field carries the same
-   signal at ``envelope.warnings[]``. Both channels are populated for
-   one release cycle per the decision's backward-compat criterion #2.
+2. **F1b — envelope-level visibility via ``NativeResult.warnings``.**
+   When ``--coverage`` is requested AND ``_probe_coverlet_version``
+   returns ``None`` AFTER restore, the adapter appends a
+   ``coverlet-absent-or-stale`` ``AdapterWarning`` to
+   ``NativeResult.warnings``. The orchestration → CLI projection lifts
+   it to the envelope's top-level ``warnings`` field at
+   ``envelope.warnings[]`` (code + message + structured details). This
+   is the canonical post-sunset surface; per the 2026-06-19 amendment
+   to ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``
+   the v1 metadata bridge keys have been removed (the one-release-cycle
+   backward-compat window closed cleanly with the envelope projection
+   already operational). The forensic ``payload["warnings"]`` channel
+   is kept for in-process debug; it does NOT propagate to the envelope.
 
 3. **F1c — integration test pins the fresh-fixture reproducer.**
    ``test_coverage_run_on_fresh_fixture_with_no_prior_restore`` in
@@ -369,18 +367,17 @@ async def run_xunit(
     # or the aggregate template (degraded), and surfaces a warning when
     # the user's resolved Coverlet is below floor or absent.
     #
-    # Hotfix #1 F1b — metadata-level safety-net for the "probe returned
-    # None despite coverage requested" path. Surfaced via
-    # ``metadata["coverage_unavailable_kind"]`` + ``["..._message"]`` so
-    # the user-visible envelope at
-    # ``data.memory_entry.run_record.metadata`` carries the warning.
-    # ``payload["warnings"]`` is kept for forensic continuity but does
-    # NOT propagate to the envelope today (the normalizer only lifts
-    # ``metadata`` + ``artifact_paths`` — see normalizer.py line 80-114).
+    # Hotfix #1 F1b — envelope-level safety-net for the "probe returned
+    # None despite coverage requested" path. The ``AdapterWarning``
+    # emitted into ``result_warnings`` below surfaces via the
+    # orchestration → CLI projection at ``envelope.warnings[]`` (code +
+    # message + structured details). The v1 metadata bridge keys were
+    # removed in the 2026-06-19 sunset slice; the envelope warning is
+    # now the sole user-visible surface. ``payload["warnings"]`` is
+    # kept for forensic continuity but does NOT propagate to the
+    # envelope.
     coverlet_version: tuple[int, int, int] | None = None
     coverlet_mode: str = "aggregate"  # "per-test" or "aggregate"; only used when collect_coverage
-    coverage_unavailable_kind: str | None = None
-    coverage_unavailable_message: str | None = None
     if collect_coverage and not is_xunit_v3:
         # Hotfix #1 F1a — Run `dotnet restore <csproj>` BEFORE the
         # Coverlet version probe. The probe uses
@@ -432,29 +429,18 @@ async def run_xunit(
                     },
                 )
             )
-            # F1b safety-net: surface to metadata so the warning reaches
-            # the envelope at data.memory_entry.run_record.metadata.
-            # Triggers ONLY when restore happened (per F1a above) but
-            # the probe STILL returned None — i.e. genuine
-            # "coverlet.collector not in user's package graph" OR a
-            # rarer "restore failed silently AND no prior obj/ existed"
-            # case. Both are user-actionable; the message names both.
-            # Per decision 2026-06-06 §"Acceptance criteria for Option C
-            # slice" criterion #2 — the metadata channel stays as the
-            # backward-compat bridge for one release cycle, populated in
-            # lockstep with the envelope channel above.
-            coverage_unavailable_kind = "coverlet-absent-or-stale"
-            coverage_unavailable_message = (
-                "novetest run --coverage was requested but "
-                "coverlet.collector could not be detected in the "
-                "project's package graph after `dotnet restore`. The "
-                "run executed WITHOUT coverage collection. To enable "
-                "coverage: add <PackageReference Include=\""
-                "coverlet.collector\" Version=\"6.0.2\" /> (or later "
-                "6.0.x) to your test .csproj. If the package IS "
-                "declared and this warning persists, check the "
-                "stderr.log artifact for `dotnet restore` errors."
-            )
+            # F1b safety-net: the ``AdapterWarning`` appended to
+            # ``result_warnings`` above is the sole envelope-bound
+            # surface (lifted to ``envelope.warnings[]`` by the
+            # orchestration → CLI projection). Triggers ONLY when
+            # restore happened (per F1a above) but the probe STILL
+            # returned None — i.e. genuine "coverlet.collector not in
+            # user's package graph" OR a rarer "restore failed silently
+            # AND no prior obj/ existed" case. Both are user-actionable;
+            # the warning message names both. The v1 metadata bridge
+            # keys were removed by the 2026-06-19 sunset slice — see
+            # the 2026-06-19 amendment on
+            # ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``.
         elif coverlet_version < COVERLET_FLOOR_VERSION:
             coverlet_below_msg = (
                 f"detected coverlet.collector "
@@ -616,18 +602,15 @@ async def run_xunit(
     if coverage_mapping_granularity is not None:
         metadata["coverage_mapping_granularity"] = coverage_mapping_granularity
     metadata["dotnet_sdk_version"] = dotnet_version_str or ""
-    # Hotfix #1 F1b — surface the coverage-unavailable warning into
-    # metadata. The pair {coverage_unavailable_kind, coverage_unavailable_message}
-    # reaches the user via the CLI envelope at
-    # ``data.memory_entry.run_record.metadata`` (the normalizer lifts
-    # NativeResult.metadata onto RunRecord.metadata; see
-    # normalizer.py:97-98). Reserved-key guard there allows arbitrary
-    # non-``native_exit_code`` keys, so this is safe. Both keys are
-    # absent on the happy path (Coverlet present + version ≥ floor).
-    if coverage_unavailable_kind is not None:
-        metadata["coverage_unavailable_kind"] = coverage_unavailable_kind
-    if coverage_unavailable_message is not None:
-        metadata["coverage_unavailable_message"] = coverage_unavailable_message
+    # Hotfix #1 F1b's user-visible surface is the ``AdapterWarning`` that
+    # the orchestration → CLI projection lifts to ``envelope.warnings[]``
+    # (see the emit site above on the ``coverlet_version is None``
+    # branch). The v1 metadata bridge keys were removed in the
+    # 2026-06-19 sunset slice — they were the one-release-cycle
+    # backward-compat bridge introduced by
+    # ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``
+    # (see the 2026-06-19 amendment). Envelope warnings are now the
+    # canonical, single surface.
 
     return NativeResult(
         engine_name=ENGINE_NAME,
