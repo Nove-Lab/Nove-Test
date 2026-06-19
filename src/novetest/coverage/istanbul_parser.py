@@ -52,8 +52,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from novetest.coverage._paths import to_workspace_relative_posix
 from novetest.coverage.parser import CoverageJsonParseError
+from novetest.utils.path_utils import to_workspace_relative_posix
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
     CoverageSummary,

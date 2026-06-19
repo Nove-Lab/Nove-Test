@@ -38,7 +38,6 @@ nf, np)`` interface.
 
 from __future__ import annotations
 
-import os
 import re
 import time
 from collections import defaultdict
@@ -54,6 +53,7 @@ from novetest.models.localization_finding import (
 )
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_record import RunRecord
+from novetest.utils.path_utils import to_workspace_relative_posix
 
 
 # FLUCCS-style regression-reweighting boost factor (Sohn & Yoo, ISSTA 2017).
@@ -574,11 +574,15 @@ def _normalize_to_workspace_relative(
     pre-fix the helper used bare ``str(rel)`` which on Windows emits the
     ``WindowsPath`` backslash form (``'src\\foo.py'``) — incompatible
     with the POSIX envelope shape the other Localization modes produce.
-    Post-fix ``rel.as_posix()`` normalizes to ``'src/foo.py'`` across
-    OSes. The cross-drive ValueError branch is also defensively handled
-    via ``os.path.relpath`` — though the ``_is_outside_workspace`` gate
-    catches the same case upstream, the fallback keeps the helper
-    robust against future ``pathlib`` semantics drift.
+    Post-fix the inside-branch delegates to the shared
+    :func:`novetest.utils.path_utils.to_workspace_relative_posix`, which
+    encapsulates the three-step ``relative_to → os.path.relpath →
+    drive-stripped POSIX`` resolution. The shared utility's step 2/3
+    fallback chain absorbs the ``Path.relative_to`` cross-drive
+    ValueError that the inline implementation handled via
+    ``os.path.relpath`` defensively (the ``_is_outside_workspace`` gate
+    catches the same case upstream; the fallback remains as
+    defense-in-depth against future ``pathlib`` semantics drift).
 
     Paths OUTSIDE the workspace (e.g. ``/usr/lib/python/.../stdlib.py``
     in pytest tracebacks, ``/rustc/<hash>/.../panicking.rs`` frames in
@@ -586,10 +590,15 @@ def _normalize_to_workspace_relative(
     against a ``D:\\workspace``) are left absolute — they cannot be
     made workspace-relative meaningfully and surface as an obvious "not
     your code" cue to consumers. This is the Defect-3 defensive posture
-    from 2026-05-31, preserved unchanged through this Windows fix; the
+    from 2026-05-31, preserved unchanged; the
     failure_proximity mode does NOT have an analogous covered-files
     intersection filter (which aggregate mode uses), so the absolute
-    form is the next-best disambiguation signal.
+    form is the next-best disambiguation signal. This "outside paths
+    stay absolute" rule is a Localization-specific POLICY layered on
+    TOP of the shared path utility — the shared utility itself always
+    returns a relative form; the policy lives here (the
+    :func:`_is_outside_workspace` gate) because it expresses Localization's
+    semantic preference, not a path-utility behavior.
 
     Note: this helper does NOT call ``Path.resolve()`` on either side.
     Symlinks / case-insensitive filesystems / NFS mounts may cause a
@@ -617,25 +626,11 @@ def _normalize_to_workspace_relative(
         # immediately; ``C:/Users/runneradmin/AppData/...`` requires an
         # extra cognitive step.
         return file_path
-    # Inside workspace: compute the workspace-relative form.
-    try:
-        rel = candidate.relative_to(workspace_root)
-    except ValueError:
-        # Defense-in-depth: ``_is_outside_workspace`` said inside but
-        # ``relative_to`` disagrees. Cannot happen under current
-        # ``pathlib`` semantics (the two use identical mechanics), but
-        # we don't want a regression on some future Python release to
-        # bubble up as a ``ValueError`` from this helper. Fall back to
-        # ``os.path.relpath`` which is more permissive about path
-        # relationships (it'll produce ``..``-prefixed results when
-        # needed; failure_proximity does NOT want that, but the
-        # subsequent ``as_posix`` keeps the result well-formed).
-        rel = Path(os.path.relpath(str(candidate), str(workspace_root)))
-    # ``as_posix`` normalizes the separator across OSes:
-    # - On POSIX: no-op (already forward-slash).
-    # - On Windows: ``WindowsPath('src/foo.py').as_posix() == 'src/foo.py'``;
-    #   ``str(WindowsPath('src/foo.py'))`` would yield ``'src\\foo.py'``
-    #   which violates the envelope's POSIX-path contract.
-    return rel.as_posix()
+    # Inside workspace: delegate to the shared utility. The three-step
+    # ``relative_to → os.path.relpath → drive-stripped POSIX`` resolution
+    # is byte-equivalent to the prior inline implementation for every
+    # inside-workspace input, with the same defense-in-depth fallback if
+    # ``_is_outside_workspace`` and ``relative_to`` disagree.
+    return to_workspace_relative_posix(candidate, workspace_root)
 
 

@@ -142,8 +142,8 @@ from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from novetest.coverage._paths import relpath_or_drive_stripped
 from novetest.coverage.parser import CoverageJsonParseError
+from novetest.utils.path_utils import relpath_or_drive_stripped
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
     CoverageSummary,

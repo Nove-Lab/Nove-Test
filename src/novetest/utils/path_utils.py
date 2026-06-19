@@ -1,18 +1,32 @@
-"""Cross-platform path-normalization helpers shared by the coverage parsers.
+"""Project-wide cross-platform workspace-relative path utility.
 
-Internal to the Coverage engine. Centralizes the workspace-relative-POSIX
-relativization logic that the istanbul / lcov / cobertura parsers all
-need, with a Windows cross-drive fallback path that
-``os.path.relpath`` does NOT cover on its own.
+Centralizes the workspace-relative-POSIX relativization logic used
+across the Coverage parsers (istanbul / lcov / cobertura) AND the
+Localization ``failure_proximity`` mode, with a Windows cross-drive
+fallback path that ``os.path.relpath`` does NOT cover on its own.
+
+History
+-------
+
+The utility was originally introduced under ``novetest.coverage._paths``
+by the 2026-06-09 Windows-CI fix triple (Coverage commit ``4110645``).
+Localization independently implemented the same scenario A pattern
+inline (``failure_proximity._normalize_to_workspace_relative``). PM
+disposition #3 of
+``agent-comms/history/2026-06-09-windows-ci-fix-triple-coverage-localization-run.md``
+named the scenario A pattern as the project-wide canonical idiom; this
+module is the centralization step that disposition promised, lifting
+the helpers from Coverage's private namespace to a project-wide
+utility surface (task 2026-06-19 workspace-relpath-utility-promotion).
 
 Why this module exists
 ----------------------
 
 The 2026-06-08 amendment to ``decisions/2026-05-15-coverage-facts-json-layout.md``
 mandates ``not Path(file_path).is_absolute()`` as a universal contract
-for the persisted ``file_path`` field. The three parsers that handle
-absolute native paths (istanbul ``coverage-final.json``, cargo-llvm-cov
-LCOV, Coverlet Cobertura XML) each implemented a local
+for the persisted ``file_path`` field. The three coverage parsers that
+handle absolute native paths (istanbul ``coverage-final.json``,
+cargo-llvm-cov LCOV, Coverlet Cobertura XML) each implemented a local
 ``try relative_to → except: os.path.relpath`` fallback. That pattern
 broke on the Windows CI runner — ``GITHUB_WORKSPACE`` lives on
 ``D:\\...`` while ``runner.temp`` lives on ``C:\\...``, so ANY parser
@@ -42,6 +56,11 @@ Public surface
   Just the step-2/step-3 fallback half. Used by callers (cobertura,
   lcov) that already discriminated "is the path a clean subpath?"
   themselves and only want the outside-workspace half of the logic.
+
+- ``workspace_relpath(path, workspace_root) -> Path``
+  ``Path``-typed convenience wrapper over ``to_workspace_relative_posix``
+  for callers that want a ``Path`` rather than a ``str``. Internally:
+  ``Path(to_workspace_relative_posix(path, workspace_root))``.
 """
 
 from __future__ import annotations
@@ -51,8 +70,9 @@ import re
 from pathlib import Path, PurePath
 
 __all__ = [
-    "to_workspace_relative_posix",
     "relpath_or_drive_stripped",
+    "to_workspace_relative_posix",
+    "workspace_relpath",
 ]
 
 
@@ -109,3 +129,15 @@ def relpath_or_drive_stripped(path: Path, workspace_root: Path) -> str:
         # platform.
         posix = PurePath(path).as_posix()
         return _WINDOWS_DRIVE_PREFIX_RE.sub("", posix).lstrip("/")
+
+
+def workspace_relpath(path: Path, workspace_root: Path) -> Path:
+    """``Path``-typed convenience wrapper over :func:`to_workspace_relative_posix`.
+
+    Equivalent to ``Path(to_workspace_relative_posix(path, workspace_root))``.
+    Callers that want a ``Path`` (e.g. for further path operations like
+    ``.parent`` or ``.with_suffix``) should prefer this; callers that
+    persist the result as a JSON string should prefer the underlying
+    ``to_workspace_relative_posix``.
+    """
+    return Path(to_workspace_relative_posix(path, workspace_root))

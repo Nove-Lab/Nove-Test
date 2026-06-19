@@ -1,16 +1,22 @@
-"""Unit tests for `novetest.coverage._paths`.
+"""Unit tests for `novetest.utils.path_utils`.
 
-Exercises the shared workspace-relativization helper used by the
-istanbul / lcov / cobertura parsers. The Windows cross-drive
-``ValueError`` path is simulated on every platform via monkeypatching
-``os.path.relpath`` so the third (drive-stripped POSIX) step is
-guaranteed to be exercised on the Linux CI host.
+Exercises the project-wide workspace-relativization helpers used by the
+Coverage parsers (istanbul / lcov / cobertura) AND the Localization
+``failure_proximity`` mode. The Windows cross-drive ``ValueError`` path
+is simulated on every platform via monkeypatching ``os.path.relpath``
+so the third (drive-stripped POSIX) step is guaranteed to be exercised
+on the Linux CI host.
 
 Why this matters: the 2026-06-09 Windows-parser-fix slice was triggered
 by 4 RED tests on the ci.yml Windows × Python 3.11/3.12/3.13 matrix.
 Adding Linux-side coverage for the simulated cross-drive case ensures a
 future regression that re-breaks this fallback is caught BEFORE it
-escapes to Windows-only CI.
+escapes to Windows-only CI. The 2026-06-19 promotion lifted the helpers
+from ``novetest.coverage._paths`` to ``novetest.utils.path_utils``
+(charter cross-over per the cycle dispatch task brief); these tests
+were relocated alongside the source move, with a new section
+covering the ``workspace_relpath`` Path-typed wrapper added in the
+promotion cycle.
 """
 
 from __future__ import annotations
@@ -20,9 +26,10 @@ from pathlib import Path
 
 import pytest
 
-from novetest.coverage._paths import (
+from novetest.utils.path_utils import (
     relpath_or_drive_stripped,
     to_workspace_relative_posix,
+    workspace_relpath,
 )
 
 
@@ -134,3 +141,51 @@ def test_result_never_absolute(input_path: str, tmp_path: Path) -> None:
     assert not Path(out).is_absolute(), (
         f"absolute path leaked through: input={input_path!r}, out={out!r}"
     )
+
+
+# --- workspace_relpath: Path-typed wrapper ----------------------------------
+
+
+def test_workspace_relpath_returns_path_typed_clean_subpath(tmp_path: Path) -> None:
+    """``workspace_relpath`` returns a ``Path`` whose POSIX form matches
+    :func:`to_workspace_relative_posix`. Path-typed callers can then chain
+    ``.parent`` / ``.with_suffix`` / etc. on the result without going
+    through ``Path(...)`` themselves."""
+    inside = tmp_path / "src" / "lib.rs"
+    result = workspace_relpath(inside, tmp_path)
+    assert isinstance(result, Path)
+    assert result.as_posix() == "src/lib.rs"
+
+
+def test_workspace_relpath_roundtrips_through_string_form(tmp_path: Path) -> None:
+    """The wrapper is defined as ``Path(to_workspace_relative_posix(...))``;
+    its string form MUST equal the underlying ``str`` function's output
+    for every input across all three resolution steps."""
+    cases = [
+        tmp_path / "README.md",
+        tmp_path.parent / "neighbor" / "x.py",
+    ]
+    for path in cases:
+        as_str = to_workspace_relative_posix(path, tmp_path)
+        wrapped = workspace_relpath(path, tmp_path)
+        assert wrapped.as_posix() == as_str, (
+            f"wrapper diverged from string form: input={path!r}, "
+            f"str={as_str!r}, path={wrapped.as_posix()!r}"
+        )
+
+
+def test_workspace_relpath_drive_stripped_fallback_path_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Path wrapper preserves the drive-stripped POSIX form when the
+    cross-drive fallback engages."""
+
+    def _raising_relpath(path: object, start: object = os.curdir) -> str:  # noqa: ARG001
+        raise ValueError("path is on mount 'D:', start on mount 'C:'")
+
+    monkeypatch.setattr(os.path, "relpath", _raising_relpath)
+    outside = Path("/abs/elsewhere/file.cs")
+    result = workspace_relpath(outside, tmp_path)
+    assert isinstance(result, Path)
+    assert result.as_posix() == "abs/elsewhere/file.cs"
+    assert not result.is_absolute()
