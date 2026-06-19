@@ -1596,9 +1596,15 @@ class TestPreRestore:
         # Probe ran after restore failure (the "pre-existing obj/" tolerance).
         assert "list-json" in call_log
         assert call_log.index("restore") < call_log.index("list-json")
-        # F1b safety-net fired (probe also returned None).
-        assert result.metadata.get("coverage_unavailable_kind") == (
-            "coverlet-absent-or-stale"
+        # F1b safety-net fired (probe also returned None) — surfaces via
+        # NativeResult.warnings → envelope.warnings[] after the
+        # 2026-06-19 v1-metadata-channel sunset.
+        assert any(
+            w.code == WARNING_COVERLET_ABSENT for w in result.warnings
+        ), (
+            f"expected an AdapterWarning with code="
+            f"{WARNING_COVERLET_ABSENT!r}; got warnings="
+            f"{[(w.code, w.message) for w in result.warnings]!r}"
         )
 
     async def test_restore_subprocess_args_match_contract(
@@ -1691,31 +1697,33 @@ class TestPreRestore:
 
 
 class TestEnvelopeSafetyNet:
-    """``metadata["coverage_unavailable_{kind,message}"]`` surfacing for the
-    "probe returned None despite --coverage" path.
+    """``NativeResult.warnings`` surfacing for the "probe returned
+    None despite --coverage" path (post-2026-06-19 v1-sunset).
 
     Pins the F1b safety-net contract: when restore happens but the
-    probe still returns None, the user-visible envelope at
-    ``data.memory_entry.run_record.metadata`` MUST carry both the
-    ``coverage_unavailable_kind`` (machine-readable) and the
-    ``coverage_unavailable_message`` (human-readable). On the happy
-    path (Coverlet present + version ≥ floor) BOTH keys MUST be
-    absent.
+    probe still returns None, the adapter MUST emit an
+    ``AdapterWarning(code="coverlet-absent-or-stale", ...)`` onto
+    ``NativeResult.warnings`` which the orchestration → CLI projection
+    lifts to ``envelope.warnings[]`` (the canonical post-sunset
+    surface). On the happy path (Coverlet present + version ≥ floor)
+    NO ``coverlet-absent-or-stale`` warning is emitted.
 
-    A formal envelope ``warnings`` projection (top-level
-    ``envelope["warnings"]`` field with ``EnvelopeWarning`` shape) is
-    deferred to a follow-up cross-team slice — see
-    ``agent-comms/questions/run-team-2026-06-06-envelope-warnings-
-    projection.md``. The metadata-surface here is the in-charter v1.
+    Pre-2026-06-19 these tests pinned the v1 metadata bridge keys on
+    ``RunRecord.metadata``; the 2026-06-19 amendment to
+    ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``
+    removed those keys now that the envelope projection is operational.
+    The class name is preserved for git-history continuity.
     """
 
-    async def test_metadata_carries_coverage_unavailable_when_probe_returns_none(
+    async def test_warnings_carry_coverage_unavailable_when_probe_returns_none(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Coverage requested + Coverlet truly absent → both metadata
-        keys populated with the expected kind and a non-empty message."""
+        """Coverage requested + Coverlet truly absent → a single
+        ``coverlet-absent-or-stale`` AdapterWarning on
+        ``NativeResult.warnings`` with the expected code, a non-empty
+        actionable message, and structured details (csproj + floor)."""
 
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -1734,27 +1742,39 @@ class TestEnvelopeSafetyNet:
             timeout=60.0,
             collect_coverage=True,
         )
-        # Machine-readable kind — pinned literal for AI-consumer parsers.
-        assert result.metadata.get("coverage_unavailable_kind") == (
-            "coverlet-absent-or-stale"
+        # Machine-readable code — pinned literal for AI-consumer parsers
+        # of envelope.warnings[].code.
+        matching = [
+            w for w in result.warnings if w.code == WARNING_COVERLET_ABSENT
+        ]
+        assert matching, (
+            f"expected exactly one AdapterWarning with code="
+            f"{WARNING_COVERLET_ABSENT!r}; got warnings="
+            f"{[(w.code, w.message) for w in result.warnings]!r}"
         )
-        # Human-readable message — non-empty, mentions both `--coverage`
-        # and `coverlet.collector` so the user can act on it without
-        # reading the source.
-        message = result.metadata.get("coverage_unavailable_message", "")
-        assert message, "coverage_unavailable_message should be non-empty"
-        assert "coverlet.collector" in message
-        assert "--coverage" in message
+        warning = matching[0]
+        # Human-readable message — non-empty, mentions both the
+        # `coverlet.collector` package and the `<PackageReference>`
+        # snippet so the user can act on it without reading the source.
+        assert warning.message, "AdapterWarning.message should be non-empty"
+        assert "coverlet.collector" in warning.message
+        assert "PackageReference" in warning.message
+        # Structured details for programmatic consumers — csproj name
+        # + the coverlet floor version pin (decision §1.1).
+        assert warning.details.get("csproj")
+        assert warning.details.get("coverlet_floor") == _format_version(
+            COVERLET_FLOOR_VERSION
+        )
 
-    async def test_metadata_omits_coverage_unavailable_when_probe_succeeds(
+    async def test_warnings_empty_when_probe_succeeds(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Happy path — Coverlet 6.0.2 present + ≥ floor → BOTH F1b
-        keys absent. We do NOT want a no-op safety-net key on the
-        successful path (would confuse AI parsers / dashboards
-        scanning for the warning)."""
+        """Happy path — Coverlet 6.0.2 present + ≥ floor → NO
+        ``coverlet-absent-or-stale`` warning emitted. We do NOT want a
+        no-op safety-net warning on the successful path (would confuse
+        AI parsers / dashboards scanning ``envelope.warnings[]``)."""
 
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -1779,18 +1799,23 @@ class TestEnvelopeSafetyNet:
             timeout=60.0,
             collect_coverage=True,
         )
-        assert "coverage_unavailable_kind" not in result.metadata
-        assert "coverage_unavailable_message" not in result.metadata
+        # No coverlet-absent warning on the happy path; the
+        # `coverlet_below_floor` and `xunit-v3-coverage-deferred`
+        # warnings are also false on this path → warnings tuple empty.
+        assert result.warnings == (), (
+            f"expected no warnings on happy path; got "
+            f"{[(w.code, w.message) for w in result.warnings]!r}"
+        )
         # Sanity — happy path actually populated coverlet_version.
         assert result.metadata.get("coverlet_version") == "6.0.2"
 
-    async def test_metadata_omits_coverage_unavailable_on_non_coverage_path(
+    async def test_warnings_empty_on_non_coverage_path(
         self,
         dotnet_test_basic_workspace: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Non-coverage runs MUST NOT carry the F1b safety-net keys.
+        """Non-coverage runs MUST NOT emit the F1b safety-net warning.
         The probe path is short-circuited by ``not collect_coverage``,
         so the absence-of-Coverlet path is never reached."""
 
@@ -1802,21 +1827,23 @@ class TestEnvelopeSafetyNet:
         result = await run_xunit(
             target, artifact_dir=tmp_path, timeout=60.0
         )
-        assert "coverage_unavailable_kind" not in result.metadata
-        assert "coverage_unavailable_message" not in result.metadata
+        assert not any(
+            w.code == WARNING_COVERLET_ABSENT for w in result.warnings
+        ), (
+            f"non-coverage path leaked a coverlet-absent warning: "
+            f"{[(w.code, w.message) for w in result.warnings]!r}"
+        )
 
-    async def test_metadata_omits_coverage_unavailable_on_xunit_v3_path(
+    async def test_xunit_v3_path_emits_deferred_warning_not_coverlet_absent(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """xUnit v3 deferral has its OWN payload warning
+        """xUnit v3 deferral has its OWN warning
         (``xunit-v3-coverage-deferred``); the F1b safety-net is for
         the v2-Coverlet-absent path specifically. v3 + --coverage
-        MUST not carry coverage_unavailable_* keys.
-
-        (The Run team may later promote the v3 deferral to a separate
-        metadata key surface; for now it lives in payload only.)"""
+        MUST emit ONLY the v3 warning, NOT a coverlet-absent warning
+        (the probe path is short-circuited by the v3 detection)."""
 
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -1839,11 +1866,19 @@ class TestEnvelopeSafetyNet:
             timeout=60.0,
             collect_coverage=True,
         )
-        assert "coverage_unavailable_kind" not in result.metadata
-        assert "coverage_unavailable_message" not in result.metadata
-        # Sanity — v3 warning IS in payload.
-        warnings_kinds = [w["kind"] for w in result.payload["warnings"]]
-        assert WARNING_XUNIT_V3_DEFERRED in warnings_kinds
+        warning_codes = [w.code for w in result.warnings]
+        # v3 warning is emitted on result.warnings (lifts to envelope).
+        assert WARNING_XUNIT_V3_DEFERRED in warning_codes
+        # And the coverlet-absent warning is NOT — the v3 detection
+        # short-circuits the probe path entirely.
+        assert WARNING_COVERLET_ABSENT not in warning_codes, (
+            f"v3 path leaked a coverlet-absent warning: "
+            f"{warning_codes!r}"
+        )
+        # Forensic continuity — v3 warning ALSO sits in payload (the
+        # in-process debug surface that does NOT propagate to envelope).
+        payload_kinds = [w["kind"] for w in result.payload["warnings"]]
+        assert WARNING_XUNIT_V3_DEFERRED in payload_kinds
 
 
 # ---------------------------------------------------------------------------

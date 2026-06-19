@@ -219,3 +219,77 @@ sunset path.
 - 2026-06-05: .NET adapter original cycle (verdict-failed on D1 silent
   no-op; hotfix #1 closes D1 at the F1a layer and ships F1b as the
   v1 metadata channel surfaced here).
+
+## Amendment 2026-06-19 — v1 metadata channel sunset
+
+CEO-dispatched cycle `run-team-2026-06-19-v1-metadata-channel-sunset.md`
+removes the v1 reserved-key metadata bridge introduced by this
+decision. The one-release-cycle backward-compat window declared by
+§"Acceptance criteria for Option C slice" criterion #2 closed cleanly:
+Option C (envelope-warnings-projection) shipped on 2026-06-07 and has
+been the operational user-visible surface for `.NET` adapter warnings
+since. The metadata bridge keys were the last remaining dual-channel
+artifact; removing them leaves `envelope.warnings[]` as the **single**
+canonical surface for adapter-emitted warnings.
+
+### What changed in this amendment
+
+| Surface | Pre-2026-06-19 | Post-2026-06-19 |
+|---|---|---|
+| `envelope.warnings[]` | populated (Option C, since 2026-06-07) | **populated — sole canonical surface** |
+| `RunRecord.metadata.coverage_unavailable_kind` | populated (v1 bridge) | **REMOVED** |
+| `RunRecord.metadata.coverage_unavailable_message` | populated (v1 bridge) | **REMOVED** |
+| `NativeResult.payload["warnings"]` | populated (forensic) | populated (forensic — in-process debug only; does NOT propagate to envelope) |
+
+### Scope of the amendment
+
+- **`.NET` (dotnet) adapter**: the only adapter that ever wrote the v1
+  bridge keys. The two write sites in `src/novetest/run/adapters/dotnet_adapter.py`
+  (the `coverlet-absent-or-stale` safety-net at the probe-returns-None
+  branch and the deferred metadata assignment at the result-construction
+  site) were removed. The `AdapterWarning` emit on `NativeResult.warnings`
+  was retained unchanged — it is the canonical envelope-bound surface.
+- **JUnit / pytest / jest / gotest / cargo adapters**: never used the
+  v1 bridge convention. Untouched.
+- **`src/novetest/run/normalizer.py`**: unchanged. The metadata-lift
+  pipeline still passes through `NativeResult.metadata` keys verbatim
+  to `RunRecord.metadata`; the dotnet adapter simply stops writing the
+  removed keys.
+- **`src/novetest/orchestration/workflows/run.py`** + **`src/novetest/cli/app.py`**:
+  unchanged. The `NativeResult.warnings → AdapterWarning →
+  EnvelopeWarning` projection is the canonical surface.
+- **§"Reserved metadata keys for v1"** table above is annotated
+  historical-only by this amendment. The convention itself
+  (`{topic}_kind` / `{topic}_message` flat strings under
+  `RunRecord.metadata`) remains available for any future adapter
+  warning that genuinely needs the metadata channel — but new adapter
+  warnings introduced post-2026-06-19 SHOULD use
+  `NativeResult.warnings` exclusively and surface via the envelope
+  projection. The metadata channel is no longer the v1 bridge — it is
+  reserved for adapter metadata that genuinely belongs on
+  `RunRecord.metadata` (engine versions, native exit codes, etc.).
+
+### Backward-compat posture
+
+This amendment **breaks** any external consumer that pinned
+`run_record.metadata.coverage_unavailable_kind` or
+`run_record.metadata.coverage_unavailable_message`. Per the original
+decision's "Schedule for removal: post-MVP" disposition and the
+2026-06-07 Option C operational date, the one-release-cycle window
+has expired. The envelope `warnings[]` surface is the documented
+migration target and has been operational for 12 days; AI consumers
+and dashboards should pin envelope.warnings[].code +
+envelope.warnings[].message + envelope.warnings[].details going
+forward.
+
+### Empirical sunset evidence (handoff `run-team-2026-06-19-v1-metadata-channel-sunset.md`)
+
+- `grep -rn 'coverage_unavailable_kind\|coverage_unavailable_message' src/ tests/` returns zero matches.
+- CLI smoke against the `dotnet-test-basic` fixture (Coverlet absent)
+  with `novetest run --coverage`: envelope contains
+  `warnings[0].code == "engine-misconfigured"` AND
+  `run_record.metadata` has only `dotnet_sdk_version` /
+  `xunit_version` / `native_exit_code` keys (no `coverage_unavailable_*`).
+- `uv run pytest tests/unit tests/integration` → 1300 passed,
+  5 skipped, 0 failed on equipped host (§2.5 binding gate, dotnet SDK +
+  Coverlet 6.0.2 installed).

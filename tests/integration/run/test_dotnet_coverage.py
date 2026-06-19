@@ -256,14 +256,19 @@ async def test_coverage_run_on_fresh_fixture_with_no_prior_restore(
         f"artifact for restore failures."
     )
 
-    # F1b safety-net metadata MUST be absent — Coverlet IS present.
-    assert "coverage_unavailable_kind" not in result.metadata, (
-        f"coverage_unavailable_kind set despite successful probe: "
-        f"{result.metadata.get('coverage_unavailable_kind')!r}. "
+    # F1b safety-net warning MUST be absent — Coverlet IS present.
+    # Post-2026-06-19 v1-metadata-channel sunset: the safety-net surface
+    # is ``NativeResult.warnings`` (envelope.warnings[] after projection),
+    # not the removed ``metadata.coverage_unavailable_*`` keys.
+    coverlet_absent_warnings = [
+        w for w in result.warnings if w.code == "coverlet-absent-or-stale"
+    ]
+    assert not coverlet_absent_warnings, (
+        f"coverlet-absent-or-stale warning emitted despite successful "
+        f"probe: {[(w.code, w.message) for w in coverlet_absent_warnings]!r}. "
         f"The F1b safety-net should only fire when the probe returns "
         f"None after restore."
     )
-    assert "coverage_unavailable_message" not in result.metadata
 
     # Cobertura artifact registered under artifact_dir (the
     # orchestration `.relative_to(store.path)` invariant).
