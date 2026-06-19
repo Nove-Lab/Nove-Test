@@ -6,7 +6,7 @@ prior discussions. Everything required is restated here.
 
 - **Product name:** `novetest` (always lowercase). novetest is **free and open source (Apache-2.0).**
 - **Website domain:** `ailovestesting.com`
-- **This package version:** v3, 2026-06-01 — **ready to ship.**
+- **This package version:** v4, 2026-06-19 — **ready to ship.**
 
 ## What's in this bundle
 
@@ -31,12 +31,14 @@ cargo test, dotnet test). It **wraps** them and adds memory, comparison, fault-l
 recommendation on top — all running **locally** on the user's machine.
 
 ### The problem it solves
-AI coding agents now write and change code faster than anyone can verify it by hand. The
-bottleneck has shifted from *writing* code to *trusting* it. A plain test runner answers "did it
-pass?" and throws everything else away. The deeper analysis (what regressed, where the fault is,
-whether a failure is flaky) usually lives far away in a CI pipeline or a cloud platform — too slow
-and too distant for an AI agent's fast inner loop. novetest closes that gap: testing becomes a
-**cumulative, machine-readable loop that runs locally**, in cadence with the agent's iterations.
+**AI writes the code now — but it still tests with engines, and test output, built for humans.** AI
+coding agents write and change code faster than anyone can verify it by hand. The bottleneck has
+shifted from *writing* code to *trusting* it. A plain test runner answers "did it pass?" and throws
+everything else away. The deeper analysis (what regressed, where the fault is, whether a failure is
+flaky) usually lives far away in a CI pipeline or a cloud platform — too slow and too distant for an
+AI agent's fast inner loop. novetest closes that gap: it adds the **AI-facing testing
+infrastructure** on top of the engines you already use, so testing becomes a **cumulative,
+machine-readable loop that runs locally**, in cadence with the agent's iterations.
 
 ### How it works
 Six engines around one loop: `Execute → Store → Structure → Compare → Locate → Validate → Recommend`.
