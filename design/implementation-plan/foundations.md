@@ -556,7 +556,7 @@ This is the only path the README headlines and the only path AI agents in onboar
 
 Pipeline: GitHub Actions matrix builds wheels with `uv build`, then PyApp wraps the wheel per target. Each release publishes the binaries with sidecar `*.sha256` files via `gh release create`. Total release pipeline ~50 lines of YAML. As of 2026-06-18 the matrix covers `linux-x86_64`, `linux-aarch64`, `macos-universal2`, and `windows-x86_64`.
 
-Tradeoff: first-run latency (5-15 s while CPython downloads). Acceptable for a CLI installed once. Document in README. Empirically pinned by the `first-run-latency-bench` job in `release-test.yml` on every release-test run since 2026-06-19; current measured cold-first-run wall: ~`<X>` s on `ubuntu-latest` GHA runners (CI log: run `<run_id>`). The bench asserts cold ≤ 25 s; sustained breach is a regression signal, not bench-tuning noise.
+Tradeoff: first-run latency (5-15 s while CPython downloads). Acceptable for a CLI installed once. Document in README. Empirically pinned by the `first-run-latency-bench` job in `release-test.yml` on every release-test run since 2026-06-19; current measured cold-first-run wall: ~10 s (cold 10.456 s, warm 0.285 s, delta 10.171 s) on `ubuntu-latest` GHA runners (CI log: run `27832686990` dispatched 2026-06-19). The bench asserts cold ≤ 25 s; sustained breach is a regression signal, not bench-tuning noise.
 
 ### Tier 2 - Direct binary download
 
