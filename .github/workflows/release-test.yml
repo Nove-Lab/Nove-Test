@@ -125,6 +125,26 @@ jobs:
           uv build --wheel --out-dir dist
           ls -la dist
 
+      # Probe that the built wheel ships NOTICES.md (Apache 2.0 §4(d)
+      # attribution surface). Hatchling auto-discovers NOTICES.md as a
+      # PEP 639 license file and packs it under
+      # `*.dist-info/licenses/NOTICES.md`; if a future Hatchling bump
+      # or pyproject.toml edit drops it, this step fails LOUDLY before
+      # the PyApp wrap — much cheaper than discovering the omission
+      # at release-tag publication time. We use `python -m zipfile`
+      # (stdlib) rather than `unzip` because windows-latest's Git Bash
+      # does not ship `unzip`. Closes 2026-06-10 v0.1.0 license cycle's
+      # Manual Test Recommendation §6.
+      - name: Probe wheel NOTICES inclusion
+        run: |
+          set -euo pipefail
+          wheel="$(ls dist/novetest-*-py3-none-any.whl | head -n1)"
+          if ! python -m zipfile -l "$wheel" | grep -E 'NOTICES\.(md|txt)'; then
+            echo "::error::NOTICES.md missing from built wheel — check pyproject.toml::[tool.hatch.build.targets.wheel] include settings"
+            exit 1
+          fi
+          echo "::notice::NOTICES.md present in wheel ($wheel)"
+
       - name: Resolve PyApp version
         id: pyapp
         run: |
@@ -357,11 +377,98 @@ jobs:
               }
           }
 
+  # First-run latency bench. PyApp downloads python-build-standalone
+  # CPython on the binary's FIRST invocation; foundations.md §559
+  # documents this as a "5-15 s" budget acceptable for an install-once
+  # CLI. This job pins the budget empirically — every release-test.yml
+  # run captures (a) cold first-run wall-clock with a freshly purged
+  # PyApp cache, (b) warm second-run wall-clock with the cache primed,
+  # (c) the delta. The cold value must stay ≤ 25 s (15 s upper-budget
+  # + comfortable GHA network-variance margin); a sustained breach is
+  # a regression signal, not bench-tuning noise. Linux-x86_64 only is
+  # sufficient: PyApp's CPython download path is structurally
+  # identical cross-OS modulo the URL template, and the GHA macOS pool
+  # is too slow/queue-prone for a reliable bench.
+  first-run-latency-bench:
+    name: first-run latency bench (linux-x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built binary
+        uses: actions/download-artifact@v8
+        with:
+          name: novetest-linux-x86_64
+          path: bin
+
+      - name: Make binary executable
+        run: chmod +x bin/novetest-linux-x86_64
+
+      - name: Purge any pre-existing PyApp cache (guarantee cold first-run)
+        run: |
+          set -eu
+          # PyApp resolves its data dir via the `dirs` Rust crate, which
+          # on Linux follows the XDG spec: $XDG_DATA_HOME or
+          # ~/.local/share. We nuke every plausible candidate to defend
+          # against future PyApp path-relocation without a workflow
+          # update.
+          rm -rf \
+            "$HOME/.local/share/pyapp" \
+            "${XDG_DATA_HOME:-$HOME/.local/share}/pyapp" \
+            "$HOME/.cache/pyapp" \
+            "${XDG_CACHE_HOME:-$HOME/.cache}/pyapp" \
+            || true
+          # Surface the post-purge state so a future debugger can see
+          # whether any cache directory survived.
+          ls -la "$HOME/.local/share/" 2>/dev/null | head -20 || true
+
+      - name: Time cold first-run (`novetest --version`)
+        id: cold
+        run: |
+          set -eu
+          start=$(date +%s.%N)
+          ./bin/novetest-linux-x86_64 --version --output json > /tmp/cold-out.json
+          end=$(date +%s.%N)
+          wall=$(awk "BEGIN {printf \"%.3f\", $end - $start}")
+          echo "wall=$wall" >> "$GITHUB_OUTPUT"
+          echo "Cold first-run wall-clock: ${wall}s"
+          echo "--- envelope ---"
+          cat /tmp/cold-out.json
+
+      - name: Time warm second-run (`novetest --version`)
+        id: warm
+        run: |
+          set -eu
+          start=$(date +%s.%N)
+          ./bin/novetest-linux-x86_64 --version --output json > /tmp/warm-out.json
+          end=$(date +%s.%N)
+          wall=$(awk "BEGIN {printf \"%.3f\", $end - $start}")
+          echo "wall=$wall" >> "$GITHUB_OUTPUT"
+          echo "Warm second-run wall-clock: ${wall}s"
+
+      - name: Report + assert against foundations.md §559 budget
+        env:
+          COLD: ${{ steps.cold.outputs.wall }}
+          WARM: ${{ steps.warm.outputs.wall }}
+        run: |
+          set -eu
+          delta=$(awk "BEGIN {printf \"%.3f\", $COLD - $WARM}")
+          # ::notice:: shows up in the GHA run summary panel, surfacing
+          # the metric for PM to harvest into foundations.md §559 at
+          # cycle-close without needing to dig into raw logs.
+          echo "::notice title=first-run-latency::cold=${COLD}s warm=${WARM}s delta=${delta}s threshold=25.0s"
+          echo "Cold first-run wall (foundations.md §559 documented: 5-15 s): ${COLD}s"
+          echo "Warm second-run wall: ${WARM}s"
+          echo "Delta (cold - warm, ≈ CPython download cost): ${delta}s"
+          if ! awk "BEGIN {exit !($COLD <= 25.0)}"; then
+            echo "::error title=first-run-latency-regression::Cold first-run wall ${COLD}s exceeded 25 s budget (foundations.md §559 documents 5-15 s; 25 s = upper + GHA network variance margin)"
+            exit 1
+          fi
+
   # Draft GitHub Release on tag push. Skipped on workflow_dispatch so manual
   # runs do not pollute the release feed.
   release:
     name: draft GitHub Release
-    needs: [build, install-script-e2e, install-ps1-e2e]
+    needs: [build, install-script-e2e, install-ps1-e2e, first-run-latency-bench]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
