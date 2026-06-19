@@ -8,9 +8,7 @@ Last regenerated: 2026-06-19
 _(none)_
 
 ## Pending
-- [coverage-team-2026-06-19-workspace-relpath-utility-promotion.md](./tasks/coverage-team-2026-06-19-workspace-relpath-utility-promotion.md) — `novetest-pm-team → novetest-coverage-team` (workspace-relpath-utility-promotion)
-- [release-team-2026-06-19-notices-pip-deps-and-perf-bench-bundle.md](./tasks/release-team-2026-06-19-notices-pip-deps-and-perf-bench-bundle.md) — `novetest-pm-team → novetest-release-team` (notices-pip-deps-and-perf-bench-bundle)
-- [run-team-2026-06-19-v1-metadata-channel-sunset.md](./tasks/run-team-2026-06-19-v1-metadata-channel-sunset.md) — `novetest-pm-team → novetest-run-team` (v1-metadata-channel-sunset)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -24,3 +22,6 @@ _(none)_
 ## Recent history (last 7 days)
 - [2026-06-18-human-text-renderer-cli-text-mode.md](./history/2026-06-18-human-text-renderer-cli-text-mode.md) — `novetest-pm-team → all` (human-text-renderer-cli-text-mode)
 - [2026-06-18-windows-install-ps1-and-binary-pipeline.md](./history/2026-06-18-windows-install-ps1-and-binary-pipeline.md) — `novetest-pm-team → all` (windows-install-ps1-and-binary-pipeline)
+- [2026-06-19-notices-pip-deps-and-perf-bench-bundle.md](./history/2026-06-19-notices-pip-deps-and-perf-bench-bundle.md) — `novetest-pm-team → all` (notices-pip-deps-and-perf-bench-bundle)
+- [2026-06-19-v1-metadata-channel-sunset.md](./history/2026-06-19-v1-metadata-channel-sunset.md) — `novetest-pm-team → all` (v1-metadata-channel-sunset)
+- [2026-06-19-workspace-relpath-utility-promotion.md](./history/2026-06-19-workspace-relpath-utility-promotion.md) — `novetest-pm-team → all` (workspace-relpath-utility-promotion)
