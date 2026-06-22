@@ -89,6 +89,7 @@ _SUBCOMMAND_TOKENS: frozenset[str] = frozenset(
         "inspect",
         "compare",
         "status",
+        "licenses",
         "init",
     }
 )
@@ -350,6 +351,36 @@ def status() -> None:
     view = build_status_view(store)
     _emit_and_exit(
         Envelope(command="status", ok=True, data=view.to_dict()),
+        EXIT_OK,
+    )
+
+
+@app.command(name="licenses")
+def licenses_cmd(
+    *,
+    full: Annotated[bool, Parameter(name=["--full"])] = False,
+) -> None:
+    """List third-party components Nove Test redistributes or links to.
+
+    With ``--full``, the envelope also carries the verbatim NOTICES.md text
+    body in ``data.notices_text`` (the complete attribution document, ~15 KB).
+    Without it, ``data`` carries the compact 5-component summary list only.
+    """
+    from novetest.orchestration.licenses import build_licenses_view
+
+    try:
+        view = build_licenses_view(include_full=full)
+    except LookupError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="licenses",
+                ok=False,
+                errors=(EnvelopeError(code="notices-unavailable", message=str(exc)),),
+            ),
+            EXIT_GENERIC,
+        )
+    _emit_and_exit(
+        Envelope(command="licenses", ok=True, data=view.to_dict()),
         EXIT_OK,
     )
 
