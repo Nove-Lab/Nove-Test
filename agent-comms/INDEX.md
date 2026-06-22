@@ -8,8 +8,7 @@ Last regenerated: 2026-06-22
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-06-22-novetest-licenses-cli-verb.md](./tasks/orchestration-team-2026-06-22-novetest-licenses-cli-verb.md) — `novetest-pm-team → novetest-orchestration-team` (novetest-licenses-cli-verb)
-- [release-team-2026-06-22-v0.1.2-publication.md](./tasks/release-team-2026-06-22-v0.1.2-publication.md) — `novetest-pm-team → novetest-release-team` (v0.1.2-publication)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -26,3 +25,5 @@ _(none)_
 - [2026-06-19-notices-pip-deps-and-perf-bench-bundle.md](./history/2026-06-19-notices-pip-deps-and-perf-bench-bundle.md) — `novetest-pm-team → all` (notices-pip-deps-and-perf-bench-bundle)
 - [2026-06-19-v1-metadata-channel-sunset.md](./history/2026-06-19-v1-metadata-channel-sunset.md) — `novetest-pm-team → all` (v1-metadata-channel-sunset)
 - [2026-06-19-workspace-relpath-utility-promotion.md](./history/2026-06-19-workspace-relpath-utility-promotion.md) — `novetest-pm-team → all` (workspace-relpath-utility-promotion)
+- [2026-06-22-novetest-licenses-cli-verb.md](./history/2026-06-22-novetest-licenses-cli-verb.md) — `novetest-pm-team → all` (novetest-licenses-cli-verb)
+- [2026-06-22-v0.1.2-publication.md](./history/2026-06-22-v0.1.2-publication.md) — `novetest-pm-team → all` (v0.1.2-publication)
