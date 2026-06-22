@@ -31,6 +31,7 @@ from novetest.cli.renderers.coverage import (
 )
 from novetest.cli.renderers.init import render_init
 from novetest.cli.renderers.inspect import render_inspect
+from novetest.cli.renderers.licenses import render_licenses
 from novetest.cli.renderers.localization import (
     render_localization,
     render_localization_latest,
@@ -60,6 +61,7 @@ _RENDERERS: dict[str, Callable[[Envelope], str]] = {
     "inspect": render_inspect,
     "compare": render_compare,
     "replay": render_replay,
+    "licenses": render_licenses,
     "memory.list": render_memory_list,
     "memory.show": render_memory_show,
     "memory.delete": render_memory_delete,
