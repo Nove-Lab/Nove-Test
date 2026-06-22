@@ -8,7 +8,7 @@
 [![CI](https://github.com/Nove-Lab/Nove-Test/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Nove-Lab/Nove-Test/actions/workflows/ci.yml)
 [![Release pipeline](https://github.com/Nove-Lab/Nove-Test/actions/workflows/release-test.yml/badge.svg)](https://github.com/Nove-Lab/Nove-Test/actions/workflows/release-test.yml)
 [![Python](https://img.shields.io/badge/python-3.11_|_3.12_|_3.13-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/version-v0.1.1-success.svg)](https://github.com/Nove-Lab/Nove-Test/releases)
+[![Version](https://img.shields.io/badge/version-v0.1.2-success.svg)](https://github.com/Nove-Lab/Nove-Test/releases)
 
 Stop naive testing — simply running tests and getting pass/fail results.
 
@@ -143,16 +143,15 @@ See [`design/user-doc/`](./design/user-doc/) for the full envelope reference and
 
 ## Status
 
-**v0.1.1 — production-ready for Linux and macOS.**
+**v0.1.2 — production-ready for Linux, macOS, and Windows.**
 
 Stable today:
 - All six native test engines and CLI verbs
 - The `novetest/v1` JSON envelope schema
 - The on-disk Run Record format under `.novetest/`
-- Linux (x86_64, aarch64) and macOS (universal2) distribution
+- Linux (x86_64, aarch64), macOS (universal2), and Windows (x86_64) distribution
 
 Roadmap:
-- **Windows** — native binary and one-line `install.ps1`
 - **Rich TTY renderer** — tables, colors, and single-line summaries for human use
 - **Nove Test Console** — a dashboard for humans to inspect what AI coding agents are doing through Nove Test
 - **Nove Test Team** — team-scale collaborative test-driven development built on the Nove Test engine
