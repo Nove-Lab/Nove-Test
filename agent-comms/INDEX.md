@@ -8,7 +8,7 @@ Last regenerated: 2026-06-23
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-06-23-command-surface-licenses-enumeration.md](./tasks/orchestration-team-2026-06-23-command-surface-licenses-enumeration.md) — `novetest-pm-team → novetest-orchestration-team` (command-surface-licenses-enumeration)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -27,3 +27,4 @@ _(none)_
 - [2026-06-19-workspace-relpath-utility-promotion.md](./history/2026-06-19-workspace-relpath-utility-promotion.md) — `novetest-pm-team → all` (workspace-relpath-utility-promotion)
 - [2026-06-22-novetest-licenses-cli-verb.md](./history/2026-06-22-novetest-licenses-cli-verb.md) — `novetest-pm-team → all` (novetest-licenses-cli-verb)
 - [2026-06-22-v0.1.2-publication.md](./history/2026-06-22-v0.1.2-publication.md) — `novetest-pm-team → all` (v0.1.2-publication)
+- [2026-06-23-command-surface-licenses-enumeration.md](./history/2026-06-23-command-surface-licenses-enumeration.md) — `novetest-pm-team → all` (command-surface-licenses-enumeration)
