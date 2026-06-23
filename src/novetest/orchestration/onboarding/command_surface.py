@@ -142,6 +142,12 @@ _OPERATING: tuple[CommandSpec, ...] = (
         group="replay",
         available_in_phase=5,
     ),
+    CommandSpec(
+        name="novetest licenses",
+        summary="List third-party components Nove Test redistributes or links to.",
+        group="orchestration",
+        available_in_phase=0,
+    ),
 )
 
 
