@@ -108,6 +108,12 @@
           'name': 'novetest replay',
           'summary': 'Re-execute a stored run and classify reproducibility.',
         }),
+        dict({
+          'availableInPhase': 0,
+          'group': 'orchestration',
+          'name': 'novetest licenses',
+          'summary': 'List third-party components Nove Test redistributes or links to.',
+        }),
       ]),
       'schemaVersion': 1,
     }),
