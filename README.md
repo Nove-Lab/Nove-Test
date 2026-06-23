@@ -158,11 +158,12 @@ Roadmap:
 
 ## Documentation
 
-- [**Quick start**](./design/user-doc/quick-start.md) — your first three commands
-- [**Install methods**](./design/user-doc/install.md) — every supported install path
-- [**Language coverage**](./design/user-doc/languages.md) — what each engine does, polyglot patterns
-- [**After your first test**](./design/user-doc/after-test.md) — Run Records, inspect, compare
-- [**Advanced CLI**](./design/user-doc/advanced-cli-memo.md) — output modes, env vars, edge cases
+User documentation ships in two parallel sets — same flow, same verbs, tuned to two audiences:
+
+- **[For humans](./design/user-doc/human/)** — install, quick start, per-language notes, deeper verbs, troubleshooting. Examples are scannable terminal text with glyph summaries (`✓ ✗ — ⚠ ! ? · ↳`).
+- **[For AI agents](./design/user-doc/agent/)** — same flow, same verbs, but every example is a full `novetest/v1` JSON envelope with deterministic routing on `recommendations[].category`.
+
+Start at [`design/user-doc/`](./design/user-doc/) for the audience picker.
 
 ## License
 

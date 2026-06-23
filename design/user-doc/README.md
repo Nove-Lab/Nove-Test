@@ -1,167 +1,61 @@
-# Nove Test — User Document (MVP, happy-case)
+# Nove Test — User Documentation
 
-Nove Test is a **polyglot test orchestration CLI** that wraps your
-native test runner (pytest, jest, `go test`, `cargo nextest`, JUnit,
-xUnit) behind a single AI-friendly command surface. Every command
-emits a structured JSON envelope (`schema: "novetest/v1"`) suitable
-for direct consumption by an AI agent. This document walks an
-AI-agent user from a fresh shell to a complete pass through the
-canonical orchestration workflow.
+Nove Test is a **polyglot test orchestration CLI**. One binary wraps six
+native test engines (pytest, jest, JUnit, go test, dotnet, cargo) behind
+a single command surface. Every verb persists a Run Record, derives
+coverage / regression / fault-localization facts, and synthesizes an
+actionable recommendation — all under one stable `novetest/v1` JSON
+contract.
 
-> **Audience.** AI agents (or humans) who just downloaded the
-> `novetest` binary and want to be productive in the first 5
-> minutes. We cover the happy path; we do not cover every flag.
-> See [advanced-cli-memo.md](./advanced-cli-memo.md) for the list
-> of deeper verbs reserved for the (forthcoming) advanced user
-> document.
+This documentation ships in **two parallel sets** — same flow, same
+verbs, same conceptual model, but tuned to two very different audiences:
 
----
+| If you are … | Read … |
+|---|---|
+| **A human at a terminal**, running `novetest` interactively, watching the output scroll by | [`human/`](./human/README.md) — examples are scannable terminal text (glyph + summary lines), prose is narrative, no JSON parsing required. |
+| **An AI agent**, a CI pipeline, a script, or any caller that consumes the structured envelope | [`agent/`](./agent/README.md) — examples are full JSON envelopes (`schema: "novetest/v1"`), exit-code tables, deterministic routing on `recommendations[].category`. |
 
-## What "MVP happy case" means
+The two sets cover the **same surface in the same order**:
 
-- **Linux + macOS** are first-class targets. Windows install is
-  deferred to post-MVP (the binary builds for Windows but the
-  POSIX install script does not yet have a `install.ps1` sibling;
-  if you are on Windows, the CLI still works once the binary is
-  on your PATH).
-- The **canonical workflow** is a single command:
-  `novetest test [<target>]`. It runs your tests, derives coverage
-  facts, derives a regression delta vs the previous baseline,
-  derives an SBFL-based fault localization ranking, and synthesizes
-  a recommendation — all in one shot, exit code routed to whether
-  your tests passed or failed.
-- All other verbs (`run`, `coverage show`, `regression compare`,
-  `localization`, `replay`, `memory list`, `inspect`, `status`,
-  `compare`) are documented one-line each in
-  [advanced-cli-memo.md](./advanced-cli-memo.md). They are not
-  required for the happy path; `novetest test` already invokes
-  the underlying engines in the right order.
-
----
-
-## Reading order
-
-| # | File | When to read |
+| Topic | Human file | Agent file |
 |---|---|---|
-| 1 | [install.md](./install.md) | First. One curl-pipe-sh and two sanity-check commands. |
-| 2 | [quick-start.md](./quick-start.md) | The 4-step canonical happy path with full envelope examples. Read this end-to-end before anything else. |
-| 3 | [languages.md](./languages.md) | When your project is not Python. Each of pytest / jest / gotest / cargo / junit / xunit has its own short subsection covering toolchain prerequisites and per-language quirks. |
-| 4 | [after-test.md](./after-test.md) | When `novetest test` has returned an envelope and you need to act on the recommendations, dig into a single run, or audit the cache. |
-| 5 | [advanced-cli-memo.md](./advanced-cli-memo.md) | When you suspect you need a deeper verb than the happy path covers. Pointers only; full advanced doc is a separate future deliverable. |
+| Audience + working example | [human/README.md](./human/README.md) | [agent/README.md](./agent/README.md) |
+| Install + sanity checks | [human/install.md](./human/install.md) | [agent/install.md](./agent/install.md) |
+| The 4-step happy path | [human/quick-start.md](./human/quick-start.md) | [agent/quick-start.md](./agent/quick-start.md) |
+| Per-language toolchains | [human/languages.md](./human/languages.md) | [agent/languages.md](./agent/languages.md) |
+| Reading the output, follow-ups | [human/after-test.md](./human/after-test.md) | [agent/after-test.md](./agent/after-test.md) |
+| Deeper verbs (memory, replay, …) | [human/advanced.md](./human/advanced.md) | [agent/advanced.md](./agent/advanced.md) |
+| Common errors + fixes | [human/troubleshooting.md](./human/troubleshooting.md) | [agent/troubleshooting.md](./agent/troubleshooting.md) |
 
 ---
 
-## The working example (used throughout this document)
+## Which mode does Nove Test default to?
 
-To keep the walkthrough concrete, the document uses a single tiny
-project as its running example. All command outputs and envelope
-shapes shown later are what the CLI would emit for this project.
+It auto-detects, and you almost never have to override:
 
-The example is a Python + pytest project, which we use as the
-**language-agnostic baseline**. [languages.md](./languages.md)
-shows the equivalent skeleton for the other five engines.
+| Where you are | Default output mode | How to lock it explicitly |
+|---|---|---|
+| Interactive terminal (stdout is a TTY) | `text` (human surface) | `novetest <verb> --output text` or `NOVETEST_OUTPUT=text` |
+| Piped, redirected, or scripted | `json` (full envelope) | `novetest <verb> --output json` or `NOVETEST_OUTPUT=json` |
+| Streaming many runs (CI log) | (opt-in) `ndjson` | `novetest <verb> --output ndjson` or `NOVETEST_OUTPUT=ndjson` |
 
-### Directory layout
+Precedence (canonical Unix): **explicit `--output` flag > `NOVETEST_OUTPUT` env > TTY auto-detect**.
 
-```
-my-project/
-├── pyproject.toml
-├── my_module/
-│   ├── __init__.py
-│   └── math_utils.py
-└── tests/
-    └── test_math_utils.py
-```
-
-### Files
-
-**`pyproject.toml`**
-
-```toml
-[project]
-name = "my-project"
-version = "0.0.0"
-requires-python = ">=3.11"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
-```
-
-**`my_module/__init__.py`** — empty.
-
-**`my_module/math_utils.py`**
-
-```python
-def add(a: int, b: int) -> int:
-    return a + b
-
-
-def subtract(a: int, b: int) -> int:
-    return a - b
-```
-
-**`tests/test_math_utils.py`**
-
-```python
-from my_module.math_utils import add, subtract
-
-
-def test_add_positive() -> None:
-    assert add(2, 3) == 5
-
-
-def test_add_zero() -> None:
-    assert add(0, 0) == 0
-
-
-def test_subtract() -> None:
-    assert subtract(10, 4) == 6
-```
-
-This gives you a 3-test suite that should pass green out of the
-box. The same flow scales to any pytest-compatible suite (and
-analogously to the other five test engines covered in
-`languages.md`).
-
-### What you need on PATH for this example
-
-- `python` ≥ 3.11
-- `pytest` (e.g. `pip install pytest`) — the `novetest run`
-  engine readiness probe will tell you precisely what is missing
-  if you skip this.
-
-`novetest` itself bundles its own Python runtime via PyApp, so
-the system Python the CLI uses for **its own logic** is the
-bundled one. The PATH-resident `python` and `pytest` above are
-what the CLI shells out to in order to **execute your tests**.
+The JSON / NDJSON byte shape is the **frozen wire contract**. AI agents
+should pin `NOVETEST_OUTPUT=json` once at session start and parse the
+envelope deterministically. Humans get pretty text on a TTY by default
+and can ignore the JSON path entirely.
 
 ---
 
-## What this document explicitly does NOT cover
+## Status
 
-- Producing recommendations from intentionally-failing suites
-  (we only show the all-green happy case).
-- Tuning the SBFL formula (`--formula ochiai|op2|dstar2|tarantula`)
-  or the top-N rank cap.
-- Cross-run comparisons via `compare` or `coverage diff`.
-- Replay-based flakiness investigation (`replay --reruns N`).
-- The CI-friendly `--output ndjson` mode for streaming envelopes.
-- Tombstone-aware history queries via `memory list/show/delete`.
+- **Release**: v0.1.2 (Latest on GitHub Releases)
+- **Platforms**: Linux (x86_64, aarch64), macOS (universal2), Windows (x86_64)
+- **Schema**: `novetest/v1` — frozen
+- **Engines**: pytest · jest · JUnit (Maven + Gradle) · go test · dotnet (xUnit / NUnit / MSTest) · cargo
 
-All of these live in `advanced-cli-memo.md` as one-line pointers
-to the future advanced user document.
-
-### One MVP product gap worth knowing about up front
-
-This document shows every CLI output as a JSON envelope because
-**that is what the CLI actually emits at MVP** — even on a TTY,
-even in the so-called `text` output mode. A true human-rendered
-surface (tables, color, "3/3 tests passed ✓"-style summary lines)
-is **not in scope for MVP** and is queued as a post-MVP polish
-item. AI-agent users are unaffected (the envelope is what you
-want anyway); a human watching the terminal will see
-pretty-printed JSON until the renderer ships. See
-[install.md §2](./install.md#2-sanity-check-1--novetest---version)
-for the precise formatting differences between the three output
-modes.
+See the project [README](../../README.md) for the highest-level pitch
+and roadmap. This documentation focuses on **using** the CLI; design
+internals (recommendation synthesis taxonomy, SBFL math, replay
+classification rules) live under [`design/`](..).
