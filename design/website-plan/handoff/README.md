@@ -6,17 +6,21 @@ prior discussions. Everything required is restated here.
 
 - **Product name:** `novetest` (always lowercase). novetest is **free and open source (Apache-2.0).**
 - **Website domain:** `ailovestesting.com`
-- **This package version:** v4, 2026-06-19 — **ready to ship.**
+- **This package version:** v5, 2026-06-24 — **ready to ship.** Adds the `docs/` Docs page set
+  (see below).
 
 ## What's in this bundle
 
-| File | Contents |
+| File / folder | Contents |
 |---|---|
 | `README.md` (this file) | Product overview, the product family, target audience, the website's goal, constraints, items to confirm. |
-| `site-requirements.md` | The build spec: positioning & messaging, the hero, required page sections (with draft copy), the status-badge system, functional + non-functional requirements. |
+| `site-requirements.md` | The build spec for the landing page: positioning & messaging, the hero, required page sections (with draft copy), the status-badge system, functional + non-functional requirements. |
 | `assets-and-links.md` | Confirmed links, the assets we owe you (with owners), and brand/legal constraints. |
+| `docs/` | The full **Docs page set** (8 markdown files: index + 7 content pages) for `ailovestesting.com/docs`. Same content for human readers and AI agents; divergence is wrapped in a `For human` / `For agent` tab convention specified in `docs/README.md`. |
 
-Read this file first, then `site-requirements.md`, then `assets-and-links.md`.
+Read this file first, then `site-requirements.md`, then `assets-and-links.md`. The Docs page set
+in `docs/` is built on the same product facts as the landing page; the landing page's "Get
+started" CTAs link into `docs/introduction` and `docs/installation`.
 
 ---
 
