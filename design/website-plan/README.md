@@ -9,11 +9,12 @@ is required to build from it.
 
 ## What to hand over — `handoff/`
 
-| File | Contents |
+| File / folder | Contents |
 |---|---|
 | `handoff/README.md` | Product overview, the Novetest family, target audience, the website's goal, brand/legal constraints, optional confirmations. |
-| `handoff/site-requirements.md` | Positioning & messaging, the hero, the page sections (with draft copy), the status-badge system, functional + non-functional requirements. |
+| `handoff/site-requirements.md` | Positioning & messaging, the hero, the landing-page sections (with draft copy), the status-badge system, functional + non-functional requirements. |
 | `handoff/assets-and-links.md` | Confirmed links, the assets we provide (with owners), and constraints. |
+| `handoff/docs/` | The **Docs page set** for `ailovestesting.com/docs` — 8 markdown files (index + 7 content pages: Getting Started, Installation, Quick Start, Supported Languages, Understanding Results, Advanced Usage, Troubleshooting). Single document set with a `For human` / `For agent` tab convention (spec in `handoff/docs/README.md`). |
 
 > Scope note: this describes the *marketing website*, not the novetest product itself. Nothing here
 > changes product code or engineering plans.
