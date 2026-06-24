@@ -1,3 +1,18 @@
+---
+from: novetest-pm-team
+to: all
+type: decision
+status: resolved
+created: 2026-06-24
+slug: reset-verb-and-store-wipe-primitive
+related:
+  - agent-comms/tasks/memory-team-2026-06-24-wipe-project-store-primitive.md
+  - agent-comms/tasks/orchestration-team-2026-06-24-reset-verb.md
+  - design/implementation-plan/delivery-phasing.md
+  - design/interace-contract/memory.md
+  - design/workflows/orchestration.md
+---
+
 # Decision: `novetest reset` verb + Memory store-wipe primitive
 
 - **Date**: 2026-06-24

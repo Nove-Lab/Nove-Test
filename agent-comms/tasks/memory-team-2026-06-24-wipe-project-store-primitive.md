@@ -1,3 +1,15 @@
+---
+from: novetest-pm-team
+to: novetest-memory-team
+type: task
+status: pending
+created: 2026-06-24
+slug: wipe-project-store-primitive
+related:
+  - agent-comms/decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md
+  - agent-comms/tasks/orchestration-team-2026-06-24-reset-verb.md
+---
+
 # Task: Memory — `wipe_project_store()` primitive
 
 - **Owner**: novetest-memory-team
