@@ -1,3 +1,15 @@
+---
+from: novetest-pm-team
+to: novetest-orchestration-team
+type: task
+status: pending
+created: 2026-06-24
+slug: reset-verb
+related:
+  - agent-comms/decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md
+  - agent-comms/tasks/memory-team-2026-06-24-wipe-project-store-primitive.md
+---
+
 # Task: Orchestration — `novetest reset --confirm` verb
 
 - **Owner**: novetest-orchestration-team
