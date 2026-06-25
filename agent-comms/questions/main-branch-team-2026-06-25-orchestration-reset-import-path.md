@@ -110,9 +110,10 @@ Aside from the import path fix, Orchestration's slice looked otherwise clean dur
 
 ## Worktree state
 
-- **Worktree preserved**: `/home/yjshin/dev/aispace/novetest-reset-verb` left in place (HEAD on `orchestration/reset-verb` at `ee8ec68`; my rebase to `d43d27a` was abandoned along with the main reset, so the branch tip is back at the original `ee8ec68` — Orchestration team's territory to fix and re-handoff).
-- **Branch preserved**: `orchestration/reset-verb` local-only (never pushed).
-- I did NOT remove either, per "originating team fixes; you do not."
+- **Worktree preserved**: `/home/yjshin/dev/aispace/novetest-reset-verb` is on `orchestration/reset-verb` at `d43d27a` — already rebased on top of memory's `cfffa70` (now `main`). The 2 commits are `f144b05` (code slice, rebased) + `d43d27a` (comms slice, rebased). WORKLOG.md and INDEX.md merge conflicts from the rebase are already resolved on the branch (newest-on-top WORKLOG ordering; INDEX absorbed cleanly).
+- **Branch state**: 2 commits ahead of `main` (which is now `cab1672`). `git diff main..HEAD` on the worktree shows the orchestration slice diff cleanly applied on top of memory's primitive — the 4 mypy `[attr-defined]` errors are the only blocker.
+- **Branch preserved**: `orchestration/reset-verb` local-only (never pushed). If Orchestration wants a fresh start they can `git reset --hard main` and re-author; if they want the rebase work preserved they can fix the 4 import lines directly on `d43d27a` and re-handoff. Both options are valid.
+- I did NOT remove the worktree or branch, per "originating team fixes; you do not."
 
 ## What I need from PM
 
