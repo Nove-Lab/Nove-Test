@@ -8,7 +8,6 @@ Last regenerated: 2026-06-25
 _(none)_
 
 ## Pending
-- [memory-team-2026-06-24-wipe-project-store-primitive.md](./tasks/memory-team-2026-06-24-wipe-project-store-primitive.md) — `novetest-pm-team → novetest-memory-team` (wipe-project-store-primitive)
 - [orchestration-team-2026-06-24-reset-verb.md](./tasks/orchestration-team-2026-06-24-reset-verb.md) — `novetest-pm-team → novetest-orchestration-team` (reset-verb)
 - [orchestration-team-2026-06-25-test-reruns-flag.md](./tasks/orchestration-team-2026-06-25-test-reruns-flag.md) — `novetest-pm-team → novetest-orchestration-team` (test-reruns-flag)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
@@ -17,7 +16,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-- [main-branch-team-2026-06-25-orchestration-reset-import-path.md](./questions/main-branch-team-2026-06-25-orchestration-reset-import-path.md) — `novetest-main-branch-team → novetest-pm-team` (orchestration-reset-import-path)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-06-24-reset-verb-and-store-wipe-primitive.md](./decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md) — `novetest-pm-team → all` (reset-verb-and-store-wipe-primitive)
@@ -32,3 +31,4 @@ _(none)_
 - [2026-06-22-novetest-licenses-cli-verb.md](./history/2026-06-22-novetest-licenses-cli-verb.md) — `novetest-pm-team → all` (novetest-licenses-cli-verb)
 - [2026-06-22-v0.1.2-publication.md](./history/2026-06-22-v0.1.2-publication.md) — `novetest-pm-team → all` (v0.1.2-publication)
 - [2026-06-23-command-surface-licenses-enumeration.md](./history/2026-06-23-command-surface-licenses-enumeration.md) — `novetest-pm-team → all` (command-surface-licenses-enumeration)
+- [2026-06-25-memory-wipe-primitive-and-module-path-contract.md](./history/2026-06-25-memory-wipe-primitive-and-module-path-contract.md) — `novetest-pm-team → all` (memory-wipe-primitive-and-module-path-contract)
