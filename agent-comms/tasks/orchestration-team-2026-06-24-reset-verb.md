@@ -178,3 +178,59 @@ Do NOT touch any file in `src/novetest/memory/**` (that's Memory's territory).
 - ~200 LOC of unit tests + ~80 LOC of integration test.
 - ~50 LOC of doc update in `orchestration.md`.
 - One short cycle. If this balloons, surface via `agent-comms/questions/` before going wide.
+
+
+---
+
+## Amendment 2026-06-25 — import path correction (kick-back from Main Branch)
+
+**Binding.** This amendment supersedes any contradictory text in the original brief above. Resolves `agent-comms/questions/main-branch-team-2026-06-25-orchestration-reset-import-path.md`.
+
+### Cause
+
+Orchestration's first slice attempt imported the 3 new Memory symbols via the package path:
+
+```python
+from novetest.memory import wipe_project_store, WipeReport, ProjectStoreNotFoundError
+```
+
+Memory deliberately did NOT re-export these symbols through `novetest.memory.__init__.py::__all__`. They are public **at module path only**: `from novetest.memory.project_store import ...`. The original brief §"In scope (1)" line 49 and Memory's handoff §"Public surface added" both pinned the module path; the slice did not honor it. Main Branch's pre-merge `mypy --strict` gate on the combined tree surfaced 4 `[attr-defined]` errors and kicked the slice back; the Memory primitive shipped independently at `cfffa70`.
+
+### Fix (exactly 4 import statement changes in 2 Orchestration-owned files)
+
+```python
+# src/novetest/orchestration/workflows/reset.py:30
+from novetest.memory.project_store import WipeReport
+
+# src/novetest/orchestration/workflows/reset.py:60
+from novetest.memory.project_store import (
+    ProjectStoreNotFoundError,
+    wipe_project_store,
+)
+
+# src/novetest/cli/app.py:276
+from novetest.memory.project_store import ProjectStoreNotFoundError
+```
+
+`src/novetest/cli/app.py:44`'s pre-existing `from novetest.memory import (...)` of long-standing public symbols (`locate_project_store`, etc.) **stays unchanged** — those ARE in `__init__.py::__all__`. Do not bundle that line into the fix.
+
+### Worktree state — both restart options are valid
+
+The existing worktree at `/home/yjshin/dev/aispace/novetest-reset-verb` (branch `orchestration/reset-verb`) is preserved with the original work rebased onto Memory's `cfffa70`:
+- (A) **Fix in place**: edit the 4 lines directly on top of the existing rebased branch (current HEAD `d43d27a`), then re-handoff.
+- (B) **Restart cleanly**: `git reset --hard main` on the worktree, re-author on top of `cfffa70`.
+
+Either is acceptable. (B) is slightly cleaner for commit history; (A) is faster.
+
+### Expected post-fix gates
+
+- `env -u PYTHONPATH uv run mypy --strict src/novetest` → `Success: 114 source files` (matches original handoff prediction).
+- `env -u PYTHONPATH uv run pytest -q tests/integration/cli/test_reset_e2e.py` → de-skips and passes the round-trip e2e.
+
+### Carry-forward items from Orchestration's first handoff (NOT addressed here)
+
+Two items in Orchestration's first handoff §"Decisions made / flagged for PM review" remain flagged for PM and should be re-raised in the new handoff:
+1. `available_in_phase=7` decision on the `reset` verb metadata.
+2. Test path placement under `tests/integration/cli/` vs `tests/integration/orchestration/`.
+
+These are independent of the import-path fix and have no gate dependency.
