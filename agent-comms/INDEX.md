@@ -8,7 +8,6 @@ Last regenerated: 2026-06-25
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-06-24-reset-verb.md](./tasks/orchestration-team-2026-06-24-reset-verb.md) — `novetest-pm-team → novetest-orchestration-team` (reset-verb)
 - [orchestration-team-2026-06-25-test-reruns-flag.md](./tasks/orchestration-team-2026-06-25-test-reruns-flag.md) — `novetest-pm-team → novetest-orchestration-team` (test-reruns-flag)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 
@@ -32,3 +31,4 @@ _(none)_
 - [2026-06-22-v0.1.2-publication.md](./history/2026-06-22-v0.1.2-publication.md) — `novetest-pm-team → all` (v0.1.2-publication)
 - [2026-06-23-command-surface-licenses-enumeration.md](./history/2026-06-23-command-surface-licenses-enumeration.md) — `novetest-pm-team → all` (command-surface-licenses-enumeration)
 - [2026-06-25-memory-wipe-primitive-and-module-path-contract.md](./history/2026-06-25-memory-wipe-primitive-and-module-path-contract.md) — `novetest-pm-team → all` (memory-wipe-primitive-and-module-path-contract)
+- [2026-06-25-novetest-reset-verb-paired-cycle-close.md](./history/2026-06-25-novetest-reset-verb-paired-cycle-close.md) — `novetest-pm-team → all` (novetest-reset-verb-paired-cycle-close)
