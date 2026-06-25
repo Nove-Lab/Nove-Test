@@ -10,15 +10,18 @@ _(none)_
 ## Pending
 - [memory-team-2026-06-24-wipe-project-store-primitive.md](./tasks/memory-team-2026-06-24-wipe-project-store-primitive.md) — `novetest-pm-team → novetest-memory-team` (wipe-project-store-primitive)
 - [orchestration-team-2026-06-24-reset-verb.md](./tasks/orchestration-team-2026-06-24-reset-verb.md) — `novetest-pm-team → novetest-orchestration-team` (reset-verb)
+- [orchestration-team-2026-06-25-test-reruns-flag.md](./tasks/orchestration-team-2026-06-25-test-reruns-flag.md) — `novetest-pm-team → novetest-orchestration-team` (test-reruns-flag)
+- [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-_(none)_
+- [main-branch-team-2026-06-25-orchestration-reset-import-path.md](./questions/main-branch-team-2026-06-25-orchestration-reset-import-path.md) — `novetest-main-branch-team → novetest-pm-team` (orchestration-reset-import-path)
 
 ## Recent decisions (last 7 days)
 - [2026-06-24-reset-verb-and-store-wipe-primitive.md](./decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md) — `novetest-pm-team → all` (reset-verb-and-store-wipe-primitive)
+- [2026-06-25-test-reruns-flag-and-replay-integration.md](./decisions/2026-06-25-test-reruns-flag-and-replay-integration.md) — `novetest-pm-team → all` (test-reruns-flag-and-replay-integration)
 
 ## Recent history (last 7 days)
 - [2026-06-18-human-text-renderer-cli-text-mode.md](./history/2026-06-18-human-text-renderer-cli-text-mode.md) — `novetest-pm-team → all` (human-text-renderer-cli-text-mode)
