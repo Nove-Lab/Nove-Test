@@ -24,31 +24,16 @@ from typing import Any
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
-import novetest.memory as memory_pkg
 import novetest.orchestration.workflows as workflows_pkg
 from novetest.cli import app as app_module
 from novetest.cli.output import OutputMode
 from novetest.memory import ProjectStoreCorruptError
-
-
-class _FakeProjectStoreNotFoundError(RuntimeError):
-    """Stand-in for Memory's not-yet-shipped exception (a ``RuntimeError``)."""
+from novetest.memory.project_store import ProjectStoreNotFoundError
 
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
-
-
-@pytest.fixture(autouse=True)
-def stub_not_found_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the not-yet-shipped ``ProjectStoreNotFoundError`` resolvable."""
-    monkeypatch.setattr(
-        memory_pkg,
-        "ProjectStoreNotFoundError",
-        _FakeProjectStoreNotFoundError,
-        raising=False,
-    )
 
 
 def _captured_envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
@@ -135,7 +120,7 @@ def test_reset_uninitialized_exits_2(
     force_json_mode: None,
 ) -> None:
     async def fake(_workspace: Path) -> Any:
-        raise _FakeProjectStoreNotFoundError("nothing to reset; run `novetest init`")
+        raise ProjectStoreNotFoundError("nothing to reset; run `novetest init`")
 
     _patch_workflow(monkeypatch, fake)
 

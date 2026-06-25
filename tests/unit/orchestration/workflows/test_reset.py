@@ -2,16 +2,18 @@
 
 The workflow composes three collaborators:
 
-1. ``locate_project_store`` (Memory) — walk-up resolution.
-2. ``wipe_project_store`` (Memory, sibling cycle) — destructive primitive.
+1. ``locate_project_store`` (Memory, package path ``novetest.memory``) —
+   walk-up resolution.
+2. ``wipe_project_store`` (Memory, **module path**
+   ``novetest.memory.project_store``) — destructive primitive.
 3. ``initialize_project_workspace`` (the existing ``init`` workflow).
 
 These tests pin the **composition contract**: order (wipe strictly before
 re-init), refusal-before-destruction (no store → raise, nothing wiped), and
-that both sub-results are carried back on ``ResetResult``. The Memory
-primitive lands in a sibling cycle, so it is injected via monkeypatch on
-``novetest.memory`` (``raising=False`` creates the not-yet-shipped symbol);
-the workflow's lazy per-call import reads the patched attribute.
+that both sub-results are carried back on ``ResetResult``. The destructive
+primitive is monkeypatched on its real module so no filesystem mutation
+happens; the not-found path uses Memory's real ``ProjectStoreNotFoundError``
+(the workflow imports it from the module path).
 """
 
 from __future__ import annotations
@@ -24,43 +26,13 @@ from typing import Any
 import pytest
 
 import novetest.memory as memory_pkg
+import novetest.memory.project_store as project_store_mod
 import novetest.orchestration.workflows.reset as reset_module
+from novetest.memory.project_store import ProjectStoreNotFoundError
 from novetest.orchestration.workflows.reset import (
     ResetResult,
     reset_project_workspace,
 )
-
-
-class _FakeProjectStoreNotFoundError(RuntimeError):
-    """Stand-in for Memory's not-yet-shipped exception (a ``RuntimeError``)."""
-
-
-def _install_memory_doubles(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    store: Any,
-    wipe_report: Any,
-    call_log: list[str],
-) -> None:
-    """Wire ``locate_project_store`` / ``wipe_project_store`` /
-    ``ProjectStoreNotFoundError`` onto ``novetest.memory`` for one test."""
-
-    def fake_locate(_workspace: Path) -> Any:
-        call_log.append("locate")
-        return store
-
-    def fake_wipe(_store_path: Path) -> Any:
-        call_log.append("wipe")
-        return wipe_report
-
-    monkeypatch.setattr(memory_pkg, "locate_project_store", fake_locate)
-    monkeypatch.setattr(memory_pkg, "wipe_project_store", fake_wipe, raising=False)
-    monkeypatch.setattr(
-        memory_pkg,
-        "ProjectStoreNotFoundError",
-        _FakeProjectStoreNotFoundError,
-        raising=False,
-    )
 
 
 def test_reset_composes_wipe_then_init(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,14 +48,21 @@ def test_reset_composes_wipe_then_init(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     init_result = SimpleNamespace(store=SimpleNamespace(), engine_readiness=object())
 
-    _install_memory_doubles(
-        monkeypatch, store=store, wipe_report=wipe_report, call_log=call_log
-    )
+    def fake_locate(_workspace: Path) -> Any:
+        call_log.append("locate")
+        return store
+
+    def fake_wipe(_store_path: Path) -> Any:
+        call_log.append("wipe")
+        return wipe_report
 
     async def fake_init(_workspace: Path) -> Any:
         call_log.append("init")
         return init_result
 
+    # locate is on the package path; wipe is on the module path.
+    monkeypatch.setattr(memory_pkg, "locate_project_store", fake_locate)
+    monkeypatch.setattr(project_store_mod, "wipe_project_store", fake_wipe)
     monkeypatch.setattr(reset_module, "initialize_project_workspace", fake_init)
 
     result = asyncio.run(reset_project_workspace(Path("/ws")))
@@ -114,16 +93,10 @@ def test_reset_raises_when_no_store_and_never_wipes(
         raise AssertionError("initialize_project_workspace called on refusal path")
 
     monkeypatch.setattr(memory_pkg, "locate_project_store", fake_locate)
-    monkeypatch.setattr(memory_pkg, "wipe_project_store", must_not_wipe, raising=False)
-    monkeypatch.setattr(
-        memory_pkg,
-        "ProjectStoreNotFoundError",
-        _FakeProjectStoreNotFoundError,
-        raising=False,
-    )
+    monkeypatch.setattr(project_store_mod, "wipe_project_store", must_not_wipe)
     monkeypatch.setattr(reset_module, "initialize_project_workspace", must_not_init)
 
-    with pytest.raises(_FakeProjectStoreNotFoundError) as exc_info:
+    with pytest.raises(ProjectStoreNotFoundError) as exc_info:
         asyncio.run(reset_project_workspace(Path("/ws")))
 
     assert "nothing to reset" in str(exc_info.value)

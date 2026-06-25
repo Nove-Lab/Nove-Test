@@ -6,13 +6,14 @@ existing ``init`` composition, exactly as
 §"Atomicity guarantee" prescribes: locate → refuse-if-absent → wipe →
 re-create skeleton → re-probe engine readiness.
 
-The wipe primitive ships in the sibling Memory cycle
-(``memory-team-2026-06-24-wipe-project-store-primitive``). It is imported
-**lazily inside the function** so this module stays importable while the
-two cycles develop in parallel, and so each call re-reads the current
-``novetest.memory`` attribute (clean per-call monkeypatch isolation in
-unit tests). ``WipeReport`` is referenced only for typing, under
-``TYPE_CHECKING``.
+The wipe primitive is public **at module path only** —
+``novetest.memory.project_store`` (Memory deliberately did not re-export it
+through ``novetest.memory.__init__``). It is imported **lazily inside the
+function** so each call re-reads the current
+``novetest.memory.project_store`` attribute (clean per-call monkeypatch
+isolation in unit tests). ``WipeReport`` is referenced only for typing,
+under ``TYPE_CHECKING``. ``locate_project_store`` stays on the package path
+(it is part of Memory's long-standing ``__init__`` surface).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from novetest.orchestration.workflows.init import (
 )
 
 if TYPE_CHECKING:
-    from novetest.memory import WipeReport
+    from novetest.memory.project_store import WipeReport
 
 
 @dataclass(slots=True, frozen=True)
@@ -57,9 +58,9 @@ async def reset_project_workspace(workspace_path: Path) -> ResetResult:
     atomic-rename guard means the original store is still recoverable.
     """
 
-    from novetest.memory import (
+    from novetest.memory import locate_project_store
+    from novetest.memory.project_store import (
         ProjectStoreNotFoundError,
-        locate_project_store,
         wipe_project_store,
     )
 
