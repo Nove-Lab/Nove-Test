@@ -250,11 +250,11 @@ def reset_cmd(
     a bare ``novetest init``). The wipe is atomic — a corrupt or in-use store
     is left intact and surfaced as an error rather than half-deleted.
     """
-    # The reset workflow + Memory's wipe primitive are imported lazily: the
-    # primitive ships in the sibling Memory cycle, so deferring keeps the CLI
-    # importable during parallel development and reads the current symbol at
-    # call time (clean monkeypatch isolation in unit tests). Mirrors the
-    # ``licenses_cmd`` deferred-import pattern.
+    # The reset workflow + Memory's ``ProjectStoreNotFoundError`` are imported
+    # lazily (reads the current symbol at call time → clean monkeypatch
+    # isolation in unit tests; mirrors the ``licenses_cmd`` pattern). The
+    # exception is on Memory's module path (``novetest.memory.project_store``),
+    # NOT re-exported at the package path.
     if not confirm:
         _emit_and_exit(
             Envelope(
@@ -273,7 +273,7 @@ def reset_cmd(
             EXIT_USAGE,
         )
 
-    from novetest.memory import ProjectStoreNotFoundError
+    from novetest.memory.project_store import ProjectStoreNotFoundError
     from novetest.orchestration.workflows import reset_project_workspace
 
     workspace = Path.cwd()

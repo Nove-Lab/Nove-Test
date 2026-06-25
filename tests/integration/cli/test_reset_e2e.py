@@ -7,30 +7,13 @@ Lifecycle: seed a Project Store with one Run Record → ``novetest reset
 
 The store is seeded directly via the Memory + engine persistence helpers
 (no native test engine needed on the runner), mirroring
-``test_status_inspect_consistency_e2e.py``.
-
-GATED: the destructive ``wipe_project_store`` primitive ships in the
-sibling Memory cycle (``memory-team-2026-06-24-wipe-project-store-
-primitive``). Until it is on ``main``, the ``reset`` subprocess cannot
-complete, so this module is skipped. It auto-activates the instant the
-primitive is importable. PM gates the merge so the round-trip is provable.
+``test_status_inspect_consistency_e2e.py``. The destructive
+``wipe_project_store`` primitive (Memory, landed at ``cfffa70``) is
+exercised for real here — this is the binding round-trip the unit tests
+mock out.
 """
 
 from __future__ import annotations
-
-import novetest.memory
-import pytest
-
-# The destructive round-trip needs Memory's primitive; the confirm-gate test
-# (below) does NOT — it returns before the workflow is ever imported, so it
-# runs now and pins the verb routing + reserved-token registration.
-_requires_wipe_primitive = pytest.mark.skipif(
-    not hasattr(novetest.memory, "wipe_project_store"),
-    reason=(
-        "novetest.memory.wipe_project_store not yet landed "
-        "(sibling cycle memory-team-2026-06-24-wipe-project-store-primitive)"
-    ),
-)
 
 
 def _seed_one_run(workspace) -> None:
@@ -64,7 +47,6 @@ def _seed_one_run(workspace) -> None:
     store_run_evidence(store, record)
 
 
-@_requires_wipe_primitive
 def test_reset_round_trip_wipes_runs_and_reinitializes(isolated_cwd, run_cli) -> None:
     _seed_one_run(isolated_cwd)
 
