@@ -55,6 +55,12 @@ _ONBOARDING: tuple[CommandSpec, ...] = (
         group="onboarding",
         available_in_phase=1,
     ),
+    CommandSpec(
+        name="novetest reset",
+        summary="Wipe the active Project Store and re-initialize (requires --confirm).",
+        group="onboarding",
+        available_in_phase=7,
+    ),
 )
 
 _OPERATING: tuple[CommandSpec, ...] = (

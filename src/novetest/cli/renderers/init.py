@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from novetest.cli.output import Envelope
-from novetest.cli.renderers._format import GLYPH_OK
+from novetest.cli.renderers._format import GLYPH_OK, format_engine_readiness
 
 
 def render_init(envelope: Envelope) -> str:
@@ -22,21 +22,10 @@ def render_init(envelope: Envelope) -> str:
     data = envelope.data
     store_path = data.get("store_path", "?")
     readiness = data.get("engine_readiness", {})
-    state = readiness.get("state", "?")
-    engine = readiness.get("engine")
-    ecosystem = readiness.get("ecosystem")
-    engine_version = readiness.get("engine_version")
-
-    if engine:
-        engine_part = f"{ecosystem}/{engine}"
-        if engine_version:
-            engine_part += f" {engine_version}"
-    else:
-        engine_part = "no engine detected"
 
     lines = [
         f"{GLYPH_OK} Initialized .novetest/ at {store_path}",
-        f"  engine readiness: {state} — {engine_part}",
+        f"  {format_engine_readiness(readiness)}",
     ]
     for issue in readiness.get("issues", []):
         lines.append(f"  issue: {issue}")

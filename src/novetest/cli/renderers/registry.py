@@ -47,6 +47,7 @@ from novetest.cli.renderers.regression import (
     render_regression_latest,
 )
 from novetest.cli.renderers.replay import render_replay
+from novetest.cli.renderers.reset import render_reset
 from novetest.cli.renderers.run import render_run
 from novetest.cli.renderers.status import render_status
 from novetest.cli.renderers.test import render_test
@@ -55,6 +56,7 @@ _RENDERERS: dict[str, Callable[[Envelope], str]] = {
     "version": render_version,
     "help": render_help,
     "init": render_init,
+    "reset": render_reset,
     "test": render_test,
     "run": render_run,
     "status": render_status,

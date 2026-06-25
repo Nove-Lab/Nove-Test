@@ -1,0 +1,37 @@
+# serializer version: 1
+# name: test_reset_happy_path_envelope_snapshot
+  dict({
+    'command': 'reset',
+    'data': dict({
+      'engine_readiness': dict({
+        'ecosystem': 'python',
+        'engine': 'pytest',
+        'engine_version': '8.0.0',
+        'evidence': list([
+          'pyproject.toml',
+        ]),
+        'issues': list([
+        ]),
+        'state': 'ready',
+      }),
+      'initialized_at': 1719215123000,
+      'items_removed': dict({
+        'coverage_facts': 12,
+        'localization_findings': 8,
+        'regression_pairs': 7,
+        'replay_results': 2,
+        'runs': 12,
+        'tombstones': 1,
+      }),
+      'previous_initialized_at': 1717939496000,
+      'store_path': '/ws/.novetest',
+      'store_state': 'ready',
+    }),
+    'errors': list([
+    ]),
+    'ok': True,
+    'schema': 'novetest/v1',
+    'warnings': list([
+    ]),
+  })
+# ---

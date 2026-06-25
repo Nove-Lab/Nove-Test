@@ -17,9 +17,11 @@
 | `novetest -v` / `novetest --version` | `orchestration/report_cli_identity` |
 | `novetest -h` / `novetest --help` | `orchestration/describe_command_surface` |
 | `novetest init` | `orchestration/initialize_project_workspace` |
+| `novetest reset --confirm` | `orchestration/reset_project_workspace` |
 | `report_cli_identity()` | - |
 | `describe_command_surface()` | - |
 | `initialize_project_workspace(workspace_context)` | `memory/create_project_store` -> `run/assess_engine_readiness` |
+| `reset_project_workspace(workspace_context)` | `memory/locate_project_store` -> `memory/wipe_project_store` -> `orchestration/initialize_project_workspace` |
 
 ---
 
@@ -35,6 +37,49 @@
 | `cite_recommendation_evidence(recommendation, supporting_facts)` | - |
 | `evaluate_stage_eligibility(run_reference)` | `coverage/check_coverage_availability` -> `regression/check_regression_availability` -> `localization/check_localization_availability` -> `replay/check_replay_availability` |
 | `build_status_view(run_history)` | `memory/list_run_history` -> `memory/get_memory_entry_availability` -> `coverage/check_coverage_availability` -> `regression/check_regression_availability` -> `localization/check_localization_availability` -> `replay/check_replay_availability` |
+
+---
+
+## Reset
+
+`novetest reset --confirm` replaces the previously documented `rm -rf .novetest && novetest init` "start over" pattern with a first-class, envelope-emitting verb, per decision [`2026-06-24-reset-verb-and-store-wipe-primitive`](../../agent-comms/decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md). It wipes the active Project Store and re-initializes in one operation. It is a setup-class verb, enumerated in the `--help` envelope's `data.onboarding[]` beside `init`.
+
+**Workflow** (`orchestration/reset_project_workspace`):
+
+`memory/locate_project_store` -> `{ found: memory/wipe_project_store -> orchestration/initialize_project_workspace | none: raise ProjectStoreNotFoundError }`
+
+The wipe is atomic per the decision's §"Atomicity guarantee": the live `.novetest/` is renamed to a `.novetest.deleting.<ulid>/` staging path (single `rename(2)`) before removal, then `create_project_store` rebuilds the skeleton and `assess_engine_readiness` re-probes. A crash mid-wipe leaves an "uninitialized" workspace recoverable by a fresh `novetest init`. The destructive `memory/wipe_project_store` primitive is owned by the Memory engine; orchestration only composes it.
+
+**Happy-path envelope** (`command: "reset"`, exit 0):
+
+```json
+{
+  "schema": "novetest/v1",
+  "command": "reset",
+  "ok": true,
+  "data": {
+    "store_path": "/abs/path/.novetest",
+    "store_state": "ready",
+    "previous_initialized_at": 1717939496000,
+    "initialized_at": 1719215123000,
+    "items_removed": { "runs": 12, "tombstones": 1, "coverage_facts": 12, "regression_pairs": 7, "localization_findings": 8, "replay_results": 2 },
+    "engine_readiness": { "...": "identical shape to init's engine_readiness" }
+  },
+  "errors": [],
+  "warnings": []
+}
+```
+
+**Error paths:**
+
+| Trigger | Exit | `errors[0].code` |
+| --- | --- | --- |
+| `--confirm` missing | 2 | `confirm-required` |
+| No `.novetest/` in walk-up | 2 | `uninitialized` |
+| `store.json` unreadable — reset deliberately refuses to wipe a corrupt store | 5 | `store-corrupt` |
+| Filesystem error during wipe (atomic-rename guard leaves the original intact) | 5 | `store-wipe-failed` |
+
+`--confirm` is mandatory: the CLI is agent-first, so an interactive confirmation prompt would break agent invocation; a required flag is the agent-friendly equivalent.
 
 ---
 

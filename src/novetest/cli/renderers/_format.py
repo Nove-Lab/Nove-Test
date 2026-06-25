@@ -15,6 +15,7 @@ kind-discriminated engine-outcome blocks live in ``_outcomes.py``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -82,6 +83,29 @@ def target_label(target_expression: str) -> str:
     """
 
     return target_expression if target_expression else "<workspace>"
+
+
+def format_engine_readiness(readiness: Mapping[str, Any]) -> str:
+    """Shared ``engine readiness: <state> — <engine>`` projection line.
+
+    Both ``render_init`` and ``render_reset`` print the identical engine
+    readiness line — this is the single source of that projection. Returns
+    the line content WITHOUT leading indentation (the caller owns layout).
+    A missing/false engine renders ``no engine detected``; a present engine
+    renders ``<ecosystem>/<engine>`` with an optional `` <version>`` suffix.
+    """
+
+    state = readiness.get("state", "?")
+    engine = readiness.get("engine")
+    ecosystem = readiness.get("ecosystem")
+    engine_version = readiness.get("engine_version")
+    if engine:
+        engine_part = f"{ecosystem}/{engine}"
+        if engine_version:
+            engine_part += f" {engine_version}"
+    else:
+        engine_part = "no engine detected"
+    return f"engine readiness: {state} — {engine_part}"
 
 
 def indent_block(text: str, prefix: str = "  ") -> str:
