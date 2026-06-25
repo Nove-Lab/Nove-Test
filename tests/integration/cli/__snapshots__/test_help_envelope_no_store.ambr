@@ -22,6 +22,12 @@
           'name': 'novetest init',
           'summary': 'Initialize a Project Store under .novetest/ in the current workspace.',
         }),
+        dict({
+          'availableInPhase': 7,
+          'group': 'onboarding',
+          'name': 'novetest reset',
+          'summary': 'Wipe the active Project Store and re-initialize (requires --confirm).',
+        }),
       ]),
       'operating': list([
         dict({

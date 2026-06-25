@@ -91,6 +91,7 @@ _SUBCOMMAND_TOKENS: frozenset[str] = frozenset(
         "status",
         "licenses",
         "init",
+        "reset",
     }
 )
 
@@ -235,6 +236,86 @@ def init() -> None:
         "engine_readiness": _readiness_payload(result.engine_readiness),
     }
     _emit_and_exit(Envelope(command="init", ok=True, data=data), EXIT_OK)
+
+
+@app.command(name="reset")
+def reset_cmd(
+    *,
+    confirm: Annotated[bool, Parameter(name=["--confirm"])] = False,
+) -> None:
+    """Wipe the active Project Store and re-initialize. Requires ``--confirm``.
+
+    Destructive: removes all Run Records, tombstones, and derived engine
+    facts under ``.novetest/``, then re-creates a fresh store (equivalent to
+    a bare ``novetest init``). The wipe is atomic — a corrupt or in-use store
+    is left intact and surfaced as an error rather than half-deleted.
+    """
+    # The reset workflow + Memory's wipe primitive are imported lazily: the
+    # primitive ships in the sibling Memory cycle, so deferring keeps the CLI
+    # importable during parallel development and reads the current symbol at
+    # call time (clean monkeypatch isolation in unit tests). Mirrors the
+    # ``licenses_cmd`` deferred-import pattern.
+    if not confirm:
+        _emit_and_exit(
+            Envelope(
+                command="reset",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="confirm-required",
+                        message=(
+                            "`novetest reset` is destructive. "
+                            "Pass --confirm to acknowledge."
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+
+    from novetest.memory import ProjectStoreNotFoundError
+    from novetest.orchestration.workflows import reset_project_workspace
+
+    workspace = Path.cwd()
+    try:
+        result = asyncio.run(reset_project_workspace(workspace))
+    except ProjectStoreNotFoundError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="reset",
+                ok=False,
+                errors=(EnvelopeError(code="uninitialized", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
+    except ProjectStoreCorruptError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="reset",
+                ok=False,
+                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
+            ),
+            EXIT_STORAGE,
+        )
+    except OSError as exc:
+        _emit_and_exit(
+            Envelope(
+                command="reset",
+                ok=False,
+                errors=(EnvelopeError(code="store-wipe-failed", message=str(exc)),),
+            ),
+            EXIT_STORAGE,
+        )
+
+    data: dict[str, Any] = {
+        "store_path": str(result.init_result.store.path),
+        "store_state": result.init_result.store.store_state,
+        "previous_initialized_at": result.wipe_report.previous_initialized_at,
+        "initialized_at": result.init_result.store.initialized_at,
+        "items_removed": result.wipe_report.items_removed,
+        "engine_readiness": _readiness_payload(result.init_result.engine_readiness),
+    }
+    _emit_and_exit(Envelope(command="reset", ok=True, data=data), EXIT_OK)
 
 
 @app.command(name="run")

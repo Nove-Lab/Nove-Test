@@ -1,0 +1,23 @@
+# serializer version: 1
+# name: test_render_reset_all_zero_renders_nothing
+  '''
+  ✓ Reset .novetest/ at /work/.novetest
+    removed: nothing
+    engine readiness: ready — python/pytest 8.0.0
+  '''
+# ---
+# name: test_render_reset_full
+  '''
+  ✓ Reset .novetest/ at /work/.novetest
+    removed: 12 runs · 1 tombstone · 12 coverage · 7 regression · 8 localization · 2 replay
+    engine readiness: ready — python/pytest 8.0.0
+  '''
+# ---
+# name: test_render_reset_partial_suppresses_zeros_and_no_engine
+  '''
+  ✓ Reset .novetest/ at /work/.novetest
+    removed: 1 run
+    engine readiness: no-engine — no engine detected
+    issue: no recognized test engine in workspace
+  '''
+# ---
