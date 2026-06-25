@@ -46,6 +46,29 @@
 
 ---
 
+## 3. Store wipe primitive
+
+Pinned by `agent-comms/decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md`. Consumed by Orchestration's `novetest reset` workflow; not directly user-facing.
+
+| Interface | Type | Input | Output |
+| --- | --- | --- | --- |
+| `wipe_project_store(store_path)` | Internal | Resolved `.novetest/` directory path (caller obtained it via `locate_project_store`) | `WipeReport(store_path, previous_initialized_at, items_removed: dict[str, int])` — `items_removed` keys are frozen as `runs`, `tombstones`, `coverage_facts`, `regression_pairs`, `localization_findings`, `replay_results`. |
+
+### Atomicity guarantee (load-bearing)
+
+The primitive MUST follow this sequence; it is the property the `reset` envelope's failure modes (`uninitialized`, `store-corrupt`, `store-wipe-failed`) rely on:
+
+1. Refuse with `ProjectStoreNotFoundError` when `store_path` does not exist or holds no `store.json` (envelope: `uninitialized`).
+2. Refuse with `ProjectStoreCorruptError` when `store.json` is unreadable. **A corrupt store MUST NOT be auto-wiped** — a transient FS issue is the likely cause and the operator must inspect manually (envelope: `store-corrupt`).
+3. Count terminal artifacts BEFORE any mutation, so a counting failure leaves the live store untouched.
+4. Compute `staging = store_path.parent / f".novetest.deleting.{ulid()}"`.
+5. Single-syscall `Path.rename(store_path, staging)` — POSIX-atomic on the same filesystem. After this step the live store is detached.
+6. `shutil.rmtree(staging, ignore_errors=False)`. On failure, the live store is already detached; the orphaned staging dir is the caller's problem (envelope: `store-wipe-failed`). The primitive does **not** attempt to undo the rename — re-attaching a half-deleted tree would defeat the atomic-detach guarantee. A future `vacuum` verb is the intended sweep mechanism for orphans by name pattern.
+
+The primitive does NOT re-initialize. The subsequent `create_project_store(workspace)` call (Orchestration's `reset` workflow) writes the fresh `store.json`.
+
+---
+
 ## Notes
 
 - Section 1 interfaces are the entry point for the onboarding flow. Orchestration's `initialize_project_workspace` delegates Project Store creation to `create_project_store`; every Section 2 interface resolves its durable state through `locate_project_store` against the active Project Workspace.

@@ -13,9 +13,12 @@ from novetest.memory.project_store import (
     STORE_METADATA_FILENAME,
     ProjectStore,
     ProjectStoreCorruptError,
+    ProjectStoreNotFoundError,
+    WipeReport,
     create_project_store,
     get_project_store_state,
     locate_project_store,
+    wipe_project_store,
 )
 
 
@@ -167,3 +170,137 @@ def test_handle_to_dict_shape(tmp_path: Path) -> None:
         "initialized_at": handle.initialized_at,
         "store_state": "ready",
     }
+
+
+# --- wipe_project_store ------------------------------------------------------
+#
+# Coverage for the destructive primitive specified by
+# `agent-comms/decisions/2026-06-24-reset-verb-and-store-wipe-primitive.md`
+# and `agent-comms/tasks/memory-team-2026-06-24-wipe-project-store-primitive.md`.
+# The atomicity sequence (count → rename → rmtree) is load-bearing; tests pin
+# each branch of it.
+
+
+def _seed_artifact(path: Path, body: str = "{}\n") -> None:
+    """Materialize a terminal artifact file (and parents) for counting tests."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def test_wipe_happy_path_returns_report_and_deletes_tree(tmp_path: Path) -> None:
+    store = create_project_store(tmp_path)
+    # One fake run + one fake coverage fact (the task brief's minimum population).
+    _seed_artifact(
+        store.path / "memory" / "runs" / "2026" / "06" / "24" / "run_TEST" / "record.json"
+    )
+    _seed_artifact(
+        store.path / "coverage" / "facts" / "run_TEST" / "coverage_facts.json"
+    )
+
+    report = wipe_project_store(store.path)
+
+    assert isinstance(report, WipeReport)
+    assert report.store_path == store.path
+    assert report.previous_initialized_at == store.initialized_at
+    assert report.items_removed == {
+        "runs": 1,
+        "tombstones": 0,
+        "coverage_facts": 1,
+        "regression_pairs": 0,
+        "localization_findings": 0,
+        "replay_results": 0,
+    }
+    # Live store path is gone; the staging dir (rmtree's target) is gone too.
+    assert not store.path.exists()
+    staging_orphans = list(tmp_path.glob(".novetest.deleting.*"))
+    assert staging_orphans == []
+
+
+def test_wipe_refuses_when_store_missing(tmp_path: Path) -> None:
+    missing = tmp_path / ".novetest"
+    with pytest.raises(ProjectStoreNotFoundError):
+        wipe_project_store(missing)
+
+
+def test_wipe_refuses_when_metadata_missing(tmp_path: Path) -> None:
+    # Directory exists but `store.json` does not — a "partial init" shape that
+    # `create_project_store` is allowed to complete, but `wipe_project_store`
+    # MUST refuse so an unrelated empty `.novetest/` can never be auto-wiped.
+    store_path = tmp_path / STORE_DIRNAME
+    store_path.mkdir()
+    with pytest.raises(ProjectStoreNotFoundError):
+        wipe_project_store(store_path)
+    # Directory left untouched on refusal.
+    assert store_path.is_dir()
+
+
+def test_wipe_refuses_corrupt_store(tmp_path: Path) -> None:
+    # Load-bearing safety property: a corrupt `store.json` MUST NOT trigger
+    # auto-wipe. The decision doc pins this — a transient FS issue is the
+    # likely cause and the operator must inspect manually.
+    store = create_project_store(tmp_path)
+    (store.path / STORE_METADATA_FILENAME).write_text("not json", encoding="utf-8")
+
+    with pytest.raises(ProjectStoreCorruptError):
+        wipe_project_store(store.path)
+
+    # Live store still present after refusal — atomicity guarantee.
+    assert store.path.is_dir()
+    assert (store.path / STORE_METADATA_FILENAME).is_file()
+
+
+def test_wipe_rmtree_failure_leaves_staging_orphan_not_live_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Atomicity property: after the single `rename` succeeds, the live store
+    # is detached. If `rmtree` raises, we surface the failure WITHOUT trying
+    # to undo the rename — the orphaned staging dir is acceptable, a
+    # half-deleted live store would not be.
+    store = create_project_store(tmp_path)
+    _seed_artifact(
+        store.path / "memory" / "runs" / "2026" / "06" / "24" / "run_TEST" / "record.json"
+    )
+
+    def boom(path: Path, ignore_errors: bool = False) -> None:  # noqa: ARG001
+        raise OSError("simulated rmtree failure")
+
+    monkeypatch.setattr(
+        "novetest.memory.project_store.shutil.rmtree", boom
+    )
+
+    with pytest.raises(OSError, match="simulated rmtree failure"):
+        wipe_project_store(store.path)
+
+    assert not store.path.exists(), "live store path must be detached"
+    orphans = list(tmp_path.glob(".novetest.deleting.*"))
+    assert len(orphans) == 1, orphans
+    # Orphan still holds the data — proves we did not partial-delete it.
+    assert (orphans[0] / STORE_METADATA_FILENAME).is_file()
+    # No manual cleanup: `project_store.shutil` IS the same module object as
+    # any `shutil` imported here, so calling `shutil.rmtree` while the patch
+    # is in effect would re-trigger `boom`. The future `vacuum` verb is the
+    # intended sweep mechanism for orphans by name pattern (deferred per the
+    # decision doc §"Out of scope"); `tmp_path` teardown handles us here.
+
+
+def test_wipe_then_create_project_store_succeeds(tmp_path: Path) -> None:
+    # Round-trip: wiping must leave the workspace in a state where the next
+    # `create_project_store(workspace)` cleanly rebuilds the skeleton. This
+    # pins the post-MVP `reset` verb's "wipe then re-init" contract — the
+    # primitive itself does not re-init; that's the Orchestration workflow's
+    # responsibility.
+    first = create_project_store(tmp_path)
+    first_initialized_at = first.initialized_at
+
+    wipe_project_store(first.path)
+
+    rebuilt = create_project_store(tmp_path)
+    assert rebuilt.path == first.path
+    assert rebuilt.store_state == "ready"
+    assert (rebuilt.path / STORE_METADATA_FILENAME).is_file()
+    for rel in EXPECTED_SUBDIRS:
+        assert (rebuilt.path / rel).is_dir(), rel
+    # New stamp — not the old one (sanity check that we didn't somehow
+    # resurrect the previous metadata).
+    assert rebuilt.initialized_at >= first_initialized_at
