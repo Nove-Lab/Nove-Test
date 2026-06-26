@@ -1,542 +1,379 @@
 # Understanding Results
 
-After `novetest test` returns, you have either a recommendation
-block on your terminal or a `novetest/v1` JSON envelope. This page
-is the reference for both:
+After `novetest test` returns you have a result to interpret — a
+scannable text block (human) or a `novetest/v1` JSON envelope (agent).
+This page covers:
 
-1. The exit-code -> meaning table.
-2. How to read the text-mode output / how to route on the envelope.
-3. The two follow-up verbs you may want next: `novetest status` and
-   `novetest inspect <run_id>`.
-4. Warnings.
-5. The full `errors[].code` catalog for failure paths.
-6. A worked example walking through "green -> fail -> green".
+1. The six exit codes and what they mean.
+2. The `errors[].code` catalog (failure paths).
+3. Reading the output (glyphs / the envelope frame).
+4. `data.stage_eligibility`.
+5. `data.recommendations[]` and the closed seven-category taxonomy.
+6. The follow-up verbs `status` and `inspect`.
+7. The sub-report verbs (`coverage`, `regression`, `localization`, `replay`, `compare`, `memory`).
+8. A worked example: green → bug → fix.
+9. `warnings[]`.
 
-Everything beyond this — `compare`, `coverage diff`, `regression
-compare`, `localization`, `replay`, `memory` cleanup — lives in
-[Advanced Usage](./advanced-usage.md).
+Every output below is a real capture from the **`calc`** example (see
+[Quick Start](./quick-start.md)). Run ids are 26-character ULIDs; yours
+will differ.
 
 ---
 
 ## Exit codes
 
-novetest uses **6 well-defined exit codes.** Read the exit code in
-your shell with `echo $?` (or `$LASTEXITCODE` in PowerShell).
+Nove Test uses six exit codes. Read it with `echo $?` (POSIX) or
+`$LASTEXITCODE` (PowerShell).
 
-::: tabs
-@tab For human
-
-| Code | Meaning | What to do |
-|---|---|---|
-| `0` | Transport succeeded; your tests passed. | Done. (Or read recommendations for non-trivial all-green cases.) |
-| `1` | Unexpected error (CLI crash). | This is a bug. File an issue with the output. |
-| `2` | Bad input (missing Project Store, invalid flag, bad arg). | Fix the invocation. The `✗` block on stdout names what's wrong. |
-| `3` | Transport succeeded; your tests **failed**. | Read recommendations. This is real product information, not a tooling problem. |
-| `4` | Native test engine not ready (missing on PATH, misconfigured). | Install / configure the missing tool. The `✗` block on stdout names what to install. |
-| `5` | Project Store corrupt or unreadable. | Inspect `.novetest/store.json`. Worst case: `rm -rf .novetest && novetest init` (you lose history). |
-
-Crucial nuance: **exit code 3 is normal.** Your tests failed; the
-CLI did its job; the output is a recommendation telling you which
-tests failed. Treat it as the same severity as exit 0 — both are
-"the CLI succeeded".
-
-@tab For agent
-
-| Code | Constant | Pairs with | Meaning |
+| Code | Constant | `ok` | Meaning |
 |---|---|---|---|
-| `0` | `EXIT_OK` | `ok: true` | CLI succeeded. For `test`/`run`: user's tests passed. |
-| `1` | `EXIT_GENERIC` | `ok: false` | Unexpected CLI exception. Report as bug. |
-| `2` | `EXIT_USAGE` | `ok: false` | Bad input (invalid flag, missing Project Store, missing required arg, bad `--formula` value, unknown `run_id`). |
-| `3` | `EXIT_USER_TESTS_FAILED` | `ok: true` | CLI succeeded; user's tests failed. This is product data, not a tooling error. |
-| `4` | `EXIT_ENGINE_MISSING` | `ok: false` | Native engine not ready (missing on PATH, misconfigured, missing dep). |
-| `5` | `EXIT_STORAGE` | `ok: false` | Project Store corrupt or unreadable. |
+| `0` | `EXIT_OK` | `true` | CLI succeeded; tests passed. Data-level `unavailable` outcomes also land here. |
+| `1` | `EXIT_GENERIC` | `false` | Unexpected CLI exception. Report as a bug. |
+| `2` | `EXIT_USAGE` | `false` | Bad input (missing Project Store, unknown `run_id`, invalid flag, `reset` without `--confirm`). |
+| `3` | `EXIT_USER_TESTS_FAILED` | **`true`** | CLI succeeded; your tests **failed**. Product data, not a tooling error. |
+| `4` | `EXIT_ENGINE_MISSING` | `false` | Native engine not ready (missing on PATH) or adapter invocation error. |
+| `5` | `EXIT_STORAGE` | `false` | Project Store corrupt or unreadable. |
 
-Routing rules:
+Two invariants that trip people up:
 
-```python
-if exit_code == 0:
-    # ok: true, tests passed (or non-test verb succeeded)
-    handle_success(envelope)
-elif exit_code == 3:
-    # ok: true, tests failed — read recommendations, fix tests, retry
-    handle_test_failures(envelope)
-elif exit_code == 2:
-    # ok: false, fix the invocation
-    handle_usage_error(envelope)
-elif exit_code == 4:
-    # ok: false, install / configure missing engine
-    handle_engine_missing(envelope)
-elif exit_code == 5:
-    # ok: false, Project Store damaged
-    handle_storage_error(envelope)
-elif exit_code == 1:
-    # ok: false, unexpected CLI exception — report as bug
-    handle_generic_error(envelope)
-```
+- **Exit 3 is normal.** Your tests failed; the CLI did its job. `ok` stays
+  `true` — failing tests are *data*. (So `ok: true` does **not** imply
+  exit 0; always read both.)
+- **An `unavailable` outcome is exit 0.** When coverage / regression /
+  localization can't produce facts for a structural reason (no baseline,
+  no failing tests, ran without `--coverage`), that is reported as data on
+  a successful command — never an error.
 
-Crucial invariants:
+---
 
-- **`ok: true` does NOT imply exit 0.** Exit 3 (tests failed) is
-  perfectly normal — `ok: true` because the CLI did its job; the
-  product information is "your tests failed". Always read both.
-- **`ok: false` always implies exit ≠ 0.** When the CLI itself
-  could not do its job, `ok: false` and a non-zero exit are paired.
-- The exit code AND `errors[0].code` together identify the failure
-  class. Route on exit code FIRST, then on `errors[0].code` for
-  per-case granularity.
+## `errors[].code` catalog
 
-:::
+When `ok: false`, `errors[]` carries at least one `{code, message,
+details}` object. Pin against `code` (not the message text).
+
+| `errors[].code` | Exit | Triggered when | Recovery |
+|---|---|---|---|
+| `uninitialized` | 2 | A non-`init` verb run where no `.novetest/` exists in any ancestor. | `novetest init`, or `cd` into a store tree. |
+| `not-found` | 2 | A `run_id` matches no Memory Entry. Message: `No Memory Entry for run_id='<id>'`. | List ids with `novetest memory list`. |
+| `invalid-flag` | 2 | Flag value outside the allowed set (bad `--formula`, `--top-n < 1`). Message lists allowed values. | Re-issue with a valid flag. |
+| `confirm-required` | 2 | `novetest reset` without `--confirm`. | Pass `--confirm`. |
+| `engine-engine-missing` | 4 | Readiness state is `engine-missing`. `data.engine_readiness` is present. | Install/configure the engine. |
+| `adapter-<kind>` | 4 | A native adapter invocation failed (e.g. `adapter-unparseable-output`). `details.install_hint` may carry a fix. | Apply the hint. |
+| `store-corrupt` | 5 | `.novetest/store.json` unreadable/malformed. | Fix the file; worst case `rm -rf .novetest && novetest init` (loses history). |
+
+The doubled-looking `engine-engine-missing` is the `engine-` prefix plus
+the readiness state `engine-missing` — it is **not** `engine-not-ready`
+(no such code/state exists).
 
 ---
 
 ## Reading the output
 
-Every `novetest test` invocation produces a block in the same
-shape.
-
 ::: tabs
 @tab For human
 
+Every `novetest test` invocation prints the same shape:
+
 ```
-<count> <recommendation|recommendations> · <count> <category|categories> · run_id=<ULID>
+<count> recommendation(s) · <count> category/categories · run_id=<ULID>
 
   <glyph> [<category>] <human-readable sentence>
       ↳ <citation>
-  <glyph> [<category>] ...
-      ↳ <citation>
 ```
 
-### Glyphs
+Glyph palette (no ANSI color at MVP — meaning is carried by glyphs +
+words):
 
-| Glyph | When you see it | What it means |
-|---|---|---|
-| `✓` | `[all_green]`, `[unavailable_analysis]`, "passed" status | Good news / informational. No action required. |
-| `✗` | `[tests_failed]`, regression summary, error envelopes | Bad news. Look here. |
-| `—` | Sub-report availability (`status`, `inspect`) | Unavailable for a structural reason. Not an error. |
-| `⚠` | Trailing `warnings:` block | Advisory. |
-| `!` | Recommendation categories that need action | Needs your attention. |
-| `?` | Replay-specific "we can't tell" outcome | Host-level limitation. |
-| `·` | Separator | Whitespace with a dot. |
-| `↳` | Citation pointer | The recommendation is based on this thing. |
+| Glyph | Means |
+|---|---|
+| `✓` | Good / informational; no action. |
+| `✗` | Bad news — look here. |
+| `—` | Unavailable for a structural reason; not an error. |
+| `!` | An action recommendation needs attention. |
+| `?` | "Can't tell" (e.g. replay not yet attempted). |
+| `⚠` | Advisory warning. |
+| `·` | Separator. |
+| `↳` | Citation pointer (the evidence behind a line). |
 
-### The header line
-
-```
-3 recommendations · 2 categories · run_id=01HX0K4M5N6P7Q8R9STUVWXYZ0
-```
-
-Three numbers + one ID:
-
-- **Recommendation count.** How many distinct things novetest
-  wants you to know about this run.
-- **Category count.** How many unique categories the
-  recommendations span. Often equal to the recommendation count.
-- **`run_id=...`** — the ULID of the Run Record that produced this
-  recommendation set. Copy this for
-  `novetest inspect <run_id>`.
-
-### Recommendation blocks
-
-Each recommendation gets two lines:
+The all-green block:
 
 ```
+1 recommendation · 1 category · run_id=01KVYRJJJ75ZRHC05GNKYRK99S
+
   ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
-      ↳ run_reference 01HX0K4M5N6P7Q8R9STUVWXYZ0
+      ↳ run_reference 01KVYRJJJ75ZRHC05GNKYRK99S
 ```
-
-- **Line 1** — `<glyph> [<category>] <sentence>`. The sentence is
-  a self-contained piece of English; you can show it to a teammate
-  verbatim.
-- **Line 2** — `↳ <citation kind> <citation target>`. The citation
-  tells you "if you want to see what justifies this recommendation,
-  look at this Run / test / coverage file / SBFL finding".
-
-Citation kinds you may see:
-
-| Kind | Looks like | Drill-in command |
-|---|---|---|
-| `run_reference` | `↳ run_reference 01HX...` | `novetest inspect <run_id>` |
-| `test_result` | `↳ test_result tests/test_x.py::test_y (failed)` | `novetest inspect <run_id>` and scroll to the test result |
-| `localization_finding` | `↳ localization_finding src/foo.py:42 (rank 1)` | `novetest localization <run_id>` |
-| `coverage_fact` | `↳ coverage_fact src/foo.py` | `novetest coverage show <run_id>` |
-| `regression_fact` | `↳ regression_fact tests/test_x.py::test_y` | `novetest regression latest` |
-
-You usually only need to read the **first** citation per
-recommendation on the happy path — novetest puts the most
-actionable pointer first.
 
 @tab For agent
 
-### `data.stage_eligibility`
-
-The `novetest test` envelope reports per-stage availability:
+Every command emits the same frame, keys sorted alphabetically:
 
 ```json
-{
-  "stage_eligibility": {
-    "coverage": "available",
-    "regression": "unavailable",
-    "localization": "available",
-    "replay": "not_run"
-  }
-}
+{ "command": "test", "data": { }, "errors": [], "ok": true,
+  "schema": "novetest/v1", "warnings": [] }
 ```
 
-Values (string enum):
+Exactly six top-level keys: `schema` (always `"novetest/v1"`), `command`,
+`ok`, `data`, `errors`, `warnings`. There is **no** top-level `version`,
+`verb`, or `exit_code` field — the exit code is the process status.
+`errors`/`warnings` are arrays of `{code, message, details}`.
 
-| Value | Meaning |
-|---|---|
-| `"available"` | The stage derived facts and persisted them. Queryable via the per-stage verbs (`coverage show`, `regression latest`, `localization`) or via `novetest inspect <run_id>`. |
-| `"unavailable"` | The stage could not derive facts for a **structural** reason. NOT an error. |
-| `"not_run"` | The orchestration deliberately did not invoke this stage. At MVP only `replay` is `"not_run"` by default. |
-
-Common reasons you will see on the happy path:
-
-- `regression: "unavailable"` on the **first** run for a target —
-  no prior baseline. The second `novetest test` on the same target
-  will report `"available"`.
-- `localization: "unavailable"` (or available but degenerate
-  `"failure_proximity"` mode) when there are zero failing tests.
-
-Recommendation routing should treat `"unavailable"` stages as
-"recommendations from this stage will simply not appear in
-`recommendations[]`" — never as an error.
-
-### `data.recommendations[]`
-
-Action-oriented synthesis. Each recommendation has a fixed
-structure:
-
-```json
-{
-  "recommendation_id": "rec_001",
-  "category": "all_green",
-  "priority": 7,
-  "summary": "All tests green; no action recommended (passed 3, skipped 0, total 3).",
-  "slots": {
-    "passed": 3,
-    "skipped": 0,
-    "total_tests": 3,
-    "run_reference": { "run_id": "...", "created_at": 1717951353000 }
-  },
-  "evidence_citations": [
-    {
-      "kind": "run_reference",
-      "run_reference": { "run_id": "...", "created_at": 1717951353000 },
-      "selector": {}
-    }
-  ]
-}
-```
-
-| Field | Type | Routing? |
-|---|---|---|
-| `recommendation_id` | string | No. Per-envelope identifier (`rec_001`, ...), not persisted across runs. |
-| `category` | string | **Yes — pin against this.** Closed taxonomy. |
-| `priority` | integer | Sort key. Higher = more urgent. |
-| `summary` | string | For humans / LLM display. Do NOT parse. |
-| `slots` | object | Named structured values referenced in the summary. Use these for alternative renderings or for slot-driven downstream actions. |
-| `evidence_citations[]` | list | Pointers back into persisted artifacts. Walk these for drill-down. |
-
-#### Routing decision tree
+Routing skeleton:
 
 ```python
-recs = envelope["data"]["recommendations"]
-recs_sorted = sorted(recs, key=lambda r: -r["priority"])
-
-if not recs_sorted:
-    return  # no recommendations — synthesizer had nothing to say
-
-top = recs_sorted[0]
-
-if top["category"] == "all_green":
-    return  # nothing to do
-elif top["category"] in {"tests_failed", "new_test_failure"}:
-    for cite in top["evidence_citations"]:
-        if cite["kind"] == "test_result":
-            test_id = cite["selector"]["test_id"]
-            outcome = cite["selector"]["outcome"]
-            # Drill into the run for stdout / stderr / error message.
-elif top["category"] == "coverage_regressed":
-    # Walk evidence_citations for coverage-file deltas.
-    ...
-elif top["category"] == "flaky_suspect":
-    # Often paired with a replay recommendation; consider running
-    # `novetest replay <run_id> --reruns 5`.
-    ...
-elif top["category"] == "unavailable_analysis":
-    # Informational; explains a structural unavailability. No action.
-    ...
+if   code == 0: handle_success(env)        # ok: true
+elif code == 3: handle_test_failures(env)  # ok: true — read recommendations
+elif code == 2: handle_usage_error(env)    # ok: false — fix the call
+elif code == 4: handle_engine_missing(env) # ok: false — install/configure engine
+elif code == 5: handle_storage_error(env)  # ok: false — store damaged
+elif code == 1: handle_generic_error(env)  # ok: false — report as bug
 ```
-
-The key invariant: **route on `category` first**. Walk
-`evidence_citations[]` for structured pointers. Do NOT parse
-`summary`.
-
-#### Closed taxonomy of categories (v1)
-
-At MVP the synthesizer ships these categories (always lowercase,
-snake_case):
-
-| Category | Glyph in text mode | Semantic |
-|---|---|---|
-| `all_green` | `✓` | All tests passed; no action recommended. |
-| `tests_failed` | `!` | One or more tests failed in this run. |
-| `new_test_failure` | `!` | A specific test transitioned passed -> failed since the baseline. |
-| `coverage_regressed` | `!` | Coverage percentage dropped relative to baseline. |
-| `flaky_suspect` | `!` | Failure pattern looks like flake (different result across runs). |
-| `recovered_from_failure` | `✓` | Tests are green now and were red in the baseline. |
-| `unavailable_analysis` | `✓` (informational) | Explains a structural `"unavailable"` outcome (e.g. no baseline yet). |
-
-#### Citation kinds
-
-Each `evidence_citations[]` entry has a `kind` discriminator:
-
-| `kind` | Selector keys | Drill-in |
-|---|---|---|
-| `run_reference` | `{}` (the run_reference itself is the citation) | `novetest inspect <run_id>` |
-| `test_result` | `{"test_id": str, "outcome": str}` | `inspect` and locate the test |
-| `coverage_fact` | `{"file": str}` | `novetest coverage show <run_id>` |
-| `regression_fact` | `{"test_id": str}` | `novetest regression latest` |
-| `localization_finding` | `{"file": str, "primary_line": int, "rank": int}` | `novetest localization <run_id>` |
-| `replay_result` | `{"classification": str}` | `novetest replay <run_id>` (or re-read from inspect) |
 
 :::
 
 ---
 
-## `novetest status` — what's cached in this project?
+## `data.stage_eligibility`
+
+The `test` envelope's `data` has exactly four keys: `run_reference`,
+`stage_eligibility`, `recommendation_schema_version` (currently `1`), and
+`recommendations`. The stage-eligibility block (real `calc` failing-run
+capture):
+
+```json
+"stage_eligibility": {
+  "coverage": "available",
+  "localization": "sbfl_per_test",
+  "regression": "available",
+  "replay": "not_run"
+}
+```
+
+| Slot | Values | Notes |
+|---|---|---|
+| `coverage` | `available` ∣ `unavailable` ∣ `not_applicable` | `test` always collects coverage, so usually `available`. |
+| `regression` | `available` ∣ `unavailable` ∣ `not_applicable` | `unavailable` on the first run for a target (no baseline). |
+| `localization` | **the SBFL mode string** (`sbfl_per_test` ∣ `sbfl_aggregate` ∣ `failure_proximity`) when a finding exists; else `unavailable` | NOT the word "available". A passing run is `unavailable` (no failing tests). |
+| `replay` | always `not_run` | `test` never invokes replay. |
+
+A stage that is `unavailable` simply contributes no recommendations — it
+is not an error signal.
+
+---
+
+## `data.recommendations[]`
+
+Each recommendation has exactly these keys: `recommendation_id`,
+`category`, `priority`, `summary`, `slots`, `evidence_citations`. There is
+**no `severity` field** — `priority` (int, **1 = most urgent … 7 = all
+green**) is the only ranking.
+
+### Closed taxonomy (seven categories)
+
+| `priority` | `category` | Fires when |
+|---|---|---|
+| 1 | `regression_with_localization` | A newly-failing test overlaps a top SBFL location — the strongest signal. |
+| 2 | `investigate_location` | A localization finding, confidence ∈ {high, medium}, rank ≤ 3. |
+| 3 | `investigate_regression` | A `regressed` (newly-failing vs baseline) transition. |
+| 4 | `coverage_gap` | Uncovered lines overlap a suspicious location's span. |
+| 5 | `flaky_suspected` | A replay classified the suite `inconsistent`. **Never fires from `test`** (replay isn't wired into `test`). |
+| 6 | `unavailable_analysis` | Tests failed AND some downstream stage was `unavailable`. Informational. |
+| 7 | `all_green` | Zero failures AND zero regressed. Mutually exclusive — never coexists with another category. |
+
+Behavioural notes:
+
+- `regression_with_localization` and `investigate_regression` require a
+  **newly-failing** transition (passing in the baseline, failing now).
+  Re-running an already-failing suite does not re-emit them.
+- `flaky_suspected` never appears in real `test` output.
+- `all_green` never coexists with another category.
+
+### Routing decision tree
 
 ::: tabs
 @tab For human
 
+On the happy path there is nothing to do — `[all_green]`. Otherwise read
+the **top** line (lowest priority number); its bracketed `[category]` and
+sentence tell you what to look at, and the `↳` citation tells you where
+the evidence lives. Then act, and re-run `novetest test`.
+
+@tab For agent
+
+```python
+recs = sorted(env["data"]["recommendations"], key=lambda r: r["priority"])
+if not recs:
+    return
+top = recs[0]
+cat = top["category"]
+
+if cat == "all_green":
+    return                                  # nothing to do
+elif cat in {"investigate_location", "regression_with_localization", "coverage_gap"}:
+    # location-bearing slots: file, primary_line, line_range, rank, symbol, formula, mode.
+    # The array is NOT score-ordered, and ties share a priority — pick the
+    # strongest finding by rank (asc) then score_normalized (desc):
+    best = min((r for r in recs if r["category"] == cat),
+               key=lambda r: (r["slots"]["rank"], -r["slots"]["score_normalized"]))
+    target = (best["slots"]["file"], best["slots"]["primary_line"])
+elif cat == "investigate_regression":
+    test_id = top["slots"]["test_id"]       # newly-failing test
+elif cat == "unavailable_analysis":
+    stages  = top["slots"]["unavailable_stages"]
+    reasons = top["slots"]["reason_per_stage"]   # informational
+```
+
+Invariant: **route on `category`, sort by `priority` ascending**; within
+a location-bearing category, rank findings by `slots.rank` (then
+`score_normalized`) — not by array position. Read `slots` / walk
+`evidence_citations[]`; never parse `summary`.
+
+`evidence_citations[].kind` is a closed set: `localization_finding`,
+`coverage_fact`, `regression_fact`, `replay_result`, `test_result`,
+`run_reference` — each carries a `selector` pointing back into a
+persisted artifact you can drill into.
+
+:::
+
+---
+
+## A worked example: green → bug → fix
+
+### 1. Green run
+
 ```bash
-novetest status
+novetest test
 ```
 
-You should see:
+::: tabs
+@tab For human
 
 ```
-latest run · 01HX0K4M5N6P7Q8R9STUVWXYZ0 · history: 12 runs
+1 recommendation · 1 category · run_id=01KVYRJJJ75ZRHC05GNKYRK99S
+
+  ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
+      ↳ run_reference 01KVYRJJJ75ZRHC05GNKYRK99S
+```
+
+Exit 0.
+
+@tab For agent
+
+`recommendations[0].category == "all_green"`, `priority 7`, exit 0,
+`ok: true`. `stage_eligibility.localization == "unavailable"` (nothing to
+localize on a green run).
+
+:::
+
+### 2. Introduce the bug
+
+Change `calc/arithmetic.py` line 6 so `subtract` adds instead of
+subtracts (`return a + b`), then `novetest test`:
+
+::: tabs
+@tab For human
+
+```
+5 recommendations · 1 category · run_id=01KVYRRSF48RMYV84MTB4XQ6P9
+
+  ! [investigate_location] Investigate `add`@2 in `calc/arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).
+      ↳ localization_finding calc/arithmetic.py:2 (rank 2)
+  ! [investigate_location] Investigate `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
+      ↳ localization_finding calc/arithmetic.py:6 (rank 1)
+  ! [investigate_location] Investigate `test_subtract`@13 in `tests/test_arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
+      ↳ localization_finding tests/test_arithmetic.py:13 (rank 1)
+  … (two more rank-2 entries: `test_add_positive`@5, `test_add_zero`@9)
+```
+
+Exit **3** (`ok: true`). Recommendations are emitted in a stable order
+(not sorted by score), so act on the highest-**rank** line: `subtract`@6
+at rank 1, `ochiai=1.000` — the line you broke.
+
+@tab For agent
+
+```json
+{
+  "command": "test",
+  "data": {
+    "recommendations": [
+      { "category": "investigate_location", "priority": 2,
+        "summary": "Investigate `add`@2 in `calc/arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).",
+        "slots": { "file": "calc/arithmetic.py", "primary_line": 2, "line_range": [1, 2],
+                   "rank": 2, "score_normalized": 0.0, "symbol": "add",
+                   "formula": "ochiai", "mode": "sbfl_per_test" } },
+      { "category": "investigate_location", "priority": 2,
+        "summary": "Investigate `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).",
+        "slots": { "file": "calc/arithmetic.py", "primary_line": 6, "line_range": [5, 6],
+                   "rank": 1, "score_normalized": 1.0, "symbol": "subtract",
+                   "formula": "ochiai", "mode": "sbfl_per_test" } }
+      /* …3 more investigate_location recommendations… */
+    ],
+    "run_reference": { "run_id": "01KVYRRSF48RMYV84MTB4XQ6P9", "created_at": 1782370297316, "schema_version": 1 },
+    "stage_eligibility": { "coverage": "available", "localization": "sbfl_per_test",
+                           "regression": "available", "replay": "not_run" }
+  },
+  "errors": [], "ok": true, "schema": "novetest/v1", "warnings": []
+}
+```
+
+Exit **3**, `ok: true`. NOTE the array is **not** score-ordered:
+`recommendations[0]` here is `add`@2 (rank 2, `score_normalized: 0.0`). To
+find the culprit, pick the `investigate_location` finding with the lowest
+`slots.rank` / highest `slots.score_normalized` — `subtract`@6 (rank 1,
+score 1.0) — then route on its `slots.file` + `slots.primary_line`.
+
+:::
+
+### 3. Fix and re-run
+
+Restore line 6 to `return a - b`, then `novetest test` → back to the green
+block, exit 0. The loop is: read the top recommendation, act, re-run.
+
+---
+
+## Follow-up verbs: `status` and `inspect`
+
+::: tabs
+@tab For human
+
+`novetest status` — the project's latest-run availability at a glance
+(read-only, derives nothing):
+
+```
+latest run · 01KW0PATQMBP2GXMFRX3J5EEX3 · history: 2 runs
 
   ✓ coverage      available
   ✓ regression    available
-  ✓ localization  available
+  — localization  unavailable
   — replay        unavailable
 ```
 
-Read top to bottom:
+(`—` marks a sub-report that is unavailable for a structural reason — here
+the latest run had no failing tests to localize, and replay only runs when
+you call `novetest replay`.) `novetest status` reflects the **latest** run.
 
-- **Header.** The most recent Run Record's ULID, and how many runs
-  total are in your history.
-- **Sub-report list.** One line per derived stage, with the same
-  glyph language as before. `✓ available` means "queryable via the
-  per-stage verb"; `—` means "structural reason it isn't here".
-
-`status` is read-only and fast. It is the right verb to peek at
-when you come back to a project after a while and want to remember
-where you left off.
-
-If your project has zero runs yet (you just `init`'d), you'll see:
+`novetest inspect <run_id>` — everything known about one run (a pure read;
+works on tombstoned runs too):
 
 ```
-no runs yet · history: 0 runs
+✗ 01KVYRRRN9FWVNQWVHNE1QHAQ4 · failed · pytest (python) · target=<workspace>
+
+  coverage      ✓ per-test · 13/13 statements (100.0%)
+  regression    ✗ regressions · regressed=1 fixed=0 still_failing=0
+  localization  sbfl_per_test · ochiai · 5 entries · confidence=high
+  replay        ? unavailable (missing-derived-facts)
 ```
+
+`target=<workspace>` means the whole project. `replay` stays unavailable
+until you run `novetest replay <run_id>`.
 
 @tab For agent
 
-```bash
-NOVETEST_OUTPUT=json novetest status
-```
+`status` `data`: `latest_run_reference` (null after a fresh `init`),
+`run_history_size`, `sub_reports` (`available`/`unavailable` per stage).
 
-```json
-{
-  "schema": "novetest/v1",
-  "command": "status",
-  "ok": true,
-  "data": {
-    "latest_run_reference": {
-      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-      "created_at": 1717951353000
-    },
-    "run_history_size": 12,
-    "sub_reports": {
-      "coverage": "available",
-      "regression": "available",
-      "localization": "available",
-      "replay": "unavailable"
-    }
-  },
-  "errors": [],
-  "warnings": []
-}
-```
-
-| Field | Meaning |
-|---|---|
-| `data.latest_run_reference` | Most recent Run Record. `null` when no runs exist (fresh `init`). |
-| `data.run_history_size` | Count of non-tombstoned runs in the store. |
-| `data.sub_reports.*` | Same `"available" / "unavailable"` semantics as `stage_eligibility`, but aggregated across the whole store, not just the latest run. |
-
-`status` is read-only, fast, never derives anything. Right verb for
-periodic "what state is this project in" probes.
-
-When `data.latest_run_reference == null`:
-
-```json
-{
-  "schema": "novetest/v1",
-  "command": "status",
-  "ok": true,
-  "data": {
-    "latest_run_reference": null,
-    "run_history_size": 0,
-    "sub_reports": {}
-  },
-  "errors": [],
-  "warnings": []
-}
-```
-
-:::
-
----
-
-## `novetest inspect <run_id>` — drill into one run
-
-::: tabs
-@tab For human
-
-```bash
-novetest inspect 01HX0K4M5N6P7Q8R9STUVWXYZ0
-```
-
-You should see:
-
-```
-✓ 01HX0K4M5N6P7Q8R9STUVWXYZ0 · passed · pytest (python) · target=<workspace>
-
-  coverage      ✓ per-test · 245/287 statements (85.4%) · branches 59/68
-  regression    ✓ clean · regressed=0 fixed=0 still_failing=0
-  localization  sbfl_per_test · ochiai · 0 entries · confidence=high
-  replay        ? unavailable (not-run)
-```
-
-Three rows + four sub-reports:
-
-- **Header.** Glyph + ULID + Run status (`passed` / `failed` /
-  `errored`) + engine (ecosystem) + target. `target=<workspace>`
-  is the explicit token for "the whole project".
-- **coverage.** Either `✓ <granularity> · <covered>/<total>
-  statements (<pct>%)` (plus branches if the engine reports them),
-  or `— unavailable (<reason>)`.
-- **regression.** Either `✓ clean ...` / `✗ regressions ...` with
-  regressed/fixed/still_failing counts, or
-  `— unavailable (<reason>)`.
-- **localization.** Header line; full ranked list lives in
-  `novetest localization <run_id>`.
-- **replay.** `✓ reproducible · N/N`,
-  `✗ inconsistent · N/N failed`, or
-  `? <classification> (<reason>)`.
-
-A failing run looks like:
-
-```
-✗ 01HX0K4M5N6P7Q8R9STUVWXYZ0 · failed · pytest (python) · target=<workspace>
-
-  coverage      ✓ per-test · 240/287 statements (83.6%)
-  regression    ✗ regressions · regressed=2 fixed=0 still_failing=0
-  localization  sbfl_per_test · ochiai · 3 entries · confidence=high
-  replay        ? unavailable (not-run)
-```
-
-The same shape; just `✗` instead of `✓` and non-zero counts.
-
-#### When `inspect` is useful
-
-- You want the raw coverage percentage.
-- You want to see whether regression detected new regressions.
-- You want to know if SBFL had something to rank (the `N entries`
-  count).
-- You're debugging why a stage said "unavailable" — the
-  parenthesized reason tells you.
-
-#### When `inspect` is overkill
-
-For the simple green case, the `novetest test` recommendation
-already tells you everything. Reach for `inspect` only when you
-need a number or a reason.
-
-@tab For agent
-
-```bash
-NOVETEST_OUTPUT=json novetest inspect 01ARZ3NDEKTSV4RRFFQ69G5FAV
-```
-
-Aggregates all derived facts for one run. Discriminated unions
-throughout:
-
-```json
-{
-  "schema": "novetest/v1",
-  "command": "inspect",
-  "ok": true,
-  "data": {
-    "run_reference": { "run_id": "...", "created_at": 1717951353000 },
-    "memory_entry": {
-      "schema_version": 1,
-      "entry_id": "...",
-      "run_record": { /* full Run Record */ },
-      "stored_at": 1717951367000,
-      "has_coverage_facts": true,
-      "has_regression_facts": false,
-      "has_localization_findings": true,
-      "has_replay_result": false,
-      "tombstoned_at": null
-    },
-    "coverage_outcome": {
-      "kind": "fact-set",
-      "run_reference": { /* ... */ },
-      "mapping_granularity": "per-test",
-      "summary": {
-        "num_statements": 287,
-        "covered_statements": 245,
-        "missing_statements": 42,
-        "excluded_statements": 0,
-        "num_branches": 68,
-        "covered_branches": 59,
-        "missing_branches": 9,
-        "percent_covered": 85.4
-      }
-    },
-    "regression_outcome": {
-      "kind": "unavailable",
-      "reason": "no-comparable-baseline"
-    },
-    "localization_outcome": {
-      "kind": "fact-set",
-      "run_reference": { /* ... */ },
-      "engine_name": "pytest",
-      "ecosystem": "python",
-      "mode": "sbfl_per_test",
-      "confidence": "high",
-      "formula": "ochiai",
-      "alternate_scores_available": ["tarantula", "dstar2"],
-      "top_n": 10,
-      "entries": [ /* ranked SBFL findings */ ],
-      "derived_at": 1717951375000
-    },
-    "replay_outcome": {
-      "kind": "unavailable",
-      "reason": "not-run"
-    }
-  },
-  "errors": [],
-  "warnings": []
-}
-```
-
-#### Discriminated unions (switch on `kind`)
+`inspect` `data`: `run_reference`, `run_summary`, `sub_reports`, and four
+discriminated-union outcome blocks — **switch on `kind`**:
 
 | Field | `kind` ∈ |
 |---|---|
@@ -545,306 +382,126 @@ throughout:
 | `localization_outcome` | `"fact-set"` ∣ `"unavailable"` |
 | `replay_outcome` | `"replay-result"` ∣ `"unavailable"` |
 
-When `kind == "unavailable"`, always present:
+```json
+"coverage_outcome": { "kind": "fact-set", "mapping_granularity": "per-test",
+  "summary": { "percent_covered": 100.0, "num_statements": 13, "covered_statements": 13, "...": "..." } },
+"regression_outcome": { "kind": "fact-set",
+  "summary": { "regressed": 1, "still_passing": 2, "total_target_tests": 3, "...": "..." }, "...": "..." },
+"localization_outcome": { "kind": "fact-set", "mode": "sbfl_per_test", "confidence": "high",
+  "formula": "ochiai", "top_n": 10, "entries": [ "...5 ranked entries..." ] },
+"replay_outcome": { "kind": "unavailable", "reason": "missing-derived-facts",
+  "detail": "no replay attempt has been made for this run" }
+```
 
-- `reason`: string (e.g. `"no-comparable-baseline"`,
-  `"no_failed_tests"`, `"not-run"`, `"missing-derived-facts"`, ...)
-
-Always switch on `kind` first; never assume a fact-set shape is
-present.
-
-#### When to call `inspect`
-
-- You need the raw coverage `summary` block.
-- You want to walk the SBFL `entries[]` rankings.
-- You want to audit a recommendation by following its
-  `evidence_citations` back to the cited run's full state.
-- You're debugging why `stage_eligibility` reported `"unavailable"`
-  — the per-stage `reason` field is more detailed than the summary
-  value.
+`inspect` is cache-only — it never runs replay. A stale/unknown `run_id` →
+`errors[].code == "not-found"`, exit 2.
 
 :::
 
 ---
 
-## Warnings
+## Sub-report verbs
 
-A trailing warnings block can appear under any verb's output. They
-are **advisory** — the command succeeded; we just wanted you to
-know something. Production scripts may want to log them; humans can
-ignore them in interactive work.
+All take a `run_id` (copy from `memory list` / `inspect` / the `run_id=`
+header). Each returns one `data.<outcome>` block discriminated on `kind`.
+
+| Verb | `data` key(s) | `kind` values |
+|---|---|---|
+| `memory list` | `count`, `entries[]` | — |
+| `memory show <run_id>` / `delete` | `memory_entry` | — |
+| `coverage show <run_id>` | `coverage_outcome` | `fact-set` ∣ `unavailable` |
+| `coverage diff <base> <target>` | `coverage_delta` | `delta` ∣ `unavailable` |
+| `regression compare <base> <target>` | `regression_outcome` | `fact-set` ∣ `unavailable` |
+| `regression latest` | `regression_outcome` | `fact-set` ∣ `unavailable` |
+| `compare <base> <target>` | `regression_outcome` **and** `coverage_delta` | as above |
+| `localization <run_id>` / `latest` | `localization_outcome` | `fact-set` ∣ `unavailable` |
+| `replay <run_id>` | `replay_outcome` (+ `original_run_reference`) | `replay-result` ∣ `unavailable` |
 
 ::: tabs
 @tab For human
 
-```
-warnings:
-  ⚠ localization-cache-rederived: cache was rewritten because --formula differed from cached value
-  ⚠ engine-misconfigured: pytest-cov is not installed; coverage will be unavailable
+Confirm the regression against the green baseline (baseline first, target
+second — order matters):
+
+```bash
+novetest regression compare 01KVYRRR9ZNAM1PBA9JTR4QXC6 01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 
-Each line is `⚠ <code>: <message>`.
+```
+✗ regressions · regressed=1 fixed=0 still_failing=0
+  baseline=01KVYRRR9ZNAM1PBA9JTR4QXC6 target=01KVYRRRN9FWVNQWVHNE1QHAQ4
+```
+
+`novetest compare` shows both signals at once (here coverage is
+unavailable because the baseline run was stored without coverage):
+
+```
+regression: ✗ regressions · regressed=1 fixed=0 still_failing=0
+coverage:   — unavailable (missing-derived-facts)
+```
+
+`novetest replay` re-executes and classifies; the reruns become new runs
+in `memory list`:
+
+```
+✓ reproducible · 1/1 · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
+```
 
 @tab For agent
 
+`regression compare` → `regression_outcome.kind == "fact-set"`, exit 0:
+
 ```json
-{
-  "warnings": [
-    {
-      "code": "localization-cache-rederived",
-      "message": "Cache was rewritten because --formula differed from cached value.",
-      "details": { /* open-ended structured context */ }
-    }
-  ]
+"summary": { "regressed": 1, "fixed": 0, "still_passing": 2, "still_failing": 0,
+  "total_baseline_tests": 3, "total_target_tests": 3, "added": 0, "removed": 0,
+  "newly_active": 0, "newly_skipped": 0, "still_skipped": 0 }
+```
+
+The regressed test surfaces in `test_transitions[]` with
+`category: "regressed"` and a `target_failure_reference`. Top-level
+`compare` adds a `coverage_delta` block (here `kind: "unavailable"`).
+
+`replay` → `replay_outcome.kind == "replay-result"`, exit 0:
+
+```json
+"replay_outcome": {
+  "classification": "reproducible",
+  "consistency_summary": { "original_passed": 0, "original_failed": 1,
+    "replay_passed": 0, "replay_failed": 1, "replay_errored": 0 },
+  "per_rerun_outcomes": ["failed"], "reruns_total": 1, "reruns_failed": 0,
+  "replayed_run_reference": { "run_id": "01KVYRRVYB6K156ABEDFQTMQCG", "...": "..." },
+  "test_id": null, "reason": null, "attempted_at": 1782370299982, "kind": "replay-result"
 }
 ```
 
-Pin against `code` for routing. `message` is for display.
-`details` is open-ended structured context whose schema varies per
-`code`.
+`classification` ∈ `reproducible` ∣ `inconsistent` ∣ `unable_to_replay`
+(all exit 0). `--reruns` defaults `1`, `--timeout` `600.0`. STRICT policy:
+one differing rerun → `inconsistent`. `localization` flags: `--formula`
+(default `ochiai`; values `ochiai`/`op2`/`dstar2`/`tarantula`) and
+`--top-n` (default `10`); a bad value is `invalid-flag`, exit 2.
 
 :::
 
-Common warning codes you may see:
+---
 
-| Code | Meaning |
+## `warnings[]`
+
+Independent of `errors[]`. Advisory — the command still succeeded;
+warnings never change the exit code or `ok`. Same `{code, message,
+details}` shape. The two real codes both come from `localization`:
+
+| `code` | Meaning |
 |---|---|
-| `localization-cache-rederived` | The cache was rewritten because the requested `--formula` or `--top-n` differed from what was cached. |
-| `localization-formula-noop-in-mode` | `--formula` was specified but the chosen SBFL mode (`failure_proximity`) does not consume a formula. |
-| `engine-misconfigured` | Readiness probe found the engine but flagged missing optional pieces (e.g. coverage tool). |
-| `junit-multiple-build-systems` | Both `pom.xml` and `build.gradle` present; the adapter picked Maven. |
-| `coverlet-floor-degraded` | The .NET project pins an older Coverlet that cannot do per-test coverage. |
-
-Warnings never affect exit code or `ok`.
-
----
-
-## `errors[].code` catalog (failure paths)
-
-When `ok: false`, the `errors[]` array carries at least one error
-with this shape:
-
-```json
-{
-  "code":    "machine-friendly-slug",
-  "message": "Human-readable explanation or hint.",
-  "details": { /* optional structured context */ }
-}
-```
-
-Pin against `code` for routing. `message` is for surfacing to
-humans. `details` is open-ended structured context whose schema
-varies per `code`.
-
-The codes you will encounter:
-
-| `errors[].code` | Typical exit | Triggered when | Recovery |
-|---|---|---|---|
-| `uninitialized` | 2 | Non-`init` verb run from a directory with no `.novetest/` in any ancestor. | `cd` into a `.novetest/`-containing tree, or run `novetest init`. |
-| `store-corrupt` | 5 | `.novetest/store.json` unreadable or malformed. | Inspect / fix the file. Worst case: `rm -rf .novetest && novetest init` (loses history). |
-| `not-found` | 2 | A `run_id` you passed (to `inspect`, `coverage show`, `replay`, `memory show`, ...) does not match any Memory Entry. | List available IDs with `novetest memory list`. |
-| `engine-missing` | 4 | Native engine binary not on PATH. | Install per [Supported Languages](./supported-languages.md). `details.install_hint` is the one-liner. |
-| `engine-misconfigured` | 4 | Engine found but unusable (missing plugin, wrong version). | `details.install_hint`. |
-| `engine-not-ready` | 4 | Higher-level readiness probe failed. | `details` carries the specific issue list. |
-| `invalid-flag` | 2 | Flag value outside the allowed set (e.g. `--formula somethingelse`). | `errors[0].message` lists allowed values. |
-| `adapter-<kind>` | 4 (usually) | Native adapter invocation failed (`adapter-pytest`, `adapter-jest`, `adapter-junit`, `adapter-gotest`, `adapter-cargo`, `adapter-xunit`). | `details.install_hint` often carries a one-line fix. |
-| `not-implemented` | 2 | A verb stub reserved for a future phase. | Should not occur on the happy path at MVP. |
-| `cli-error` | 1 | Unexpected internal exception. | Report as bug with the envelope payload. |
-
-For full per-code recovery patterns, see
-[Troubleshooting](./troubleshooting.md).
-
----
-
-## A worked example: green -> fail -> green
-
-We start with the working example from
-[Introduction](./introduction.md#the-working-example-used-throughout-these-docs).
-
-### Run 1 — green
-
-```bash
-cd my-project
-novetest init
-novetest test
-```
-
-::: tabs
-@tab For human
-
-Output:
-
-```
-1 recommendation · 1 category · run_id=01HX0K4M5N6P7Q8R9STUVWXYZ0
-
-  ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
-      ↳ run_reference 01HX0K4M5N6P7Q8R9STUVWXYZ0
-```
-
-Exit code: 0. Done.
-
-@tab For agent
-
-`recommendations[0].category == "all_green"`. Exit 0. Done.
-
-:::
-
-### Run 2 — break a test, re-run
-
-Edit `tests/test_math_utils.py` so `test_add_positive` fails:
-
-```python
-def test_add_positive() -> None:
-    assert add(2, 3) == 99  # was 5
-```
-
-```bash
-novetest test
-```
-
-::: tabs
-@tab For human
-
-Output (illustrative):
-
-```
-2 recommendations · 2 categories · run_id=01HX1L5N6O7P8Q9R0STUVWXYZ1
-
-  ! [tests_failed] 1 test failed in tests/test_math_utils.py.
-      ↳ test_result tests/test_math_utils.py::test_add_positive (failed)
-  ! [new_test_failure] test_add_positive went green → failed since the previous run.
-      ↳ regression_fact tests/test_math_utils.py::test_add_positive
-```
-
-Exit code: **3** (your tests failed). `ok` is still `true` — the
-CLI did its job.
-
-To see what failed and why, drill in:
-
-```bash
-novetest inspect 01HX1L5N6O7P8Q9R0STUVWXYZ1
-```
-
-Look for the failed `test_result` block in the inspect output, or
-use `novetest run` directly to see the raw pytest stdout.
-
-@tab For agent
-
-Envelope (illustrative):
-
-```json
-{
-  "schema": "novetest/v1",
-  "command": "test",
-  "ok": true,
-  "data": {
-    "run_reference": { "run_id": "01HX1L...", "created_at": 0 },
-    "stage_eligibility": {
-      "coverage": "available",
-      "regression": "available",
-      "localization": "available",
-      "replay": "not_run"
-    },
-    "recommendations": [
-      {
-        "category": "tests_failed",
-        "priority": 9,
-        "summary": "1 test failed in tests/test_math_utils.py.",
-        "slots": { "failed_count": 1, "run_reference": { } },
-        "evidence_citations": [
-          {
-            "kind": "test_result",
-            "selector": {
-              "test_id": "tests/test_math_utils.py::test_add_positive",
-              "outcome": "failed"
-            }
-          }
-        ]
-      },
-      {
-        "category": "new_test_failure",
-        "priority": 8,
-        "summary": "test_add_positive went green → failed since the previous run.",
-        "evidence_citations": [
-          {
-            "kind": "regression_fact",
-            "selector": {
-              "test_id": "tests/test_math_utils.py::test_add_positive"
-            }
-          }
-        ]
-      }
-    ]
-  },
-  "errors": [],
-  "warnings": []
-}
-```
-
-Exit code: **3** (tests failed); `ok: true` (CLI did its job).
-
-Agent action:
-
-```python
-top = sorted(recs, key=lambda r: -r["priority"])[0]
-# top["category"] == "tests_failed"
-# top["evidence_citations"][0]["selector"]["test_id"]
-#     == "tests/test_math_utils.py::test_add_positive"
-# -> fetch raw stdout/stderr via `novetest inspect <run_id>`
-#    or re-run `novetest run`
-```
-
-:::
-
-### Run 3 — fix and re-run
-
-Revert the edit and re-run:
-
-```python
-def test_add_positive() -> None:
-    assert add(2, 3) == 5
-```
-
-```bash
-novetest test
-```
-
-::: tabs
-@tab For human
-
-Output:
-
-```
-1 recommendation · 1 category · run_id=01HX2M6O7P8Q9R0STUVWXYZ12
-
-  ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
-      ↳ run_reference 01HX2M6O7P8Q9R0STUVWXYZ12
-```
-
-(Depending on the specific synthesizer rule, you may also see a
-`[recovered_from_failure]` recommendation — same shape, glyph `✓`,
-recommends "you've recovered, all green now".)
-
-Exit code: 0.
-
-The loop is: read the top recommendation, act on it, re-run.
-
-@tab For agent
-
-Either `category == "all_green"` (typical) or
-`category == "recovered_from_failure"` (synthesizer-dependent).
-Exit code: 0.
-
-:::
+| `localization-cache-rederived` | You passed `--formula`/`--top-n` differing from the cached finding, so it was re-derived at the new flags. |
+| `localization-formula-noop-in-mode` | You passed `--formula`, but the run's SBFL mode (`failure_proximity`) does not consume a formula — nothing changed. |
 
 ---
 
 ## What to read next
 
-- Deeper verbs (`replay`, `coverage diff`, `localization` with a
-  non-default formula, `memory delete`) →
-  [Advanced Usage](./advanced-usage.md).
-- Per-engine quirk biting you →
-  [Supported Languages](./supported-languages.md).
-- Something didn't work →
-  [Troubleshooting](./troubleshooting.md).
+- **[Advanced Usage](./advanced-usage.md)** — `coverage diff`, non-default
+  `localization` formulas, `replay --reruns`, `memory` lifecycle.
+- **[Supported Languages](./supported-languages.md)** — engine-specific
+  behaviour (e.g. go-test produces no coverage facts).
+- **[Troubleshooting](./troubleshooting.md)** — every error code, its
+  cause, and the fix.

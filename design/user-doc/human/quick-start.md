@@ -1,249 +1,206 @@
 # Quick Start — the canonical happy path (Human)
 
-The 4-step canonical workflow. We use the working example from
+The four-step workflow you will use every day. It uses the working
+example from
 [README.md](./README.md#the-working-example-used-throughout-this-manual)
-(a tiny Python + pytest project with 3 green tests). Every output
-on this page is the actual text the CLI prints to your terminal.
+— the tiny **`calc`** project (a Python + pytest package with three
+green tests). Every block on this page is the **actual text** the CLI
+prints to your terminal in its default human mode.
 
 The four steps:
 
 1. `novetest init` — create the per-project store under `.novetest/`.
-2. `novetest test` — run tests, derive coverage / regression / localization, synthesize a recommendation.
+2. `novetest test` — run the tests, derive coverage / regression /
+   localization, and synthesize a recommendation.
 3. Read the recommendation block on stdout.
-4. (Optional) `novetest inspect <run_id>` to dig deeper.
+4. (Optional) `novetest inspect <run_id>` to drill into one run.
 
-For everything beyond step 2 (status, inspect with all sub-reports,
-replay), see [after-test.md](./after-test.md). For language-specific
-toolchain notes, see [languages.md](./languages.md).
+For everything past step 2 — exit codes, the full category list, when to
+reach for `status` / `inspect` — see
+[after-test.md](./after-test.md). For non-Python projects, see
+[languages.md](./languages.md).
 
 ---
 
 ## Step 1 — `novetest init`
 
-Run from the project root (the directory that contains
-`pyproject.toml` in our example):
+Run it once from the project root (the directory that holds
+`pyproject.toml`):
 
 ```bash
-cd my-project
+cd calc-demo
 novetest init
 ```
 
 You should see:
 
 ```
-✓ Initialized .novetest/ at /home/you/my-project/.novetest
-  engine readiness: ready — python/pytest 8.0.0
+✓ Initialized .novetest/ at /home/you/calc-demo/.novetest
+  engine readiness: ready — python/pytest 9.0.3
 ```
 
-What just happened:
+What happened:
 
 - A `.novetest/` directory was created. It holds every Run Record,
   Coverage Facts set, Regression Facts set, Localization Findings set,
   and Replay Result for this project — as plain JSON files.
-- Nove Test auto-detected your engine (`pytest`) from
-  `pyproject.toml`. The `engine readiness: ready` line means the
-  native engine is fully installed and ready to run.
+- Nove Test auto-detected your engine (`pytest`) from `pyproject.toml`.
+  `engine readiness: ready` means the native engine resolved and is
+  ready to run. The version shown (`9.0.3` here) is **your own
+  installed pytest**, not a Nove Test version.
 
-If you see `engine readiness: engine-missing` or
-`engine-misconfigured` instead, the next line(s) will be
-`issue: ...` explaining what to fix. See
+If you see `engine readiness: engine-missing` or `engine-misconfigured`
+instead, the next line is an `issue:` explaining what to fix — see
 [troubleshooting.md](./troubleshooting.md#engine-missing-or-misconfigured).
 
-> **Where do I run `novetest test` from?** Anywhere inside
-> `my-project/` (the project root or any subdirectory). Nove Test
-> walks up from your current working directory to find `.novetest/`,
-> just like `git` finds `.git/`. Running from a directory whose
-> ancestors do not contain `.novetest/` returns an `uninitialized`
-> error.
+> **Where do I run novetest from?** Anywhere inside `calc-demo/`. Nove
+> Test walks up from your current directory to find `.novetest/`, just
+> like `git` finds `.git/`. Run it somewhere with no `.novetest/` in any
+> ancestor and you get an `uninitialized` error (exit 2).
 
-### Directory tree created by `init`
+### The directory `init` creates
+
+`init` creates these directories plus `store.json`:
 
 ```
 .novetest/
-├── store.json              # schema_version, initialized_at, store_state
+├── store.json          # schema_version, initialized_at, store_state
+├── blobs/
 ├── memory/
-│   ├── runs/               # one Run Record per execution
-│   └── tombstones/         # soft-deleted entries
-├── run/
-│   ├── artifacts/          # native engine raw output + logs
-│   └── readiness/          # cached readiness probe result
-├── coverage/facts/         # per-run Coverage Facts
-├── regression/pairs/       # cached Regression Facts per (baseline,target) pair
-├── localization/findings/  # SBFL findings per run
-├── replay/results/         # Replay Results per replay
-└── orchestration/
-    ├── recommendations/    # synthesized recommendations
-    └── status/             # latest cached status snapshot
+│   ├── runs/           # one Run Record per execution
+│   └── tombstones/     # soft-deleted (tombstoned) entries
+├── run/                # → run/artifacts/    on first run (native output + logs)
+├── coverage/           # → coverage/facts/   on first coverage derive
+├── regression/         # → regression/pairs/ on first comparison
+├── localization/       # → localization/findings/ on first SBFL run
+├── replay/             # → replay/results/   on first replay
+└── orchestration/      # reserved; recommendations are computed live, not stored
 ```
 
-You usually do not need to look inside. The CLI manages this for you.
-
-`init` is fully idempotent — re-running it on an already-initialized
-project does nothing destructive.
+Each engine creates its own leaf subdirectory (shown after `→`) lazily,
+on its first write — so right after `init` you only see the parent
+directories above. You never need to look inside; the CLI manages it.
+(Recommendations are synthesized fresh on every `test`; they are **not**
+written to disk.)
 
 ---
 
 ## Step 2 — `novetest test`
 
-This is the single command that does everything.
+The headline verb. It runs your tests through the native engine, stores a
+Run Record, derives coverage / regression / localization where it can,
+and prints a synthesized recommendation:
 
 ```bash
 novetest test
 ```
 
-Or, equivalently:
-
-```bash
-novetest test tests/
-novetest tests/        # bare default-verb alias — same thing as above
-```
-
-We recommend the explicit `novetest test` form in scripts. The bare
-alias is handy at the prompt.
-
-You should see:
+On the all-green `calc` project:
 
 ```
-1 recommendation · 1 category · run_id=01HX0K4M5N6P7Q8R9STUVWXYZ0
+1 recommendation · 1 category · run_id=01KVYRJJJ75ZRHC05GNKYRK99S
 
   ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
-      ↳ run_reference 01HX0K4M5N6P7Q8R9STUVWXYZ0
+      ↳ run_reference 01KVYRJJJ75ZRHC05GNKYRK99S
 ```
 
-Read top to bottom:
+Exit code **0**. Reading it:
 
-- **Summary line.** "1 recommendation · 1 category · run_id=..." — Nove Test had one thing to tell you, in one category, for a run with this ULID.
-- **Glyph + category.** `✓` means "good news"; `[all_green]` is the category from the closed taxonomy. Other categories you may see: `[tests_failed]`, `[coverage_regressed]`, `[new_test_failure]`, `[flaky_suspect]`, `[unavailable_analysis]`.
-- **Sentence.** A self-contained English sentence summarizing the recommendation. You can act on this directly.
-- **Citation arrow.** `↳ run_reference 01HX...` points at the Run Record this recommendation is based on. Copy that ULID to drill in with `novetest inspect`.
+- **Header line** — how many recommendations, how many distinct
+  categories, and the `run_id` (a 26-character ULID) you can pass to
+  other verbs.
+- **The block** — a glyph (`✓` here), a bracketed `[category]`, a
+  one-line summary, and an `↳` citation pointing at the evidence.
+- `[all_green]` is one of a closed set of **seven** categories. Each
+  carries an integer `priority` (1 = most urgent … 7 = all green). See
+  the full list in [after-test.md](./after-test.md#the-seven-recommendation-categories).
 
-Exit code: **0** because the tests passed. If your tests had failed,
-the exit code would be **3** (not 1) — that is meaningful product
-data, not an error. See [after-test.md](./after-test.md#exit-codes)
-for the full table.
+`novetest test` always collects coverage; there is no `--coverage` flag
+on it. (The lower-level `novetest run` executes the engine and stores a
+Run Record **without** the analysis pipeline, and takes `--coverage` /
+`-c` if you want coverage on a bare run.)
 
-### What `novetest test` did under the hood
-
-1. **Ran** the native engine (`pytest`) and persisted a Run Record under `.novetest/memory/runs/`.
-2. **Derived coverage** (via `pytest-cov`, if installed) and persisted facts under `.novetest/coverage/facts/`.
-3. **Resolved a regression baseline** — the immediately preceding run on the same target. On the very first run there is no baseline, so this stage simply reports "unavailable".
-4. **Computed SBFL fault localization** (Ochiai by default). With zero failing tests there is nothing to localize, so this stage may report "unavailable" too — that is expected, not an error.
-5. **Synthesized recommendations** — picked deterministic recommendations from the facts above and printed them.
-
-The five stages run in order. If a stage fails its readiness check
-(e.g. `pytest-cov` not installed), `novetest test` does not abort —
-it records the stage as "unavailable" and continues. The only hard
-failures are: engine missing (exit 4), bad usage (exit 2), or a
-corrupt Project Store (exit 5).
-
-### Working with coverage
-
-Coverage is auto-enabled when `pytest-cov` is present. If you do not
-have it installed yet:
-
-```bash
-pip install pytest-cov
-novetest test
-```
-
-You should now see a `✓` for coverage in the deeper view (`novetest
-inspect <run_id>`, covered in step 4 below).
+> **Shortcut:** `novetest <path>` is the same as `novetest test <path>`
+> — any first argument that is not a known verb is treated as a test
+> target. For example `novetest tests/test_arithmetic.py` runs just that
+> file. Bare `novetest` with no arguments prints the help screen; it does
+> **not** run your tests.
 
 ---
 
 ## Step 3 — read the recommendation
 
-For the all-green happy case there is exactly one recommendation and
-it tells you everything you need: nothing to do. You are done.
+For the happy path there is nothing to do: `[all_green]` means every test
+passed and no action is recommended. When a test fails, `test` instead
+emits one or more `[investigate_location]` recommendations that point at
+the most suspicious code — and the exit code becomes **3** (your tests
+failed) while the envelope itself still reports success. The
+green → bug → drill-in walkthrough lives in
+[after-test.md](./after-test.md#a-worked-example-green--bug--drill-in-the-calc-project).
 
-For non-trivial outcomes the same shape applies — read top to
-bottom:
-
-```
-3 recommendations · 2 categories · run_id=01HX0K4M5N6P7Q8R9STUVWXYZ0
-
-  ! [tests_failed] 2 tests failed in tests/test_math_utils.py.
-      ↳ test_result tests/test_math_utils.py::test_add_positive (failed)
-  ! [tests_failed] (continued — see inspect for full list)
-      ↳ test_result tests/test_math_utils.py::test_subtract (failed)
-  ✓ [unavailable_analysis] Localization unavailable — no baseline yet.
-      ↳ run_reference 01HX0K4M5N6P7Q8R9STUVWXYZ0
-```
-
-Two cues:
-
-- **`!`** in front of `[tests_failed]` — needs action.
-- **`✓`** in front of `[unavailable_analysis]` — informational, no
-  action.
-
-A pattern emerges: glyph carries urgency, category carries kind,
-sentence carries detail, citation carries the pointer back.
-
-Multiple recommendations are listed in priority order (most urgent
-first). You can usually act on the top recommendation, re-run
-`novetest test`, and re-read the new output.
-
-For a worked example walking through "green → fail → green" with
-real failure output, see
-[after-test.md](./after-test.md#a-worked-example-green--fail--green).
-
----
-
-## Step 4 — (optional) drill into the run with `inspect`
-
-If you want to see everything for a single run on one screen:
+The whole project's analysis availability is summarized by
+`novetest status`:
 
 ```bash
-novetest inspect 01HX0K4M5N6P7Q8R9STUVWXYZ0
+novetest status
 ```
 
-You should see:
-
 ```
-✓ 01HX0K4M5N6P7Q8R9STUVWXYZ0 · passed · pytest (python) · target=<workspace>
+latest run · 01KVYRJK97SSR5DR840PH26VQK · history: 4 runs
 
-  coverage      ✓ per-test · 10/11 statements (86.7%)
-  regression    — unavailable (no-comparable-baseline)
-  localization  — unavailable (no_failed_tests)
-  replay        ? unavailable (not-run)
+  — coverage      unavailable
+  — regression    unavailable
+  — localization  unavailable
+  — replay        unavailable
 ```
 
-Read it like this:
-
-- **Header line.** `✓` (passed), the run's ULID, the engine + ecosystem, and what target you ran. `target=<workspace>` is the explicit token for "the whole project".
-- **Four sub-report lines.** One per engine — each gives you the kind-discriminated outcome (`✓ <fact-set summary>` if facts were derived, `—` or `?` followed by a reason if not).
-
-Reasons you will commonly see in the happy path:
-
-| Reason | Meaning |
-|---|---|
-| `no-comparable-baseline` | First run on this target. There is nothing to compare against; the next run will populate it. |
-| `no_failed_tests` | SBFL had no failures to attribute, so nothing to rank. (Expected on green runs.) |
-| `not-run` | `novetest test` deliberately did not auto-invoke replay (it would multiply wall time). Call `novetest replay <run_id>` explicitly if you want it. |
-
-You do **not** need `inspect` for the simple happy case — the
-recommendation from `novetest test` is enough. Reach for `inspect`
-when you want a raw audit trail or are debugging why a stage reported
-"unavailable".
+`—` means a sub-report is unavailable for this latest run (e.g. it was a
+bare `novetest run` with no coverage, or there were no failing tests to
+localize) — not an error.
 
 ---
 
-## Two patterns to internalize
+## Step 4 — (optional) `novetest inspect <run_id>`
 
-1. **One canonical command.** `novetest test` is the single call.
-   Do not stitch together `run` + `coverage show` + `regression
-   compare` + `localization` by hand for the happy path; `test` does
-   it in the right order with the right defaults.
-2. **Glyph + category + sentence + citation.** Every recommendation
-   you ever see follows this shape. Learn to skim it.
+To see everything Nove Test knows about a single run, pass its `run_id`:
+
+```bash
+novetest inspect 01KVYRJJJ75ZRHC05GNKYRK99S
+```
+
+```
+✓ 01KVYRJJJ75ZRHC05GNKYRK99S · passed · pytest (python) · target=<workspace>
+
+  coverage      ✓ per-test · 13/13 statements (100.0%)
+  regression    ✓ clean · regressed=0 fixed=0 still_failing=0
+  localization  — unavailable (missing_derived_facts)
+  replay        ? unavailable (missing-derived-facts)
+```
+
+`inspect` is a pure read — it executes nothing. It aggregates the four
+derived sub-reports for that run:
+
+- **coverage** — `✓` because `novetest test` always collects it; 13 of
+  13 statements covered.
+- **regression** — `✓ clean` because this run was compared against the
+  previous run and nothing regressed.
+- **localization** — unavailable: there were no failing tests to localize
+  (a passing run has nothing to rank).
+- **replay** — unavailable until you explicitly run `novetest replay
+  <run_id>`; `test` never replays for you.
 
 ---
 
-## What to read next
+## That's the whole loop
 
-- Your project is not Python? → [languages.md](./languages.md).
-- You want to interpret a `tests_failed`, dig into a failing run, or
-  see the exit-code table → [after-test.md](./after-test.md).
-- You suspect you need a deeper verb than the happy path covers →
-  [advanced.md](./advanced.md).
-- Something went wrong → [troubleshooting.md](./troubleshooting.md).
+`init` once, then `test` whenever you want a verdict, `status` /
+`inspect` to review. From here:
+
+- **[languages.md](./languages.md)** — the one toolchain note your engine
+  needs if `calc` were jest / go-test / cargo-test / JUnit / xUnit.
+- **[after-test.md](./after-test.md)** — exit codes, the seven categories,
+  and the green → bug → fix walkthrough.
+- **[advanced.md](./advanced.md)** — `coverage diff`, `regression
+  compare`, `localization`, `replay`, `memory` cleanup, `licenses`.
+
+Next: [languages.md](./languages.md).

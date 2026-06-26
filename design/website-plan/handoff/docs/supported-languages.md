@@ -2,32 +2,49 @@
 
 The canonical happy path in [Quick Start](./quick-start.md) is
 language-agnostic. This page documents only **what differs per
-language**: detection markers, the toolchain you need on PATH, the
-minimal project skeleton, per-test identity convention, the coverage
-format, and the per-engine quirks the adapter team has pinned over
-development.
+language**: detection markers, the `(ecosystem, engine)` identifier
+pair, the toolchain you need on PATH, the external command the adapter
+invokes (shown simplified — coverage runs add a few extra flags), and
+whether coverage is available.
 
 `novetest` auto-detects which engine your project uses from workspace
-markers (`pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`,
-`pom.xml` / `build.gradle`, `*.csproj` / `*.sln`). **You do not pass
-an `--engine` flag.**
+markers. **You do not pass an `--engine` flag.**
+
+---
+
+## The six supported engines
+
+`novetest` ships six fully-wired native engine adapters. The `engine`
+string is exactly what appears as `engine_name` on your Run Record —
+note `go-test`, `cargo-test`, and `xunit` (the .NET engine is named
+`xunit`, not `dotnet`):
+
+| `ecosystem` | `engine` | Marker(s) | Coverage |
+|---|---|---|---|
+| `python` | `pytest` | `pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini` | yes |
+| `javascript-typescript` | `jest` | `package.json` | yes |
+| `java` | `junit` (JUnit 5 Jupiter **only**) | `pom.xml`, `build.gradle`, `build.gradle.kts` | yes |
+| `go` | `go-test` | `go.mod` | **no** |
+| `rust` | `cargo-test` (nextest **required**) | `Cargo.toml` | yes |
+| `dotnet` | `xunit` (xUnit v2 **only**) | `*.csproj` (root + 1-deep glob), `*.sln` | yes |
+
+Java is **JUnit 5 Jupiter only** — JUnit 4 and TestNG are explicitly
+rejected. .NET is **xUnit v2 only** — MSTest and NUnit are explicitly
+rejected. Rust **requires `cargo-nextest`** — there is no plain
+`cargo test` fallback. **`go test` runs, but its coverage is not
+consumed** (see the gotest section).
 
 ---
 
 ## Detection priority — one engine at a time
 
-`novetest test` (and every other non-`init` verb) runs **one engine
-at a time**. Detection walks a fixed priority list and **returns on
-the first marker match**:
+`novetest test` (and every other non-`init` verb) runs **one engine at
+a time**. When a polyglot repo matches several ecosystems at the same
+root, readiness disambiguates with a fixed priority:
 
-| # | `engine` | `ecosystem` | Workspace markers |
-|---|---|---|---|
-| 1 | `pytest` | `python` | `pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini` |
-| 2 | `jest` | `javascript-typescript` | `package.json` |
-| 3 | `junit` | `java` | `pom.xml`, `build.gradle`, `build.gradle.kts` |
-| 4 | `go-test` | `go` | `go.mod` |
-| 5 | `cargo-nextest` | `rust` | `Cargo.toml` |
-| 6 | `xunit` | `dotnet` | `*.csproj` (1-depth glob), `*.sln` |
+```
+pytest > jest > go-test > cargo-test > junit > xunit
+```
 
 ::: tabs
 @tab For human
@@ -40,14 +57,12 @@ every downstream engine).
 
 @tab For agent
 
-Polyglot workspaces with multiple markers at the same root → only
-the first match is selected; the others are silently ignored at
-this invocation. Polyglot orchestration in a single envelope is
-post-MVP (future verb: `novetest workspaces test`).
-
-The detection result is exposed on the `init` envelope as
-`data.engine_readiness.engine` + `data.engine_readiness.ecosystem`
-— the canonical machine-readable identifier pair.
+A repo with both `pyproject.toml` and `package.json` always routes to
+**pytest**; the other matches are ignored at that invocation. There is
+no single-envelope polyglot orchestration at MVP. The detected pair is
+exposed on the `init` envelope as
+`data.engine_readiness.ecosystem` + `data.engine_readiness.engine`
+(and on each run as `…run_record.engine_name` + `…ecosystem`).
 
 :::
 
@@ -70,16 +85,14 @@ polyglot-repo/
     └── .novetest/        ← `cd frontend && novetest init`
 ```
 
-Then:
-
 ```bash
 ( cd backend  && novetest test )   # runs pytest only
 ( cd frontend && novetest test )   # runs jest only
 ```
 
-Each subdirectory's `.novetest/` carries its own run history,
-coverage facts, regression baselines, and SBFL findings — completely
-isolated. The walk-up rule from
+Each subdirectory's `.novetest/` carries its own run history, coverage
+facts, regression baselines, and SBFL findings — completely isolated.
+The walk-up rule from
 [Quick Start -> Where do I run `novetest test` from?](./quick-start.md#where-do-i-run-novetest-test-from)
 guarantees that `novetest test` from `backend/tests/` finds
 `backend/.novetest/`, not the frontend one.
@@ -90,29 +103,74 @@ guarantees that `novetest test` from `backend/tests/` finds
 
 | Engine | What must be on PATH | Coverage tool |
 |---|---|---|
-| pytest | `python` ≥ 3.11 (your project's, not the bundled one) + `pytest` | `pytest-cov` |
-| jest | Node.js ≥ 18 (`node`, `npx`) + `jest` in the project's `node_modules` | jest built-in (Istanbul) |
-| gotest | Go ≥ 1.21 | built-in `go test -cover` |
-| cargo | Rust toolchain + `cargo-nextest` ≥ 0.9.50 + `cargo-llvm-cov` (for coverage) | `cargo-llvm-cov` (LCOV output) |
-| junit | JDK ≥ 17 + Maven ≥ 3.9 OR Gradle ≥ 7.6; JUnit 5 in project deps | JaCoCo plugin (auto-injected for Gradle) |
-| xunit | .NET SDK ≥ 8.0; xUnit v2 ≥ 2.4 in test project | `coverlet.collector` ≥ 6.0.2 |
+| `pytest` | `pytest` + `pytest-json-report` importable from novetest's interpreter | `pytest-cov` |
+| `jest` | Node.js ≥ 18 (`node` **and** `npx`) + workspace-local jest | jest built-in (Istanbul) |
+| `go-test` | Go ≥ 1.21 (`go`) | — (not consumed) |
+| `cargo-test` | Rust toolchain + `cargo-nextest` ≥ 0.9.50 (mandatory) + `cargo-llvm-cov` (coverage) | `cargo-llvm-cov` (LCOV) |
+| `junit` | JDK ≥ 17 + Maven ≥ 3.9 OR Gradle ≥ 7.6/wrapper; JUnit 5 Jupiter in deps | JaCoCo (XML) |
+| `xunit` | .NET SDK ≥ 8.0; xUnit v2 in test project | `coverlet.collector` ≥ 6.0.2 |
+
+`novetest init` never fails on a bad engine — it records the readiness
+state and moves on.
 
 ::: tabs
 @tab For human
 
-If a toolchain piece is missing, `novetest init` will tell you
-exactly what to install. The hint is on the line right after
-`engine readiness: engine-missing`.
+If a toolchain piece is missing, `novetest init` reports it on the
+`engine readiness:` line. The next `novetest test`/`novetest run`
+exits **4** until you fix the host. For example, a Python workspace
+with no pytest config:
+
+```
+✗ run
+  engine-engine-missing: engine readiness state: engine-missing (engine=(none detected))
+```
+
+(exit 4)
 
 @tab For agent
 
-Missing toolchain -> `init` reports
-`engine_readiness.state = "engine-missing"` (with actionable hints
-in `engine_readiness.issues[]`) but does **not** fail. Subsequent
-`novetest test` exits **4** with
-`errors[0].code = "engine-missing"` or `"engine-not-ready"` until
-you fix the host. The hint `details.install_hint` is a one-line
-shell command.
+Missing toolchain → `init` records
+`data.engine_readiness.state` ∈ {`"engine-missing"`,
+`"engine-misconfigured"`} (hints in `engine_readiness.issues[]`) but
+`init` still exits 0. A subsequent run verb exits **4** with
+`errors[0].code = "engine-engine-missing"` (or
+`"engine-engine-misconfigured"`). Real `novetest run` against a Python
+workspace with no pytest config:
+
+```json
+{
+  "command": "run",
+  "data": {
+    "engine_readiness": {
+      "ecosystem": null,
+      "engine": null,
+      "engine_version": null,
+      "evidence": [
+        "pyproject.toml"
+      ],
+      "issues": [
+        "Python workspace detected but no pytest configuration (pytest.ini, [tool.pytest.ini_options], conftest.py, or tests/ dir) found"
+      ],
+      "state": "engine-missing"
+    }
+  },
+  "errors": [
+    {
+      "code": "engine-engine-missing",
+      "details": {},
+      "message": "engine readiness state: engine-missing (engine=(none detected))"
+    }
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
+}
+```
+
+(exit 4). The error `code` is the doubled-prefix
+`engine-engine-missing` (`engine-` + the state `engine-missing`).
+There is **no** `engine-not-ready` readiness state.
 
 :::
 
@@ -120,324 +178,283 @@ shell command.
 
 ## pytest (Python)
 
-This is the **baseline** used in [Quick Start](./quick-start.md);
-treat that page as the canonical pytest walkthrough.
+This is the **baseline** used in [Quick Start](./quick-start.md).
 
-### Project skeleton
+Markers: `pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini`.
+Readiness **additionally** requires a pytest config — one of
+`pytest.ini`, `conftest.py`, a `tests/` dir,
+`[tool.pytest.ini_options]` in `pyproject.toml`, or `[tool:pytest]` in
+`setup.cfg`. A Python workspace with none reports `engine-missing`.
+
+The external command uses **novetest's own interpreter**, not a
+`pytest` on PATH, and disables plugin autoload:
 
 ```
-my-project/
-├── pyproject.toml
-├── my_module/
+<python> -m pytest -p pytest_jsonreport --json-report
+  --json-report-file=<artifacts>/native/pytest-report.json -q [<target>]
+```
+
+Coverage is JSON via `pytest-cov`, collected with `--cov-context=test`
+(enabling per-test SBFL). Node-id form:
+`tests/test_arithmetic.py::test_subtract`.
+
+::: tabs
+@tab For human
+
+Project skeleton (the canonical `calc` example):
+
+```
+calc-demo/
+├── pyproject.toml          # [tool.pytest.ini_options] testpaths=["tests"]
+├── calc/
 │   ├── __init__.py
-│   └── math_utils.py
+│   └── arithmetic.py
 └── tests/
-    └── test_math_utils.py
+    └── test_arithmetic.py
 ```
-
-Markers `novetest` looks for: `pyproject.toml`, `setup.py`,
-`setup.cfg`, `pytest.ini`. Default test path is `tests/` (or
-whatever your `[tool.pytest.ini_options].testpaths` says).
-
-### Toolchain
 
 ```bash
-# In a venv or globally:
-pip install pytest
-# For coverage:
-pip install pytest-cov
+cd calc-demo
+novetest init
+```
+```
+✓ Initialized .novetest/ at /abs/path/to/calc-demo/.novetest
+  engine readiness: ready — python/pytest 9.0.3
 ```
 
-### Per-test identity
+(The pytest version is *your* project's pytest, not a
+novetest-controlled constant. novetest's own version is `0.1.2`.)
 
-pytest's `nodeid`: `tests/test_x.py::test_y`. Outcomes:
-`passed` / `failed` / `skipped`. Duration: seconds, float.
+@tab For agent
 
-Coverage is JSON via `pytest-cov` (`coverage.json`).
+```bash
+NOVETEST_OUTPUT=json novetest init
+```
 
-### Quirks
+`data.engine_readiness` for a ready calc project:
 
-- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is forced internally so that
-  venv-local plugins do not leak into the run. If you rely on a
-  pytest plugin, add it to `pyproject.toml` and load it explicitly
-  via `addopts = "-p my_plugin"`.
-- pytest coverage is collected with `--cov-context=test`, which
-  enables per-test coverage facts (required for SBFL per-test
-  mode). Without it the localization stage degrades to aggregate
-  mode.
-- Target expressions are passed verbatim to pytest. You can pass a
-  nodeid (`tests/test_math.py::test_add_positive`), a directory
-  (`tests/`), or a single file.
+```json
+{
+  "ecosystem": "python",
+  "engine": "pytest",
+  "engine_version": "9.0.3",
+  "evidence": [
+    "pyproject.toml"
+  ],
+  "issues": [],
+  "state": "ready"
+}
+```
+
+Misconfig messages: pytest not importable → `engine-misconfigured`
+`"pytest is not importable from the resolved interpreter; install
+with: pip install pytest"`; plugin missing →
+`"pytest-json-report plugin is not importable; install with:
+pip install pytest-json-report"`.
+
+:::
 
 ---
 
 ## jest (JavaScript / TypeScript)
 
-### Project skeleton
+Marker: `package.json`. Readiness requires `node` **and** `npx` on
+PATH, plus jest declared in `dependencies`/`devDependencies` or
+installed at `node_modules/.bin/jest`. Node.js ≥ 18.
+
+External command (Windows launcher is `cmd /c npx …`):
+
+```
+npx jest --ci --json --testLocationInResults
+  --outputFile=<artifacts>/native/jest-results.json
+  --reporters=default --watchman=false [<target>]
+```
+
+Unlike pytest, jest has no plugin isolation — your workspace
+`jest.config.js` is honored as written. Coverage is Istanbul JSON
+(`--coverage --coverageReporters=json`). Node-id form:
+`<file>::<ancestors>::<title>`.
+
+::: tabs
+@tab For human
 
 ```
 my-js-project/
-├── package.json
+├── package.json            # jest in devDependencies
 ├── src/
 │   └── math.js
 └── __tests__/
     └── math.test.js
 ```
 
-`package.json`:
+If `node`/`npx` are missing readiness is `engine-missing`; if jest is
+absent it is `engine-misconfigured` with a `npm install --save-dev
+jest` hint.
 
-```json
-{
-  "name": "my-js-project",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": { "test": "jest" },
-  "devDependencies": { "jest": "^29.7.0" }
-}
-```
+@tab For agent
 
-Marker: any `package.json` with `jest` in dependencies or
-devDependencies. Test discovery defaults to `**/__tests__/**` or
-`**/*.{test,spec}.{js,jsx,ts,tsx}`.
+Readiness messages: no node/npx → `engine-missing`
+`"Node.js (\`node\`/\`npx\`) not found on PATH; install Node.js >=18
+…"`; jest absent → `engine-misconfigured`
+`"jest not found in package.json … install with: npm install
+--save-dev jest"`; declared-but-not-installed →
+`"jest is declared in package.json but not installed; run: npm
+install"`.
 
-### Toolchain
-
-```bash
-# In the project root:
-npm install --save-dev jest
-# (Optional, for TS:) npm install --save-dev ts-jest typescript
-```
-
-`jest` is invoked via `npx jest`. Node ≥ 18 must be on PATH.
-
-### Per-test identity
-
-jest's `testResults[].assertionResults[]` shape — each assertion
-carries `title`, `status` (`passed` / `failed` / `pending` /
-`skipped`), `duration` (ms, integer), and `location.line`. The
-per-file rollup is one `testResults[]` entry per test file.
-
-Coverage is **Istanbul JSON** (`coverage/coverage-final.json`).
-
-### Quirks
-
-- The adapter passes `--testLocationInResults` so jest emits
-  file:line of each test (required for SBFL line-level
-  localization).
-- `--watchman=false` is forced for determinism on Windows.
-- On Windows hosts the adapter wraps `npx` with `cmd /c` to handle
-  the batch-shim. On Linux/macOS the invocation is direct.
-- A workspace-local `jest.config.js` (or `jest.config.ts`) is
-  honored as-is. You do not need to pass `--config`.
+:::
 
 ---
 
 ## gotest (Go / `go test`)
 
-### Project skeleton
+Marker: `go.mod`. Readiness needs `go` on PATH and a working
+`go version`. Default target `./...` (every package in the module).
+
+External command (`-count=1` disables Go's result cache):
 
 ```
-my-go-module/
-├── go.mod
-├── math.go
-└── math_test.go
+go test -json -count=1 -timeout=<seconds>s [coverage flags] <target>
 ```
 
-`go.mod`:
+**Coverage is NOT consumed.** `go test` runs fine, but `novetest run
+--coverage` on a Go project produces no coverage facts: the adapter
+writes a Go `cover.out` profile under a different artifact key than the
+coverage engine reads. Node-id form: `<package>::<test>`.
 
-```
-module example.com/math
+::: tabs
+@tab For human
 
-go 1.21
-```
+Coverage runs complete, but the coverage line reports unavailable
+("this run was executed without coverage collection"). Test execution
+works; coverage facts do not.
 
-Marker: `go.mod`. Default target is `./...` (all packages in the
-module).
+@tab For agent
 
-### Toolchain
+`novetest run --coverage` returns `data.coverage_outcome` with
+`kind="unavailable"` and detail
+`"RunRecord.artifact_paths has no 'coverage_json' entry; this run was
+executed without coverage collection"`. Route coverage-dependent logic
+around `engine_name == "go-test"`.
 
-Install Go ≥ 1.21 from <https://go.dev/dl/>. No separate coverage
-tool — coverage is built into `go test -cover`.
-
-### Per-test identity
-
-`<Package>::<TestName>`. Sub-tests use the `/` separator:
-`example.com/math::TestAdd/subtable_case_1`.
-
-Coverage is Go's native **`.out` profile** (text-based, per-line
-hit counts).
-
-### Quirks
-
-- `-count=1` is forced so Go's test-result cache does not return a
-  stale pass.
-- `-coverpkg=./...` is forced so coverage measures the whole
-  module, not just the test package.
-- `GOTOOLCHAIN=local` is forced so Go does not auto-download a
-  different toolchain mid-run.
-- Build failures (compile errors before any test runs) are
-  detected by "no `run` action AND non-zero exit" and surfaced as a
-  typed error envelope, not as a silent "no tests".
+:::
 
 ---
 
 ## cargo (Rust / `cargo nextest`)
 
-### Project skeleton
+Marker: `Cargo.toml`. The default target is the workspace.
 
-```
-my-rust-crate/
-├── Cargo.toml
-├── src/
-│   └── lib.rs
-└── tests/
-    └── integration_test.rs
-```
-
-`Cargo.toml`:
-
-```toml
-[package]
-name = "my_rust_crate"
-version = "0.0.0"
-edition = "2021"
-
-[lib]
-path = "src/lib.rs"
-```
-
-Marker: `Cargo.toml`. Default target is the workspace
-(`--workspace` is forwarded).
-
-### Toolchain
+The adapter **requires** `cargo nextest` — a successful
+`cargo nextest --version` is a load-bearing readiness gate; missing it
+→ `engine-misconfigured`. There is **no** fallback to plain
+`cargo test`. Coverage additionally needs `cargo-llvm-cov`.
 
 ```bash
-# Install rustup from https://rustup.rs
 rustup install stable
 cargo install cargo-nextest --locked    # MANDATORY — no fallback
 cargo install cargo-llvm-cov            # required for coverage
 ```
 
-The adapter **requires** `cargo nextest`; there is no fallback to
-`cargo test`. Floor is `cargo-nextest` ≥ 0.9.50.
+Non-coverage and coverage runs use **different, mutually-exclusive**
+invocations:
 
-### Per-test identity
+```
+# non-coverage:
+cargo nextest run --message-format=libtest-json --no-fail-fast --workspace [<filter>]
+# coverage:
+cargo llvm-cov nextest --lcov --output-path <artifacts>/native/coverage.lcov
+  --ignore-run-fail --workspace --message-format=libtest-json
+```
 
-`cargo nextest`'s libtest-JSON NDJSON
-(`NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1` is set internally). Test
-identity carries the binary path prefix:
-`my_rust_crate::tests::test_add`.
-
-Coverage is **LCOV** (`coverage.lcov`) produced by
-`cargo llvm-cov nextest --lcov`.
-
-### Quirks
-
-- Coverage and non-coverage runs use **different** cargo
-  invocations (`cargo llvm-cov nextest` vs `cargo nextest run`);
-  they are mutually exclusive at the cargo level. The Run engine
-  picks based on whether the orchestrator asked for coverage.
-- `--ignore-run-fail` is forced for coverage so the LCOV is written
-  even when tests fail.
-- Directory-type targets (`novetest test .`) deliberately do NOT
-  append `.` to the nextest filter, since nextest treats an empty
-  filter as "all".
-- A filter that matches no tests exits non-zero from cargo, but
-  the adapter distinguishes "filter matched nothing" (exit 4 with
-  a clear error) from "build failed" (exit 101 with a separate
-  error code).
+`--ignore-run-fail` emits the LCOV even when tests fail. A *directory*
+target (`novetest test .`) does NOT append a filter token (nextest
+treats positionals as filter expressions, not paths). Coverage is
+LCOV. Node-id is the nextest test name directly.
 
 ---
 
-## junit (Java / JUnit 5)
+## junit (Java / JUnit 5 Jupiter)
 
-### Project skeleton (Maven)
+JUnit 5 Jupiter is the **only** supported framework — **JUnit 4 and
+TestNG are detected and rejected** as `engine-misconfigured`. Windows
+hosts are unsupported for JUnit (rejected as `engine-misconfigured`).
 
-```
-my-java-project/
-├── pom.xml
-└── src/
-    ├── main/java/com/example/Math.java
-    └── test/java/com/example/MathTest.java
-```
+Markers: `pom.xml` (→ Maven) or `build.gradle{,.kts}` (→ Gradle). When
+**both** are present, Maven wins and an `ambiguous-build-tool` warning
+is emitted in `envelope.warnings[]`.
 
-`pom.xml` (excerpt):
+Readiness gates, in order: Windows → reject; build tool resolvable;
+`java` on PATH (else `"\`java\` not found on PATH; install JDK 17+"`);
+`mvn`/`gradle`/`./gradlew`; JUnit Jupiter declared; JUnit 4 → reject;
+TestNG → reject.
 
-```xml
-<dependencies>
-  <dependency>
-    <groupId>org.junit.jupiter</groupId>
-    <artifactId>junit-jupiter</artifactId>
-    <version>5.10.0</version>
-    <scope>test</scope>
-  </dependency>
-</dependencies>
-```
-
-### Project skeleton (Gradle)
+External command:
 
 ```
-my-gradle-project/
-├── build.gradle
-└── src/
-    ├── main/java/com/example/Math.java
-    └── test/java/com/example/MathTest.java
+# Maven:
+mvn -B test [jacoco:report] -Dsurefire.reportFormat=plain
+  -Dsurefire.useFile=false [-Dtest=<filter>]
+# Gradle:
+./gradlew test --no-daemon [--tests <filter>] [jacocoTestReport]
 ```
 
-`build.gradle` (excerpt):
+Coverage is JaCoCo XML; requesting `--coverage` without JaCoCo wired in
+emits a `missing-jacoco` warning and coverage degrades.
 
-```groovy
-plugins { id 'java' }
-dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-}
-test { useJUnitPlatform() }
-```
+::: tabs
+@tab For human
 
-Markers: `pom.xml` OR `build.gradle{,.kts}`. When both are present
-in the same directory, the adapter picks Maven and emits a warning
-in `envelope.warnings[]` (code: `junit-multiple-build-systems`).
+Project skeleton (Maven): `pom.xml` declaring
+`org.junit.jupiter:junit-jupiter` (test scope) +
+`src/{main,test}/java/…`. Gradle is the same with `build.gradle`
+declaring the Jupiter dependency and `useJUnitPlatform()`. Toolchain:
+JDK ≥ 17 plus Maven ≥ 3.9 or Gradle ≥ 7.6 (the `./gradlew` wrapper is
+honored).
 
-### Toolchain
+@tab For agent
 
-- JDK ≥ 17 (`java` on PATH)
-- Maven ≥ 3.9 (`mvn` on PATH) OR Gradle ≥ 7.6 (`gradle` on PATH;
-  the wrapper `./gradlew` in the workspace is also honored)
+On the **Maven** path `engine_version` is extracted (e.g.
+`"5.10.2"`); on the **Gradle** path it is commonly `null` (the
+Jupiter-version regex frequently can't extract it). Don't rely on a
+non-null Java `engine_version`.
 
-The adapter ships a vendored
-`junit-platform-console-standalone-1.11.4.jar` (EPL 2.0,
-attribution in the wheel's `*.dist-info/licenses/NOTICES.md`). The
-vendored jar is reserved for future "list tests without running"
-discovery; it is not used during normal `novetest test` invocation.
-
-### Per-test identity
-
-JUnit's classname#method form: `com.example.MathTest#testAdd`.
-Status values: `passed`, `failed`, `skipped`, `errored`. Failure
-details include `message`, `type`, `stack`.
-
-Coverage is **JaCoCo XML** (`target/site/jacoco/jacoco.xml` for
-Maven, `build/reports/jacoco/test/jacocoTestReport.xml` for Gradle).
-
-### Quirks
-
-- For Maven coverage, the adapter passes
-  `-Dmaven.test.failure.ignore=true` so the JaCoCo report runs even
-  when tests fail.
-- For Gradle coverage, the adapter injects an init-script globally
-  that auto-applies the JaCoCo plugin if missing, so you do not
-  need to wire it into `build.gradle` yourself.
-- Multi-module Maven projects: per-module `target/surefire-reports/`
-  directories are globbed and each test result carries its `module`
-  field for attribution.
-- JUnit 4 / TestNG are detected and rejected with a clear
-  diagnostic; only JUnit 5 (Jupiter) is supported at MVP.
+:::
 
 ---
 
 ## xunit (.NET / xUnit v2)
 
-### Project skeleton
+xUnit v2 is the **only** supported framework — **MSTest and NUnit are
+detected and rejected** as `engine-misconfigured` ("…supports xUnit v2
+only"). xUnit **v3** runs, but coverage is deferred with a warning
+(`xunit-v3-coverage-deferred`).
+
+Detection is by **glob**: `*.csproj` at the root or one directory
+deep, or `*.sln` at the root. novetest picks the first csproj whose
+name contains "test"; it must declare
+`<PackageReference Include="xunit">`.
+
+Toolchain: .NET SDK ≥ 8.0 (`dotnet` on PATH). For coverage only:
+`coverlet.collector` ≥ 6.0.2 — **Coverlet is not a readiness gate**, so
+bare `novetest run` works without it.
+
+External command (coverage runs `dotnet restore <csproj>` first):
+
+```
+dotnet test <csproj> --logger "trx;LogFileName=results.trx"
+  --results-directory <results>
+  [--collect:"XPlat Code Coverage" --settings <runsettings>]
+  [--filter "FullyQualifiedName~<target>"]
+```
+
+Coverage is Cobertura XML via Coverlet, using a per-run hermetic
+runsettings (your own runsettings are never modified). If Coverlet is
+absent or below 6.0.2, coverage degrades with a warning.
+
+::: tabs
+@tab For human
+
+Project skeleton:
 
 ```
 my-dotnet-project/
@@ -445,74 +462,19 @@ my-dotnet-project/
 │   ├── MathLib.csproj
 │   └── Math.cs
 └── MathLib.Tests/
-    ├── MathLib.Tests.csproj
+    ├── MathLib.Tests.csproj    # PackageReference Include="xunit"
     └── MathTests.cs
 ```
 
-`MathLib.Tests.csproj` (excerpt):
+@tab For agent
 
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <IsPackable>false</IsPackable>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
-    <PackageReference Include="xunit" Version="2.6.6" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.6" />
-    <PackageReference Include="coverlet.collector" Version="6.0.2" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\MathLib\MathLib.csproj" />
-  </ItemGroup>
-</Project>
-```
+Warning codes: `xunit-v3-coverage-deferred`,
+`ambiguous-project-layout`, and Coverlet absent/below-floor warnings
+whose `code` is the literal `engine-misconfigured` (a string that
+collides with the readiness state name — don't assume warning codes
+are disjoint from state names).
 
-Marker: any `*.csproj` or `*.sln` in the workspace. When multiple
-test projects are found, the alphabetically first one named
-`*Test*` / `*Tests*` is chosen and a warning is emitted in
-`envelope.warnings[]`.
-
-### Toolchain
-
-- .NET SDK ≥ 8.0 (`dotnet` on PATH).
-- xUnit v2 ≥ 2.4 declared in the test project's `PackageReference`s.
-- `coverlet.collector` ≥ 6.0.2 declared in the test project's
-  `PackageReference`s (for `--coverage`).
-
-xUnit v3 is detected and emits a warning that coverage is not yet
-supported in v3 (it is forced to no-op); the test run itself still
-works.
-
-### Per-test identity
-
-`namespace.class#method`: `MyNamespace.MathTests#TestAdd`. The
-adapter parses the **TRX** (Test Result XML, Microsoft format)
-emitted by `dotnet test --logger trx`. Status values: `passed`,
-`failed`, `skipped`, `errored`.
-
-Coverage is **Cobertura XML** produced by Coverlet
-(`TestResults/coverage.cobertura.xml`). The adapter generates a
-hermetic `coverlet.runsettings` per run; it never modifies any
-runsettings you have in your repo.
-
-### Quirks
-
-- `dotnet restore <csproj>` is run before the coverage probe so the
-  version detection has the restored `project.assets.json`
-  available.
-- `<SingleHit>false</SingleHit>` is forced in the generated
-  runsettings, otherwise Coverlet reports zero-hit lines as
-  misleading no-hits.
-- Per-test coverage via Coverlet's XPlat collector is empirically
-  inert on Coverlet 6.0.x / SDK 8.0 (the generated runsettings
-  still include the per-test template for forward compatibility,
-  but per-test coverage facts fall back to aggregate granularity).
-- Multiple `*.csproj` at workspace root with a sibling `*.sln` ->
-  the adapter picks the alphabetically first matching csproj and
-  warns; specify the csproj as your target if you want a specific
-  one.
+:::
 
 ---
 
@@ -528,38 +490,33 @@ novetest init
 novetest test
 ```
 
+The output shape is the same across all six engines. Only the per-test
+identity strings and the coverage format differ; the orchestration
+layer normalizes those so results stay language-agnostic. The one
+capability difference: **coverage is available for pytest, jest,
+junit, xunit, and cargo-test — but not for go-test.**
+
 ::: tabs
 @tab For human
 
 The text-mode output shape
-(`<glyph> [<category>] <sentence>\n  ↳ <citation>`) is the same
-across all six engines. Only the values inside the per-test
-identity strings and the coverage representation differ; the
-orchestration layer normalizes those so the recommendation output
-stays language-agnostic.
+(`<glyph> [<category>] <sentence>\n  ↳ <citation>`) is identical across
+engines.
 
 @tab For agent
 
-The envelope shape `novetest test` returns is the same across all
-six engines. Only the values inside
-`run_record.test_results[].test_id` and the coverage representation
-differ; the orchestration layer normalizes those so your downstream
-recommendation routing is language-agnostic.
+Your agent can rely on:
 
-Specifically, your agent can rely on:
-
-- `data.run_reference.run_id` is a ULID, format-stable across
-  engines.
-- `data.stage_eligibility.*` ∈ `{"available", "unavailable", "not_run"}`.
+- `data.run_reference.run_id` is a ULID, format-stable across engines.
 - `data.recommendations[].category` comes from a closed taxonomy
   shared by all engines.
+- `data.stage_eligibility.localization` is the SBFL mode string when
+  available; `data.stage_eligibility.replay` is always `not_run`.
 
-The engine-specific values only matter when you walk a citation —
-e.g., `evidence_citations[0].selector.test_id` will look different
-per engine (`tests/test_x.py::test_y` for pytest vs
-`example.com/math::TestAdd` for go vs
-`com.example.MathTest#testAdd` for junit), and your agent should
-treat `test_id` as an opaque string keyed off the engine identifier.
+Treat `run_record.test_results[].node_id` as an opaque string keyed
+off `engine_name` — its format differs per engine (e.g.
+`tests/test_arithmetic.py::test_subtract` for pytest vs
+`<package>::<test>` for go-test). Do not parse it cross-engine.
 
 :::
 

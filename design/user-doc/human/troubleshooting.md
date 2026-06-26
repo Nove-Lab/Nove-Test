@@ -1,20 +1,44 @@
 # Troubleshooting (Human)
 
 This page is organized by what you see on your terminal. Find the
-shape that matches your problem, read the one-line fix.
+shape that matches your problem, read the cause, apply the one-line fix.
 
-Most error envelopes in text mode look like:
+In TEXT mode (the default on a terminal), a failed command renders a
+generic error block, regardless of which verb produced it:
 
 ```
-✗ <verb>
+✗ <command>
   <code>: <human-readable message>
-  <optional hint>
 ```
 
-The first line tells you which verb failed; the second tells you the
-machine-friendly error code (use this for searching docs / issues) and
-a sentence describing what went wrong; the optional third line is
-typically a one-line install hint.
+The first line names the failing command; the second gives the
+machine-friendly error `code` (use it for searching docs / issues) and
+a sentence describing what went wrong. To see the full structured
+detail, re-run with `novetest --output json <verb>` and read
+`errors[0]`.
+
+> Examples on this page use the canonical `calc` project (a small
+> Python package) and Nove Test **0.1.2**.
+
+---
+
+## Exit codes at a glance
+
+Every command maps to one of six exit codes:
+
+| Exit | Meaning |
+|---|---|
+| 0 | Success. |
+| 1 | Generic / unexpected failure (e.g. an uncaught internal error). |
+| 2 | Usage / validation: uninitialized store, bad argument, unknown `run_id`, bad flag, `reset` without `--confirm`. |
+| 3 | **Your tests failed.** The tool worked (`ok: true`); this is product information, not an error. |
+| 4 | The engine could not run: no/insufficient native engine, or an adapter invocation error. |
+| 5 | Project Store storage error (corrupt store, wipe failed). |
+
+The important subtlety: **exit 3 is not a tooling error.** A failing
+test run still reports `ok: true`; failing tests are data. Treat exit 3
+the way you'd treat a failing `pytest` invocation — read the
+recommendation block, fix the code or the test, re-run.
 
 ---
 
@@ -22,9 +46,11 @@ typically a one-line install hint.
 
 ### "command not found: novetest"
 
-You ran the install script but `novetest` isn't on PATH.
+The install script dropped the binary at `~/.local/bin/novetest`
+(POSIX) or `%USERPROFILE%\.local\bin\novetest.exe` (Windows), but that
+directory isn't on your PATH.
 
-**Fix.** Add `~/.local/bin` to your PATH:
+**Fix.** Add it to PATH:
 
 ```bash
 # Linux / macOS — add to ~/.bashrc or ~/.zshrc
@@ -37,31 +63,33 @@ $env:PATH = "$HOME\.local\bin;$env:PATH"
 ```
 
 Then `source` the profile (or open a new shell) and re-check with
-`novetest --version`.
+`novetest --version` (it prints `novetest 0.1.2 (Python …)`).
 
 ### Install script aborts with "SHA-256 mismatch"
 
-This is the install script's loud-abort guard. It means the binary's
-hash did not match the published `.sha256` sidecar — either the
+The install script downloads the binary plus its published `.sha256`
+sidecar, computes the hash, and compares. On a mismatch it **aborts
+loudly and writes nothing** — a real integrity guard. It means the
 download was corrupted in flight, or the release artifacts are
 inconsistent.
 
 **Fix.**
-1. Re-run the install script (the most common cause is a flaky network).
-2. If it still fails, pin a specific version: `NOVETEST_INSTALL_VERSION=v0.1.2 curl ... | sh`.
-3. If THAT still fails, file an issue with your OS / arch / network situation.
+1. Re-run the install script (most often it's a flaky network).
+2. Still failing? Pin a specific version:
+   `NOVETEST_INSTALL_VERSION=v0.1.2 curl … | sh`.
+3. Still failing? File an issue with your OS / arch / network situation.
 
-### "First run is slow" (5-25 seconds)
+### "First run is slow" (5–15 seconds)
 
-Expected. PyApp self-extracts the bundled Python on the first
-invocation per binary version per user. Subsequent invocations are
-warm and fast (sub-second).
+Expected. The binary is PyApp-wrapped: it bundles its own CPython and
+unpacks the embedded interpreter once, on the first invocation per
+binary version. Subsequent invocations are warm and fast.
 
 ### Windows: PowerShell script blocked
 
 Your execution policy is blocking `install.ps1`.
 
-**Fix.** Run the install with bypass:
+**Fix.** Run with a bypass:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
@@ -74,13 +102,19 @@ Unblock-File install.ps1
 .\install.ps1
 ```
 
+### Supported platforms
+
+The published binaries are: Linux x86_64, Linux aarch64, macOS
+universal2 (one fat binary covering Intel + Apple Silicon), and Windows
+x86_64. There is **no Windows arm64** build.
+
 ---
 
 ## `init` issues
 
-### `✗ init  store-corrupt: ...`
+### `✗ init  store-corrupt: …`
 
-`.novetest/store.json` exists but is unreadable or malformed.
+`.novetest/store.json` exists but is unreadable or malformed (exit 5).
 
 **Fix.** Inspect the file to see if you can salvage it. If not (or if
 you don't care about run history):
@@ -93,82 +127,168 @@ novetest init
 That wipes all stored runs for this project. Your source code and
 tests are untouched.
 
-### `✓ Initialized .novetest/ ...` but `engine readiness: engine-missing`
+### `✓ Initialized .novetest/ …` but `engine readiness: engine-missing`
 
-`init` succeeded, but it could not find your test engine on PATH.
+`init` always succeeds and always leads with `✓` — it never fails on a
+missing engine. But the readiness line tells you it couldn't find a
+usable test engine:
 
-**Fix.** The `issue:` lines after the readiness line tell you what's
-missing. Common cases:
+```
+✓ Initialized .novetest/ at /path/to/calc-demo/.novetest
+  engine readiness: engine-missing — no engine detected
+  issue: Python workspace detected but no pytest configuration (pytest.ini, [tool.pytest.ini_options], conftest.py, or tests/ dir) found
+```
 
-| Engine | Hint |
-|---|---|
-| pytest | `pip install pytest` |
-| jest | `npm install --save-dev jest` (in the project root) |
-| go-test | install Go ≥ 1.21 from <https://go.dev/dl/> |
-| cargo | `cargo install cargo-nextest --locked` |
-| junit | install JDK ≥ 17 and Maven ≥ 3.9 or Gradle ≥ 7.6 |
-| xunit | install .NET SDK ≥ 8.0 and add `xunit` ≥ 2.4 to your test project |
+(That `issue:` line is for a Python project that has a `pyproject.toml`
+but no pytest config; a directory with no recognized markers at all
+instead reports `issue: no supported (ecosystem, native engine) pair
+detected in workspace`. A healthy project shows `engine readiness: ready
+— python/pytest 9.0.3`.)
 
-Re-run `novetest init` after installing.
+**Fix.** The `issue:` line(s) carry the real, engine-specific reason.
+Common cases and the toolchain that satisfies them:
 
-### `✗ init  uninitialized: ...` running a non-`init` verb
+| Engine | Typical issue | Fix |
+|---|---|---|
+| pytest | "no pytest configuration … found" | Add a `tests/` dir / `[tool.pytest.ini_options]` / `pytest.ini` / `conftest.py`; install pytest + `pytest-json-report`. |
+| jest | "Node.js (`node`/`npx`) not found on PATH" | Install Node.js ≥ 18, then `npm install --save-dev jest` in the project root. |
+| go-test | go not on PATH | Install Go ≥ 1.21 from <https://go.dev/dl/>. |
+| cargo-test | "`cargo nextest` is not installed" | `cargo install cargo-nextest --locked` (nextest is **required** — there is no plain `cargo test` fallback). |
+| junit | "`java` not found on PATH" | Install JDK 17+ and Maven 3.9+ or Gradle 7.6+. JUnit 5 Jupiter only (JUnit 4 / TestNG are rejected). |
+| xunit | dotnet not on PATH | Install .NET SDK 8.0+ and add `xunit` (v2) to your test project. MSTest / NUnit are rejected. |
 
-You ran `novetest test` (or any other operating verb) from a
-directory whose tree contains no `.novetest/`.
+Re-run `novetest init` after fixing.
 
-**Fix.** `cd` into your project root (or any subdirectory of it after
-running `novetest init` there once), then re-run the verb.
+> Readiness states are exactly three: `ready`, `engine-missing`, and
+> `engine-misconfigured`. There is no `engine-not-ready` readiness
+> state. `engine-missing` means no engine applies (or its binary is
+> absent); `engine-misconfigured` means the engine applies but required
+> tooling is missing (plugin, nextest, JDK, etc.).
 
 ---
 
 ## `test` / `run` issues
 
-### `✗ test  engine-missing: ...`
+### `✗ run  engine-engine-missing: …` (exit 4)
 
-Native test engine not on PATH. Same fix as the `engine-missing`
-readiness above.
+```
+✗ run
+  engine-engine-missing: engine readiness state: engine-missing (engine=(none detected))
+```
 
-If you have an engine on PATH but Nove Test still doesn't see it, two
-common causes:
+No usable native engine. The error `code` really is the
+doubled-looking `engine-engine-missing` (the `engine-` error prefix
+plus the readiness state `engine-missing`). The same shape applies to
+`novetest test`.
 
-1. **Wrong shell.** `novetest` is using `/bin/sh`-like resolution — if
-   you installed pytest only inside a Python venv that you haven't
-   activated, Nove Test cannot see it.
-2. **Wrong project.** Make sure you're in the right directory.
-   `novetest init` records which engine was detected; `novetest test`
-   from a fresh `.novetest/` re-probes.
+**Fix.** Run `novetest init` (or just re-run the verb — `test`/`run`
+re-probe readiness each time) and read the readiness `issue:` lines, or
+re-run with `--output json` and read `data.engine_readiness.issues[]`.
+Then install/configure the engine per the table above. Note the fix
+hints live in `data.engine_readiness.issues[]`, not in the error
+object's `details` (which is empty).
+
+If the engine **is** on PATH but Nove Test still doesn't see it:
+
+1. **Wrong interpreter (pytest).** Nove Test runs pytest with its own
+   bundled interpreter (`<python> -m pytest …`), not a `pytest` on PATH.
+   A globally-installed pytest that this interpreter can't import reads
+   as `engine-misconfigured`. The readiness `issue:` line will say
+   `install with: pip install pytest` (or `… pytest-json-report`).
+2. **Wrong project.** Confirm you're in the right directory.
+
+### `✗ run  engine-engine-misconfigured: …` (exit 4)
+
+The engine applies but a required piece is missing — pytest /
+`pytest-json-report` not importable, nextest not installed, JDK
+missing, JUnit 4 / TestNG / MSTest / NUnit detected (unsupported), etc.
+The readiness `issue:` line names the exact install command.
+
+### `✗ test  adapter-…: …` (exit 4)
+
+The engine started but failed before producing parseable results — a
+build failure, missing plugin, or a tool the adapter shells out to
+exiting non-zero. The code is `adapter-<kind>`, e.g.
+`adapter-unparseable-output`, `adapter-missing-plugin`,
+`adapter-missing-binary`, `adapter-timed-out`. The message includes the
+engine's own stderr tail.
+
+**Fix.** Read the stderr tail in the message — the underlying problem is
+at the engine level (your build, your dependencies), not in Nove Test.
+Fix it and re-run.
+
+> Tip: an unknown token like `novetest frobnicate` is **not** "command
+> not found". The first non-verb token is treated as a test selector
+> (`novetest test frobnicate`), so the engine tries to run it as a test
+> path and fails with an adapter error.
 
 ### Exit code 3 (tests failed) — NOT an error
 
-This is product information, not a tooling problem. Your tests
-actually failed. The recommendation block on stdout names which tests
-and points you at where to look.
+Your tests actually failed (`ok: true`, exit 3). The recommendation
+block on stdout names which locations to investigate, e.g.:
 
-Treat this the same way you'd treat a failing `pytest` invocation —
-fix the code or the test, re-run.
+```
+5 recommendations · 1 category · run_id=…
 
-### `✗ test  not-found: ...`
+  ! [investigate_location] Investigate `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
+```
 
-You passed a `run_id` (to `inspect`, `coverage show`, `replay`, …)
-that doesn't exist in the store.
+Fix the code or the test, then re-run.
 
-**Fix.** List available IDs:
+### `✗ <verb>  not-found: …` (exit 2)
+
+You passed a `run_id` (to `inspect`, `coverage show`, `regression
+compare`, `localization`, `replay`, `memory show`, `memory delete`, …)
+that doesn't exist:
+
+```
+✗ coverage.show
+  not-found: No Memory Entry for run_id='FAKE123'
+```
+
+**Fix.** List the real IDs and copy one:
 
 ```bash
 novetest memory list
 ```
 
-Copy a real ULID from there. ULIDs are 26 chars; partial matches are
-not accepted.
+Run IDs are 26-char ULIDs (e.g. `01KVYRRRN9FWVNQWVHNE1QHAQ4`); partial
+matches are not accepted.
 
-### `⚠ engine-misconfigured` warning
+---
 
-Adapter found the engine but flagged missing optional pieces. Common
-case: `pytest-cov` not installed.
+## Coverage issues
 
-**Fix.** Install the missing piece (e.g. `pip install pytest-cov`).
-Coverage will become `✓ available` on the next run. Until then, the
-warning is informational only.
+### `— unavailable (missing-derived-facts)`
+
+```
+✓ per-test · 13/13 statements (100.0%) · run_id=…   ← healthy
+— unavailable (missing-derived-facts)               ← no coverage recorded
+```
+
+`coverage show` is a cache read — it never derives on demand. If the
+run was produced by `novetest run` **without** `--coverage`, no
+coverage facts were recorded.
+
+**Fix.** Re-run with coverage, then look again:
+
+```bash
+novetest run --coverage          # -c is the short form
+# or just:
+novetest test                    # `test` ALWAYS collects coverage
+```
+
+`novetest test` has no `--coverage` flag because it always collects
+coverage. Only `novetest run` takes `--coverage` / `-c`.
+
+### Go projects never produce coverage facts
+
+This is a known limitation: the go-test adapter runs your tests and
+writes a coverage profile, but the coverage engine does not consume it.
+`novetest run --coverage` on a Go project yields a coverage outcome of
+`unavailable`. Test execution works; coverage facts do not. The other
+five engines (pytest, jest, cargo-test, junit, xunit) produce coverage
+facts.
 
 ---
 
@@ -176,59 +296,111 @@ warning is informational only.
 
 ### `— unavailable (no_failed_tests)`
 
-Expected on green runs. SBFL has nothing to rank when no test failed.
+Expected on a green run — SBFL has nothing to rank when no test failed.
+(Localization reason strings use underscores, unlike coverage's
+hyphens.)
 
 **Fix.** None needed; this is the correct outcome.
 
-### `— unavailable (missing-derived-facts)`
+### `— unavailable (missing_derived_facts)`
 
-The run completed without recording the per-test data SBFL needs (most
-commonly: coverage was unavailable, so per-test coverage attribution
-is missing).
+The run lacks the per-test data SBFL needs (most commonly: coverage was
+unavailable, so per-test attribution is missing).
 
-**Fix.** Install your engine's coverage tool (e.g. `pytest-cov` for
-pytest), then re-run `novetest test`.
+**Fix.** Make sure coverage is being collected (`novetest test`, or
+`novetest run --coverage`), then re-run `novetest localization <run_id>`.
+
+### `✗ localization  invalid-flag: …` (exit 2)
+
+```
+✗ localization
+  invalid-flag: Invalid --formula='nope'; expected one of ['dstar2', 'ochiai', 'op2', 'tarantula']
+```
+
+**Fix.** Pick a value from the listed set. The valid formulas are
+`ochiai` (default), `op2`, `dstar2` (note: `dstar2`, not `dstar`), and
+`tarantula`. Likewise `--top-n` must be a positive integer
+(`Invalid --top-n=0; expected a positive integer`); the default is 10.
 
 ### `⚠ localization-cache-rederived`
 
-You re-invoked `novetest localization` with a different `--formula`
-than what was cached. The CLI rewrote the cache. This is informational
-only.
+You re-invoked `novetest localization` with a `--formula`/`--top-n`
+that differs from what was cached. The CLI invalidated the cache,
+re-derived at your requested values, and surfaced this warning. The
+result is correct; the warning is informational.
 
 ### `⚠ localization-formula-noop-in-mode`
 
-You passed `--formula` but the chosen SBFL mode is
-`failure_proximity`, which doesn't use a formula. The flag was ignored.
+You passed `--formula` but the SBFL mode is `failure_proximity`, which
+pins `ochiai` as a placeholder and ignores the formula. The flag had no
+effect.
 
-**Fix.** Drop the `--formula` flag in this mode, or accept the
-warning.
+**Fix.** Drop `--formula` in this mode, or accept the warning.
+
+---
+
+## `reset` issues
+
+### `✗ reset  confirm-required: …` (exit 2)
+
+```
+✗ reset
+  confirm-required: `novetest reset` is destructive. Pass --confirm to acknowledge.
+```
+
+`reset` hard-wipes the store. It refuses to run without explicit
+acknowledgement.
+
+**Fix.** Re-run with `--confirm`:
+
+```bash
+novetest reset --confirm
+```
+
+This wipes all runs/findings and re-initializes the store:
+
+```
+✓ Reset .novetest/ at /path/to/.novetest
+  removed: nothing
+  engine readiness: ready — python/pytest 9.0.3
+```
+
+(`reset --confirm` is the only hard wipe. `memory delete <run_id>`
+merely **tombstones** a run — it still appears in `memory list`/`memory
+show` with a `tombstoned_at` timestamp.)
 
 ---
 
 ## `replay` issues
 
-### `? unable_to_replay (engine-unavailable)`
+`replay` actually re-executes the run, so it can hit engine problems.
+A healthy replay reads `✓ reproducible · 1/1 · run_id=…`. Unavailable
+replays render `? unavailable (<reason>)`.
 
-The host couldn't replay because the engine binary isn't available
-anymore (or never was).
+### `? unavailable (engine-not-ready)` / `? unavailable (target-missing)` (exit 4)
 
-**Fix.** Same as `engine-missing`: install / configure the engine.
+The engine binary isn't available anymore, or the original target no
+longer exists.
 
-### `? unable_to_replay (replay-timeout)`
+**Fix.** Same as `engine-missing`: install / configure the engine, or
+restore the target, then retry.
 
-A rerun exceeded `--timeout` seconds.
+### `? unavailable (missing-derived-facts)` (exit 0)
 
-**Fix.** Either fix the slow test, or bump the timeout:
+Not enough recorded evidence to replay this run. This is data, not a
+tool error (exit 0).
+
+### Tuning a replay
 
 ```bash
 novetest replay <run_id> --reruns 3 --timeout 1200
 ```
 
-### `✗ inconsistent · 2/5 failed`
+`--reruns` defaults to 1, `--timeout` to 600.0 seconds.
 
-NOT an error. This is the actual product output telling you the test
-result is flaky. The corresponding `flaky_suspect` recommendation in
-the next `novetest test` will point you at the unstable tests.
+> `inspect`'s `replay  ? unavailable (missing-derived-facts)` line is
+> expected: `inspect` is a pure read and never executes a replay. Run
+> `novetest replay <run_id>` to actually replay.
 
 ---
 
@@ -236,32 +408,39 @@ the next `novetest test` will point you at the unstable tests.
 
 ### "I see JSON everywhere, not pretty text"
 
-You're either:
+TEXT mode is used only when stdout is a real terminal. Anything piped or
+redirected defaults to JSON. You're either:
 
-1. Piping (`novetest test | less`) → JSON is the default for pipes. Use `--output text` to force text.
-2. Have `NOVETEST_OUTPUT=json` exported. Run `unset NOVETEST_OUTPUT` to release the override.
+1. Piping (`novetest test | less`) → JSON is the default for non-TTY.
+   Force text with `novetest --output text test`.
+2. Have `NOVETEST_OUTPUT=json` exported → `unset NOVETEST_OUTPUT`.
+
+Precedence is `--output` > `NOVETEST_OUTPUT` > TTY autodetect.
 
 ### "My CI logs are full of pretty JSON; I want one line per envelope"
 
-Use NDJSON:
+Use NDJSON (one compact line per envelope):
 
 ```bash
 NOVETEST_OUTPUT=ndjson novetest test
 ```
 
-Each envelope becomes a single line.
+### `--output bogus` prints a Python traceback
+
+An invalid `--output` value (or `NOVETEST_OUTPUT`) is rejected before
+the envelope machinery starts, so you get a raw traceback and exit 1 —
+not a clean error envelope. Use only `text`, `json`, or `ndjson`.
 
 ### "I expected color"
 
-There is no ANSI color at MVP. The 7-glyph palette
-(`✓ ✗ — ⚠ ! ? · ↳`) carries meaning instead. Color is queued for
-post-MVP.
+There is no ANSI color. The glyph palette
+(`✓ ✗ — ⚠ ! ? · ↳`) carries the meaning instead.
 
 ---
 
 ## Project Store issues
 
-### `✗ <verb>  store-corrupt: ...`
+### `✗ <verb>  store-corrupt: …` (exit 5)
 
 `.novetest/store.json` is unreadable or malformed.
 
@@ -274,12 +453,18 @@ novetest init
 
 You lose run history but recover the store.
 
+### `✗ reset  store-wipe-failed: …` (exit 5)
+
+A filesystem error (e.g. permissions) interrupted the wipe.
+
+**Fix.** Check directory permissions on `.novetest/`, then retry, or
+`rm -rf .novetest && novetest init`.
+
 ### "How do I share run history with my team?"
 
-Commit `.novetest/` to git. The whole tree is plain JSON files; it
-diffs cleanly. Most teams choose NOT to do this (the history is large
-and per-developer); it's the right answer only when you want a single
-team-shared baseline.
+Commit `.novetest/` to git — the tree is plain JSON and diffs cleanly.
+Most teams choose NOT to (history is large and per-developer); it's the
+right answer only when you want a single team-shared baseline.
 
 ### "How do I clean up old runs?"
 
@@ -292,11 +477,10 @@ novetest memory delete <run_id>
 Or wipe the whole store:
 
 ```bash
-rm -rf .novetest
-novetest init
+novetest reset --confirm
+# or
+rm -rf .novetest && novetest init
 ```
-
-Garbage collection of tombstones is post-MVP.
 
 ---
 
@@ -305,13 +489,13 @@ Garbage collection of tombstones is post-MVP.
 1. `novetest --version` to confirm the binary is sane.
 2. `novetest --help` to confirm the verb you're trying exists.
 3. `novetest status` (after `init`) to see what's actually stored.
-4. Re-run the failing verb with `NOVETEST_OUTPUT=json` to see the
-   full envelope; the `errors[0]` object usually has more detail
-   than the text-mode `<code>: <message>` line.
-5. Search the GitHub issue tracker:
+4. Re-run the failing verb with `novetest --output json <verb>` to see
+   the full envelope; `errors[0]` usually carries more detail than the
+   text-mode `<code>: <message>` line.
+5. Search the issue tracker:
    <https://github.com/Nove-Lab/Nove-Test/issues>
-6. File a new issue with the JSON envelope output and your OS /
-   engine versions.
+6. File a new issue with the JSON envelope output and your OS / engine
+   versions.
 
 ---
 

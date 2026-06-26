@@ -1,246 +1,400 @@
 # Troubleshooting (Agent)
 
-This page indexes failure modes by `errors[0].code` and provides
-machine-deterministic recovery. Use this when an `ok: false` envelope
-comes back; route on the exit code first, then on `errors[0].code`.
+This page indexes failure modes by exit code and `errors[0].code`, with
+machine-deterministic recovery. Use it when an `ok: false` envelope (or
+a non-zero exit) comes back: route on the **exit code first**, then on
+`errors[0].code`.
+
+Pin JSON output for the whole session so the byte shape is stable:
+
+```bash
+export NOVETEST_OUTPUT=json
+```
+
+Every envelope has exactly these top-level keys (JSON-sorted):
+`command, data, errors, ok, schema, warnings`. `schema` is always
+`"novetest/v1"`. `errors` / `warnings` are arrays of
+`{code, message, details}`. There is **no** top-level `version`,
+`verb`, or `exit_code` field — route on the process exit code plus
+`errors[0].code`.
 
 ---
 
 ## Quick reference — exit code × `errors[0].code`
 
-| Exit | `errors[0].code` | Recovery |
+| Exit | `errors[0].code` | Meaning / recovery |
 |---|---|---|
-| 0 | (no error) | Success path. |
-| 1 | `cli-error` | Bug. Capture envelope, file issue. Do not retry blindly. |
-| 2 | `uninitialized` | Run `novetest init`, then retry. |
-| 2 | `store-corrupt` | (Optional) `rm -rf .novetest && novetest init` (destroys history), then retry. |
-| 2 | `not-found` | The `run_id` you passed doesn't exist. List with `novetest memory list`, pick a real ULID. |
-| 2 | `invalid-flag` | Flag value outside the closed set. Read `errors[0].message` for allowed values. |
-| 2 | `not-implemented` | Verb stub not yet wired (should not occur on the happy path at MVP). |
-| 3 | (no error) | `ok: true`; this is "user's tests failed". Read `data.recommendations`. |
-| 4 | `engine-missing` | Install the engine per `details.install_hint`. |
-| 4 | `engine-misconfigured` | Fix per `details.install_hint`. |
-| 4 | `engine-not-ready` | Inspect `details` for the issue list. |
-| 4 | `adapter-<engine>` | Adapter invocation failed at the engine level. `details.install_hint` often available. |
-| 5 | `store-corrupt` | Same as exit-2 store-corrupt path, but more severe — usually filesystem-level. |
+| 0 | (none) | Success. `ok: true`. |
+| 1 | `cli-error` | Uncaught internal error (`command: "cli"`). Capture envelope, file issue. Do not retry blindly. |
+| 2 | `uninitialized` | No `.novetest/` store. Run `novetest init`, then retry. |
+| 2 | `not-found` | The `run_id` doesn't exist. `novetest memory list`, pick a real ULID. |
+| 2 | `invalid-flag` | Flag value outside the closed set. Read `errors[0].message` for the allowed list. |
+| 2 | `confirm-required` | `novetest reset` needs `--confirm`. Re-issue with `--confirm` (destructive). |
+| 3 | (none) | `ok: true` — **the user's tests failed.** Read `data.recommendations`. Not a tool error. |
+| 4 | `engine-engine-missing` | No usable engine. Read `data.engine_readiness.issues[]` for install hints. |
+| 4 | `engine-engine-misconfigured` | Engine applies but tooling missing. Read `data.engine_readiness.issues[]`. |
+| 4 | `adapter-<kind>` | Engine ran but failed (build error, missing plugin, timeout). Read `errors[0].message` (stderr tail). |
+| 5 | `store-corrupt` / `store-wipe-failed` | Storage-level failure. Surface to operator. |
+
+> Two spellings that bite parsers: an unready engine surfaces as the
+> doubled `engine-engine-missing` code (error prefix `engine-` + state
+> `engine-missing`), and adapter codes are keyed on the **failure
+> kind** (`adapter-unparseable-output`), not the engine name. There is
+> no `engine-not-ready` code and no `not-implemented` runtime code.
 
 ---
 
-## Failure-mode reference
+## Failure-mode reference (real envelopes)
 
 ### `uninitialized` (exit 2)
 
 ```json
 {
+  "command": "run",
+  "data": {},
   "errors": [
     {
       "code": "uninitialized",
-      "message": "No Project Store found in this directory or any ancestor. Run `novetest init` to create one.",
-      "details": {}
+      "details": {},
+      "message": "No Project Store found in this directory or any ancestor. Run `novetest init` to create one."
     }
-  ]
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
 }
 ```
 
-**Cause.** Walked from `cwd` to root looking for `.novetest/`; found
+**Cause.** Walked from `cwd` up to root looking for `.novetest/`; found
 nothing.
 
-**Recovery.**
-1. If your agent owns the project directory: `novetest init` then retry.
-2. If your agent is invoked from outside the project tree: `cd` into the project first, or set `NOVETEST_HOME=/abs/path/to/.novetest` to pin the store.
+**Recovery.** `novetest init` in the project root, then retry. If you're
+invoked from outside the project tree, `cd` into it first.
 
 **Idempotency.** Safe to retry indefinitely after `init`.
 
-### `store-corrupt` (exit 2 or 5)
+### `engine-engine-missing` (exit 4)
 
 ```json
 {
+  "command": "run",
+  "data": {
+    "engine_readiness": {
+      "ecosystem": null,
+      "engine": null,
+      "engine_version": null,
+      "evidence": ["pyproject.toml"],
+      "issues": ["Python workspace detected but no pytest configuration (pytest.ini, [tool.pytest.ini_options], conftest.py, or tests/ dir) found"],
+      "state": "engine-missing"
+    }
+  },
   "errors": [
     {
-      "code": "store-corrupt",
-      "message": "Project Store at <path> is unreadable: <reason>.",
-      "details": { "store_path": "/path/.novetest" }
+      "code": "engine-engine-missing",
+      "details": {},
+      "message": "engine readiness state: engine-missing (engine=(none detected))"
     }
-  ]
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
 }
 ```
 
-**Cause.** `.novetest/store.json` is missing, malformed, or
-permission-blocked.
+**Cause.** No supported `(ecosystem, engine)` pair applies, or the
+engine binary itself is absent.
 
-**Recovery.**
-1. Inspect `.novetest/store.json` directly. If you can fix it, retry.
-2. Destructive recovery: `rm -rf .novetest && novetest init`. Wipes run history.
+**Recovery.** The actionable hints are in
+`data.engine_readiness.issues[]` — **not** in `errors[0].details`
+(which is `{}`). Read `data.engine_readiness.state`
+(`engine-missing` | `engine-misconfigured`) and the `issues[]` strings,
+which carry the exact install command, e.g.:
 
-**Idempotency.** The destructive recovery is idempotent. Do NOT auto-trigger this without operator approval; it permanently destroys data.
+| Engine | `issues[]` text (real) |
+|---|---|
+| pytest (no config) | "Python workspace detected but no pytest configuration … found" |
+| pytest (not importable) | "pytest is not importable from the resolved interpreter; install with: pip install pytest" |
+| pytest (plugin) | "pytest-json-report plugin is not importable; install with: pip install pytest-json-report" |
+| jest (no node) | "Node.js (`node`/`npx`) not found on PATH; install Node.js >=18 …" |
+| jest (absent) | "jest not found in package.json … install with: npm install --save-dev jest" |
+| cargo-test | "`cargo nextest` is not installed … Install with: cargo install cargo-nextest --locked …" |
+| junit | "`java` not found on PATH; install JDK 17+" |
+
+If your policy permits installs, execute the hint, then retry. Otherwise
+surface the `issues[]` to the operator and abort. After a fix, the next
+`novetest init` records `engine_readiness.state == "ready"`.
+
+> `engine_readiness.state` is one of exactly three values:
+> `ready`, `engine-missing`, `engine-misconfigured`. `engine-misconfigured`
+> surfaces as the error code `engine-engine-misconfigured`.
+
+### `adapter-<kind>` (exit 4)
+
+```json
+{
+  "command": "test",
+  "data": {},
+  "errors": [
+    {
+      "code": "adapter-unparseable-output",
+      "details": {},
+      "message": "pytest-cov did not write coverage JSON to …/coverage.json; stderr tail: ERROR: file or directory not found: bogusverb\n\n"
+    }
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
+}
+```
+
+**Cause.** The engine launched but failed before producing parseable
+output. `<kind>` ∈ `unparseable-output`, `missing-plugin`,
+`missing-binary`, `missing-engine`, `timed-out`,
+`misconfigured-environment` (the exact set varies by adapter). This is
+an engine-level problem (build error, missing dependency), not a Nove
+Test bug. Some adapter errors attach `details.install_hint`.
+
+**Recovery.** Read `errors[0].message` for the engine's stderr tail; fix
+the underlying issue, then retry. (Note: an unknown verb like
+`novetest bogusverb` becomes `novetest test bogusverb` and surfaces here
+as an adapter error — it is NOT a "command not found".)
 
 ### `not-found` (exit 2)
 
 ```json
 {
+  "command": "coverage.show",
+  "data": {},
   "errors": [
     {
       "code": "not-found",
-      "message": "Run record 01HX... not found in the Project Store.",
-      "details": { "run_id": "01HX..." }
+      "details": {},
+      "message": "No Memory Entry for run_id='FAKE123'"
     }
-  ]
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
 }
 ```
 
-**Cause.** You passed a `run_id` (to `inspect`, `coverage show`,
-`replay`, `memory show`, `memory delete`) that doesn't match any
-Memory Entry.
+**Cause.** A `run_id` passed to `inspect` / `coverage show` /
+`coverage diff` / `regression compare` / `localization` / `replay` /
+`memory show` / `memory delete` matched no Memory Entry. The guard
+short-circuits before the engine runs.
 
-**Recovery.** Call `novetest memory list`, pick a valid `run_id`.
-
-**Idempotency.** Look up + retry is always safe.
+**Recovery.** `novetest memory list`, read `data.entries[].run_record.run_reference.run_id`,
+pick a valid 26-char ULID. Look-up + retry is always safe.
 
 ### `invalid-flag` (exit 2)
 
 ```json
 {
+  "command": "localization",
+  "data": {},
   "errors": [
     {
       "code": "invalid-flag",
-      "message": "--formula must be one of: ochiai, op2, dstar2, tarantula (got: 'fancy_formula').",
-      "details": { "flag": "--formula", "value": "fancy_formula", "allowed": ["ochiai", "op2", "dstar2", "tarantula"] }
+      "details": {},
+      "message": "Invalid --formula='nope'; expected one of ['dstar2', 'ochiai', 'op2', 'tarantula']"
     }
-  ]
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
 }
 ```
 
-**Cause.** Flag value outside the closed set.
+**Cause.** Flag value outside the closed set. Validated at the CLI
+boundary before any engine work. `details` is `{}`; the allowed values
+are listed in `message`.
 
-**Recovery.** Read `details.allowed` (when present) and pick a valid
-value. Or read the allowed values from `--help` envelope's
-machine-readable verb spec.
+**Recovery.** Pick a valid value. `--formula` ∈
+`{ochiai, op2, dstar2, tarantula}` (default `ochiai`); `--top-n` must be
+a positive integer (default 10; `Invalid --top-n=0; expected a positive
+integer`). Retry with the corrected value.
 
-**Idempotency.** Safe to retry with corrected value.
+### `confirm-required` (exit 2)
 
-### `engine-missing` / `engine-misconfigured` / `engine-not-ready` (exit 4)
+```json
+{
+  "command": "reset",
+  "data": {},
+  "errors": [
+    {
+      "code": "confirm-required",
+      "details": {},
+      "message": "`novetest reset` is destructive. Pass --confirm to acknowledge."
+    }
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
+}
+```
+
+**Cause.** `novetest reset` refuses to wipe the store without explicit
+acknowledgement.
+
+**Recovery.** Re-issue as `novetest reset --confirm` ONLY with operator
+approval — it hard-wipes all runs/findings and re-initializes. (Contrast
+`memory delete <run_id>`, which only tombstones, reversibly.)
+
+### `store-corrupt` (exit 5) / `store-wipe-failed` (exit 5)
 
 ```json
 {
   "errors": [
-    {
-      "code": "engine-missing",
-      "message": "pytest is not installed in this environment.",
-      "details": {
-        "engine": "pytest",
-        "ecosystem": "python",
-        "install_hint": "pip install pytest"
-      }
-    }
+    { "code": "store-corrupt", "details": {}, "message": "…" }
   ]
 }
 ```
 
-**Cause.** Native engine binary not on PATH (`engine-missing`) or
-present but unusable (`engine-misconfigured`, e.g. plugin missing).
+**Cause.** `.novetest/store.json` is missing, malformed, or
+permission-blocked (`store-corrupt`); or a filesystem error interrupted
+`reset` (`store-wipe-failed`).
 
-**Recovery.**
-1. If your agent has install permissions and a deterministic install policy: execute `details.install_hint` (it's a one-line shell command for each MVP engine — see [languages.md](./languages.md) for the full toolchain matrix).
-2. Otherwise: surface the hint to the operator and abort.
-
-**Idempotency.** Re-invoking the failing verb after install is safe.
-The first `novetest init` after install will record the engine as
-`"ready"`.
-
-### `adapter-<engine>` (exit 4 typically)
-
-```json
-{
-  "errors": [
-    {
-      "code": "adapter-cargo",
-      "message": "cargo nextest exited non-zero before any test was reported (likely a build failure).",
-      "details": {
-        "exit_code": 101,
-        "stdout_tail": "...",
-        "stderr_tail": "...",
-        "install_hint": "cargo install cargo-nextest --locked"
-      }
-    }
-  ]
-}
-```
-
-**Cause.** Native adapter detected an engine-level failure that isn't a
-test failure. Common cases: build error, missing dependency, version
-mismatch.
-
-**Recovery.** Read `details.stderr_tail` for the engine's own error
-message. Fix the underlying problem at the engine level (it's not a
-Nove Test issue).
-
-**Idempotency.** Retry safe once the engine-level fix is applied.
+**Recovery.** Do NOT auto-recover — destructive recovery
+(`rm -rf .novetest && novetest init`) permanently destroys history.
+Surface to the operator.
 
 ### `cli-error` (exit 1)
 
 ```json
 {
+  "command": "cli",
+  "data": {},
   "errors": [
-    {
-      "code": "cli-error",
-      "message": "Unexpected internal exception: <type>: <message>",
-      "details": { "traceback_tail": "..." }
-    }
-  ]
+    { "code": "cli-error", "details": {}, "message": "…" }
+  ],
+  "ok": false,
+  "schema": "novetest/v1",
+  "warnings": []
 }
 ```
 
-**Cause.** Unhandled CLI exception. Should not occur.
+**Cause.** An uncaught internal exception (note `command: "cli"`).
+Should not occur.
 
-**Recovery.** Do NOT auto-retry; capture the envelope and report.
+**Recovery.** Do NOT auto-retry. Capture the envelope and report.
 
-### `not-implemented` (exit 2)
+> There is no `not-implemented` runtime code. Every listed verb is a
+> real handler; the stub machinery is dead code. Never branch on
+> `not-implemented`.
 
-Should not occur in `v0.1.2`. If you see it, you're calling a
-post-MVP verb whose stub returns this. Capture and report.
+---
+
+## Exit 3 is not an error (the most important rule)
+
+A failing test run returns `ok: true`, exit `3`, an empty `errors`
+array, and a populated `data.recommendations`. Route on the exit code,
+not on `ok`:
+
+```python
+exit_code = run_novetest("test")          # process return code
+env = json.loads(stdout)
+if exit_code == 0:
+    pass                                   # all green
+elif exit_code == 3:
+    assert env["ok"] is True               # tests failed — DATA, not an error
+    handle(env["data"]["recommendations"]) # category-routed below
+elif exit_code in (2, 4, 5):
+    handle_tool_error(env["errors"][0]["code"])
+```
+
+Each recommendation has a `category` (one of 7 strings) and a `priority`
+int (1–7, **lower = higher priority**) — there is no `severity` field.
+Route on `category`:
+
+| `category` | priority | agent action |
+|---|---|---|
+| `regression_with_localization` | 1 | A newly-failing test maps to a ranked location. Highest-signal fix target. |
+| `investigate_location` | 2 | SBFL-ranked suspicious location. Open `slots.file` @ `slots.primary_line`. |
+| `investigate_regression` | 3 | Newly-failing transition vs baseline. |
+| `coverage_gap` | 4 | Uncovered lines overlap a suspect location. |
+| `flaky_suspected` | 5 | **Never fires today** (replay isn't wired into `test`). |
+| `unavailable_analysis` | 6 | Tests failed but a stage was unavailable. Read `slots.reason_per_stage`. |
+| `all_green` | 7 | No failures, no regressions. (Exclusive — never coexists with another.) |
 
 ---
 
 ## Stage-eligibility surprises (NOT errors)
 
-When `ok: true` but a stage is `"unavailable"`:
+In a `test` envelope, `data.stage_eligibility` reports per-stage
+availability. These are structural facts, not errors:
 
 ```json
 "stage_eligibility": {
   "coverage": "available",
+  "localization": "sbfl_per_test",
   "regression": "unavailable",
-  "localization": "available",
   "replay": "not_run"
 }
 ```
 
-These are **structural facts**, not errors. Common reasons:
-
-| Stage | Reason | Meaning |
+| Stage | Value | Meaning |
 |---|---|---|
-| `regression` | `no-comparable-baseline` | First run on this target. Next run will populate. |
-| `localization` | `no_failed_tests` | All tests green; nothing to localize. |
-| `localization` | `missing-derived-facts` | Per-test data not captured (e.g. coverage tool absent → no per-test coverage attribution). |
-| `replay` | `not-run` | `novetest test` deliberately skips replay. Call `novetest replay <run_id>` explicitly. |
+| `coverage` | `available` / `unavailable` / `not_applicable` | Coverage facts derived (or not). |
+| `regression` | `available` / `unavailable` / `not_applicable` | `unavailable` on the first run of a target (no baseline yet). |
+| `localization` | SBFL **mode** string (`sbfl_per_test` / `sbfl_aggregate` / `failure_proximity`) when a finding exists; else `unavailable` | NOT the literal word `available` — it surfaces the mode. |
+| `replay` | always `not_run` | `test` deliberately skips replay. Call `novetest replay <run_id>` explicitly. |
 
-Your agent should NOT treat these as errors; route around them.
+Route around `unavailable`/`not_run`; do not treat them as failures.
+
+---
+
+## Unavailable outcomes on read verbs (NOT errors)
+
+`coverage show`/`diff`, `regression compare`/`latest`, `localization`,
+and `inspect` return **exit 0, `ok: true`** even when the underlying
+analysis can't be produced — unavailability is data, carried in the
+outcome block's `kind: "unavailable"` with a `reason`:
+
+```json
+"coverage_outcome": {
+  "kind": "unavailable",
+  "reason": "missing-derived-facts",
+  "detail": "No coverage_facts.json found for this run; call derive_coverage_facts first",
+  "run_reference": { … }
+}
+```
+
+Reason-string conventions differ by engine:
+
+| Engine | Convention | Example reasons |
+|---|---|---|
+| coverage | hyphenated | `run-not-found`, `missing-native-payload`, `missing-derived-facts`, `native-payload-corrupt`, `incomparable-granularity` |
+| regression | hyphenated | `run-not-found`, `run-tombstoned`, `no-comparable-baseline`, `missing-derived-facts`, `engine-mismatch`, `target-mismatch` |
+| localization | underscored | `no_failed_tests`, `no_coverage`, `no_run_evidence`, `missing_derived_facts`, `run_not_analyzable` |
+
+`coverage show` returning `missing-derived-facts` means the run was
+produced without coverage — re-run with `novetest run --coverage` (or
+`novetest test`, which always collects coverage) and read again. Note
+**Go projects never produce coverage facts**: the go-test adapter writes
+a profile under a key the coverage engine doesn't consume, so
+`--coverage` on Go yields an `unavailable` coverage outcome.
+
+`replay` is the exception to "unavailable = exit 0": its unavailable
+reasons split by exit code — `engine-not-ready` / `target-missing` →
+exit 4; `original-not-found` → exit 2; `tombstoned-original` /
+`context-reconstruction-failed` / `missing-derived-facts` → exit 0.
 
 ---
 
 ## Warning codes (NOT errors)
 
-`envelope.warnings[].code` ∈ closed set:
+`envelope.warnings[].code` never affects `ok` or the exit code. Log them
+for observability:
 
-| Code | Meaning | Agent action |
+| Code | Source | Meaning |
 |---|---|---|
-| `localization-cache-rederived` | Cache rewritten due to flag mismatch. | Log; ignore. |
-| `localization-formula-noop-in-mode` | `--formula` ignored in `failure_proximity` mode. | Log; drop the flag on next call. |
-| `engine-misconfigured` | Optional engine piece missing (e.g. coverage tool). | Log; consider installing per hint. |
-| `junit-multiple-build-systems` | Both `pom.xml` and `build.gradle` present; Maven chosen. | Log; rename/remove one to disambiguate. |
-| `coverlet-floor-degraded` | .NET project pins old Coverlet; per-test coverage unavailable. | Log; bump Coverlet to ≥ 6.0.2 if you need per-test SBFL. |
-
-Warnings never affect exit code or `ok`. Log them for observability;
-they are a degradation signal but not a failure.
+| `localization-cache-rederived` | localization | Cache invalidated + re-derived because explicit `--formula`/`--top-n` differed. Result is correct. |
+| `localization-formula-noop-in-mode` | localization | `--formula` ignored because mode is `failure_proximity`. Drop the flag. |
+| `ambiguous-build-tool` | junit | Both `pom.xml` and `build.gradle` present; Maven chosen. |
+| `missing-jacoco` | junit | `--coverage` requested but JaCoCo not declared; coverage degraded. |
+| `xunit-v3-coverage-deferred` | xunit | xUnit v3 detected; coverage deferred. |
+| `ambiguous-project-layout` | xunit | Multiple candidate test projects. |
+| `engine-misconfigured` | xunit | Coverlet absent / below 6.0.2 floor; coverage degraded (this warning code literally reuses the state string). |
 
 ---
 
@@ -249,24 +403,23 @@ they are a degradation signal but not a failure.
 | Verb | Idempotent? | Retry policy |
 |---|---|---|
 | `init` | Yes (no-op on existing store) | Retry safe. |
-| `test` | Yes (each call is independent; produces a new run) | Retry produces a new `run_id`. |
-| `run` | Yes (each call produces a new run) | Same as `test`. |
-| `status` | Yes (read-only) | Retry safe. |
-| `inspect` | Yes (read-only) | Retry safe. |
-| `coverage show` | Yes (read-only) | Retry safe. |
-| `coverage diff` | Yes (read-only) | Retry safe. |
-| `regression compare` | Yes (cache-aware derive-or-read) | Retry safe. |
+| `test` | Each call produces a new run | Retry produces a new `run_id`. |
+| `run` | Each call produces a new run | Same as `test`. |
+| `status` | Read-only | Retry safe. |
+| `inspect` | Read-only | Retry safe. |
+| `coverage show` / `diff` | Read-only | Retry safe. |
+| `regression compare` | Cache-aware derive-or-read | Retry safe. |
 | `regression latest` | Yes | Retry safe. |
-| `localization` | Yes (cache-aware; emits warning on rederive) | Retry safe; cache is invalidated if flags differ. |
-| `replay` | Yes (each call produces a new replay result) | Retry safe; each retry adds another rerun. |
-| `compare` | Yes (read-only) | Retry safe. |
-| `memory list` | Yes (read-only) | Retry safe. |
-| `memory show` | Yes (read-only) | Retry safe. |
-| `memory delete` | Yes (tombstone is atomic; re-tombstone of tombstoned entry is no-op) | Retry safe. |
-| `licenses` | Yes (read-only) | Retry safe. |
+| `localization` / `latest` | Cache-aware; warns on rederive | Retry safe; cache invalidated if flags differ. |
+| `compare` | Read-only | Retry safe. |
+| `replay` | Each call re-executes | Retry safe; each adds another rerun. |
+| `memory list` / `show` | Read-only | Retry safe. |
+| `memory delete` | Tombstone is atomic | Retry safe (re-tombstone is a no-op). |
+| `reset --confirm` | Wipes + re-inits | **Destructive** — operator approval only. |
+| `licenses` | Read-only | Retry safe. |
 
-Network calls: none. Nove Test does no network I/O at invocation time
-(the install script does, once).
+Nove Test does **no network I/O** at invocation time (only the install
+script does, once).
 
 ---
 
@@ -274,19 +427,19 @@ Network calls: none. Nove Test does no network I/O at invocation time
 
 | Situation | Action |
 |---|---|
-| Exit 0 / 3 | Success path — read the envelope. |
+| Exit 0 / 3 | Success path — read the envelope (3 = tests failed, still `ok: true`). |
 | Exit 2, `uninitialized` | Auto-recover: `init` then retry. |
-| Exit 2, `not-found` | Auto-recover: list and pick. |
+| Exit 2, `not-found` | Auto-recover: `memory list` and pick. |
 | Exit 2, `invalid-flag` | Auto-recover: fix the value. |
-| Exit 2, `store-corrupt` | Do NOT auto-recover. Surface to operator (destructive recovery destroys data). |
-| Exit 4, `engine-missing` | Auto-recover IF policy permits installs. Else surface. |
-| Exit 4, `adapter-*` | Surface to operator (engine-level issue, not a Nove Test problem). |
-| Exit 5 | Surface to operator. |
-| Exit 1, `cli-error` | Surface to operator with the envelope. Do not retry blindly. |
+| Exit 2, `confirm-required` | Re-issue with `--confirm` ONLY with operator approval. |
+| Exit 5, `store-corrupt` / `store-wipe-failed` | Do NOT auto-recover. Surface (destructive recovery destroys data). |
+| Exit 4, `engine-engine-missing` / `-misconfigured` | Auto-recover IF policy permits installs (use `data.engine_readiness.issues[]`). Else surface. |
+| Exit 4, `adapter-*` | Surface (engine-level issue, not a Nove Test bug). |
+| Exit 1, `cli-error` | Surface with the envelope. Do not retry blindly. |
 
 ---
 
-## Health-check pattern for agents
+## Health-check pattern
 
 A minimal "is Nove Test usable right now" probe:
 

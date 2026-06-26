@@ -155,10 +155,11 @@ truncation explicitly (`/* ... */`) - never paraphrase.
 ## What's NOT in this folder
 
 - **The marketing landing copy** - that's in `../site-requirements.md`.
-- **API reference / schema definitions** - `novetest/v1` envelope
-  schemas are an in-product asset, served as JSON Schema from the
-  GitHub repo. The Docs pages link to them where relevant; they are
-  not embedded.
+- **API reference / schema definitions** - the `novetest/v1` envelope
+  is versioned in-product by its own `schema` field (defined in
+  `src/novetest/cli/output.py`); its shape is shown by the real captured
+  envelopes in these pages. There is no separately-published JSON Schema
+  artifact to embed or link to.
 - **A blog or release-notes feed** - out of scope for v1 Docs.
 - **A live REPL / playground** - out of scope; the scripted terminal
   demo lives on the landing page (`../site-requirements.md` F5).
