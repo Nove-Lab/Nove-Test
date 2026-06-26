@@ -22,72 +22,79 @@ human mode.
 | # | File | Read when … |
 |---|---|---|
 | 1 | [install.md](./install.md) | First. One curl-pipe-sh and two sanity checks (`--version`, `--help`). |
-| 2 | [quick-start.md](./quick-start.md) | After install. The 4-step canonical workflow: `init` → `test` → read the recommendations → optional `inspect`. |
-| 3 | [languages.md](./languages.md) | Your project is not Python. Per-engine toolchain notes for jest / go test / cargo / JUnit / dotnet. |
+| 2 | [quick-start.md](./quick-start.md) | After install. The canonical workflow: `init` → `test` → read the recommendations → optional `inspect`. |
+| 3 | [languages.md](./languages.md) | Your project is not Python. Per-engine toolchain notes for jest / go-test / cargo-test / JUnit / xUnit. |
 | 4 | [after-test.md](./after-test.md) | After `novetest test` returned a verdict. Exit-code table, reading text-mode output, when to reach for `status` and `inspect`. |
-| 5 | [advanced.md](./advanced.md) | When the happy path's four verbs are not enough — `coverage diff`, `regression compare`, `localization`, `replay`, `memory` cleanup, `licenses`. |
+| 5 | [advanced.md](./advanced.md) | When the happy path's verbs are not enough — `coverage diff`, `regression compare`, `localization`, `replay`, `memory` cleanup, `licenses`. |
 | 6 | [troubleshooting.md](./troubleshooting.md) | When something goes wrong. Common error glyphs, their meaning, and the one-line fix. |
 
 ---
 
 ## What text mode actually looks like
 
-This is the default when you type `novetest test` in a normal terminal:
+This is the default when you type `novetest test` in a normal terminal,
+in our working example (3 passing tests):
 
 ```
-1 recommendation · 1 category · run_id=01HX0K4M5N6P7Q8R9STUVWXYZ0
+1 recommendation · 1 category · run_id=01KVYRJJ4PN2F6DPKW1FHD1SP6
 
   ✓ [all_green] All tests green; no action recommended (passed 3, skipped 0, total 3).
-      ↳ run_reference 01HX0K4M5N6P7Q8R9STUVWXYZ0
+      ↳ run_reference 01KVYRJJ4PN2F6DPKW1FHD1SP6
 ```
 
 Things to notice — these are conventions you will see on every page:
 
-- **`✓ ✗ — ⚠ ! ? · ↳`** — the entire glyph palette. `✓` is good, `✗` is bad, `—` is "unavailable for a structural reason", `⚠` is advisory, `!` is "needs action", `?` is "we are not sure", `·` is just a separator, `↳` points to a citation. No ANSI color at MVP — meaning is carried by glyphs + words.
-- **Run IDs** are 26-character ULIDs (`01HX...`). They are the durable handle into your local run history. Copy-paste them into `novetest inspect <run_id>`.
-- **Bracketed categories** (`[all_green]`, `[tests_failed]`, `[coverage_regressed]`, …) come from a closed taxonomy. They are stable across versions; humans and machines route off the same string.
+- **`✓ ✗ — ⚠ ! ? · ↳`** — the glyph palette. `✓` is good, `✗` is bad,
+  `—` / `?` is "unavailable for a structural reason" (no baseline yet,
+  no failing tests, etc.), `⚠` is advisory, `!` is "needs action", `·`
+  is just a separator, `↳` points to a citation. No ANSI color at MVP —
+  meaning is carried by glyphs + words.
+- **Run IDs** are 26-character ULIDs (`01KVYR…`). They are the durable
+  handle into your local run history. Copy-paste them into
+  `novetest inspect <run_id>`.
+- **Bracketed categories** (`[all_green]`, `[investigate_location]`,
+  `[investigate_regression]`, …) come from a closed taxonomy of seven,
+  each carrying an integer `priority` (1 = most urgent, 7 = all green).
+  They are stable strings; humans and machines route off the same value.
 
-You will see this shape over and over: a one-line summary, a blank,
-then a glyph + bracketed category + sentence + optional `↳ citation`.
+You will see this shape over and over: a one-line summary header, a
+blank, then a glyph + bracketed category + sentence + optional
+`↳ citation` per recommendation.
 
 ---
 
 ## The working example used throughout this manual
 
 To keep the walkthrough concrete, every page uses one tiny Python
-project as its running example. Each page on the [languages.md](./languages.md)
-spread shows the equivalent skeleton for the other five engines.
+project — **`calc`** — as its running example. Each page on the
+[languages.md](./languages.md) spread shows the equivalent skeleton for
+the other five engines.
 
 ### Directory layout
 
 ```
-my-project/
+calc-demo/
 ├── pyproject.toml
-├── my_module/
+├── calc/
 │   ├── __init__.py
-│   └── math_utils.py
+│   └── arithmetic.py
 └── tests/
-    └── test_math_utils.py
+    └── test_arithmetic.py
 ```
 
 ### Files
 
-**`pyproject.toml`**
+**`pyproject.toml`** (the pytest section is what matters)
 
 ```toml
-[project]
-name = "my-project"
-version = "0.0.0"
-requires-python = ">=3.11"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 ```
 
-**`my_module/__init__.py`** — empty.
+**`calc/__init__.py`** — empty.
 
-**`my_module/math_utils.py`**
+**`calc/arithmetic.py`**
 
 ```python
 def add(a: int, b: int) -> int:
@@ -98,10 +105,10 @@ def subtract(a: int, b: int) -> int:
     return a - b
 ```
 
-**`tests/test_math_utils.py`**
+**`tests/test_arithmetic.py`**
 
 ```python
-from my_module.math_utils import add, subtract
+from calc.arithmetic import add, subtract
 
 
 def test_add_positive() -> None:
@@ -116,20 +123,19 @@ def test_subtract() -> None:
     assert subtract(10, 4) == 6
 ```
 
-A 3-test pytest suite. Greens on the first run; we'll deliberately
-break one in [after-test.md](./after-test.md) to show what a failure
-looks like in text mode.
+A 3-test pytest suite. All green on the first run; we deliberately break
+`subtract` (change `return a - b` to `return a + b`) in
+[after-test.md](./after-test.md) to show what a failure looks like in
+text mode — and how fault localization pins `subtract`@6.
 
 ### What you need on PATH
 
 - `python` ≥ 3.11
-- `pytest` (`pip install pytest`)
-- (optional, for coverage) `pytest-cov` (`pip install pytest-cov`)
+- `pytest` (the native engine Nove Test shells out to)
 
 The `novetest` binary bundles its **own** Python via PyApp; you do
 **not** install Python for the CLI itself. The `python` and `pytest`
-above are what Nove Test shells out to in order to actually run your
-tests.
+above are what Nove Test invokes in order to actually run your tests.
 
 ---
 
@@ -138,11 +144,11 @@ tests.
 - It does not teach you how to write Python or pytest tests. It assumes
   you have a project that already has tests.
 - It does not document every flag of every native engine — those live
-  in pytest / jest / cargo / JUnit / dotnet / go's own docs. Nove Test
+  in pytest / jest / cargo / JUnit / xUnit / go's own docs. Nove Test
   passes through the targets you give it.
 - It does not cover the SBFL math behind fault localization. The
   [advanced.md](./advanced.md) page shows how to invoke it; the design
-  rationale lives under `design/implementation-plan/`.
+  rationale lives under `design/`.
 - It does not document the JSON envelope schema field-by-field. That
   is the agent set's job — see [agent/after-test.md](../agent/after-test.md)
   if you ever need to script Nove Test.

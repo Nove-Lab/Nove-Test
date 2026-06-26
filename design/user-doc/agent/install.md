@@ -2,14 +2,18 @@
 
 This page covers:
 
-1. The one-line install for Linux / macOS / Windows.
-2. The two sanity envelopes (`version`, `help`) you should round-trip before driving any real project.
-3. Env vars + the precedence rule.
-4. What the install script does step by step (in case you delegate the install to a host script).
+1. Scripted / CI install for Linux / macOS / Windows, with version pinning.
+2. The two sanity envelopes (`version`, `help`) to round-trip before driving any project.
+3. Output-mode env vars and the precedence rule.
+4. A copy-paste pre-flight probe.
+
+Nove Test ships as a self-contained PyApp binary (embeds CPython 3.11 + the
+`novetest` wheel) — the install host needs no Python toolchain. Current
+version: **0.1.2**.
 
 ---
 
-## 1. The install command
+## 1. Scripted install
 
 ### Linux + macOS
 
@@ -17,18 +21,17 @@ This page covers:
 curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
 ```
 
-### Windows (PowerShell 5.1+)
+### Windows (PowerShell)
 
 ```powershell
 irm https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.ps1 | iex
 ```
 
-Idempotent (re-running upgrades in place via atomic rename), sudo-free
-(`~/.local/bin/`), aborts loudly on SHA-256 mismatch. SHA-256 verification
-is **mandatory** — you can rely on the script never writing a
-non-verified binary to disk.
+The script is idempotent (re-running upgrades in place via atomic rename),
+sudo-free (`~/.local/bin/`), and **aborts loudly on a SHA-256 mismatch** —
+you can rely on it never writing a non-verified binary to disk.
 
-After the script finishes, the binary lives at:
+After it finishes, the binary lives at:
 
 | OS | Path |
 |---|---|
@@ -36,19 +39,49 @@ After the script finishes, the binary lives at:
 | macOS | `~/.local/bin/novetest` |
 | Windows | `%USERPROFILE%\.local\bin\novetest.exe` |
 
-If `~/.local/bin/` is not on PATH at install time, the script prints a
-hint and exits 0. Your wrapper should either pre-set PATH or add the
-hint line to the user's shell profile.
+If the install prefix is not on `PATH`, the script prints a hint and exits
+0. Your wrapper should pre-set `PATH` or append the hint line to the host's
+shell profile.
 
-### Pinning a specific version
+### Pin the version for reproducible CI
 
 ```bash
 NOVETEST_INSTALL_VERSION=v0.1.2 \
   curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
 ```
 
-The default (`latest`) resolves the most recent GitHub Release at install
-time. Pinning a tag gives you deterministic, reproducible installs.
+Install-script env vars (script-only; they do not affect the CLI at runtime):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `NOVETEST_INSTALL_VERSION` | `latest` | Pin to a release tag for deterministic installs. |
+| `NOVETEST_INSTALL_PREFIX` | `~/.local/bin` | Install location. |
+| `NOVETEST_INSTALL_REPO` | `Nove-Lab/Nove-Test` | GitHub `owner/repo`. |
+| `NOVETEST_INSTALL_BASE_URL` | (GitHub Releases) | Override the download base URL (mirrors, internal caches). |
+
+### Scriptless install (direct asset fetch + verify)
+
+For hermetic CI that mirrors release assets, fetch the binary and its
+sidecar yourself and gate on the SHA-256:
+
+```bash
+base=https://github.com/Nove-Lab/Nove-Test/releases/latest/download
+target=novetest-linux-x86_64   # linux-aarch64 | macos-universal2 | windows-x86_64
+curl -fsSLO "$base/$target"
+curl -fsSLO "$base/$target.sha256"
+sha256sum -c "$target.sha256" || { echo "checksum mismatch"; exit 1; }
+chmod +x "$target" && mv "$target" ~/.local/bin/novetest
+```
+
+Targets: `novetest-linux-x86_64`, `novetest-linux-aarch64`,
+`novetest-macos-universal2`, `novetest-windows-x86_64` (`.exe`). No Linux
+i686/armv7l, no Windows arm64.
+
+### Python-tooling path (secondary)
+
+If the host already has Python **>= 3.11** and manages CLIs with `uv` or
+`pipx`: `uv tool install novetest` or `pipx install novetest`. The binary
+install is the primary path; treat this as a convenience fallback.
 
 ---
 
@@ -58,34 +91,38 @@ time. Pinning a tag gives you deterministic, reproducible installs.
 NOVETEST_OUTPUT=json novetest --version
 ```
 
-Round-trip envelope:
+Real captured envelope:
 
 ```json
 {
-  "schema": "novetest/v1",
   "command": "version",
-  "ok": true,
   "data": {
-    "installedVersion": "0.1.2",
     "commandName": "novetest",
-    "installLocation": "/home/you/.local/bin/novetest",
-    "pythonVersion": "3.11.9",
+    "installLocation": "/home/yjshin/dev/aispace/Nove-Test/.venv/bin/python3",
+    "installedVersion": "0.1.2",
     "platform": "linux-x86_64",
-    "verifiedAt": "2026-06-22T07:17:07Z"
+    "pythonVersion": "3.11.15",
+    "verifiedAt": "2026-06-25T06:20:42.645279Z"
   },
   "errors": [],
+  "ok": true,
+  "schema": "novetest/v1",
   "warnings": []
 }
 ```
 
+Note the top-level envelope keys are exactly `{schema, command, ok, data,
+errors, warnings}` (emitted sorted). There is **no** top-level `version`,
+`verb`, or `exit_code` field.
+
 | Field | Type | Meaning |
 |---|---|---|
-| `installedVersion` | string (semver) | The semver of the installed CLI. Use this to gate version-dependent behavior in your agent (`if version >= "0.1.2": ...`). |
-| `commandName` | string | Always `"novetest"`. Pin against this if you want to verify you are looking at the right CLI. |
-| `installLocation` | string (absolute path) | Path of the binary on disk. |
-| `pythonVersion` | string (semver) | The bundled CPython. You do not need to install Python yourself; the binary brings its own. |
-| `platform` | string | `{system}-{machine}`, lowercased. Useful for routing platform-specific assumptions in your agent. |
-| `verifiedAt` | string (ISO-8601 UTC) | Captured at envelope-build time. `Z` suffix is canonical. |
+| `installedVersion` | string (semver) | CLI version. Gate version-dependent behavior on this. |
+| `commandName` | string | Always `"novetest"`. Confirm you are looking at the right CLI. |
+| `installLocation` | string (path) | Binary/interpreter path on disk (above shows a source checkout's interpreter; a binary install shows the installed `novetest`). |
+| `pythonVersion` | string (semver) | Bundled CPython; you do not install Python yourself. |
+| `platform` | string | `{system}-{machine}`, lowercased. Route platform assumptions on this. |
+| `verifiedAt` | string (ISO-8601 UTC) | Time the `--version` envelope was generated (per-invocation — **not** a build time; it changes every call); `Z` suffix is canonical. |
 
 Exit code: **0**. There is no other expected exit code for `--version`.
 
@@ -97,157 +134,101 @@ Exit code: **0**. There is no other expected exit code for `--version`.
 NOVETEST_OUTPUT=json novetest --help
 ```
 
-This emits the **command surface envelope** — a machine-readable
-self-description of every verb the CLI exposes. This is the canonical
-way for an AI agent to discover what verbs exist without grepping
-documentation.
-
-Shape:
+Emits the **command surface envelope** — a machine-readable self-description
+of every verb. This is the canonical way for an agent to discover verbs
+without grepping docs. Real output (`data.operating` truncated for length —
+the elided items are real, not invented):
 
 ```json
 {
-  "schema": "novetest/v1",
   "command": "help",
-  "ok": true,
   "data": {
-    "schemaVersion": 1,
     "onboarding": [
-      {
-        "name": "novetest --version",
-        "summary": "Print CLI identity envelope.",
-        "group": "onboarding",
-        "availableInPhase": 0
-      },
-      {
-        "name": "novetest --help",
-        "summary": "Print command surface envelope.",
-        "group": "onboarding",
-        "availableInPhase": 0
-      },
-      {
-        "name": "novetest init",
-        "summary": "Initialize a Project Store under .novetest/ in the current workspace.",
-        "group": "onboarding",
-        "availableInPhase": 1
-      }
+      { "availableInPhase": 0, "group": "onboarding", "name": "novetest --version", "summary": "Print CLI identity envelope." },
+      { "availableInPhase": 0, "group": "onboarding", "name": "novetest --help",    "summary": "Print command surface envelope." },
+      { "availableInPhase": 1, "group": "onboarding", "name": "novetest init",      "summary": "Initialize a Project Store under .novetest/ in the current workspace." },
+      { "availableInPhase": 7, "group": "onboarding", "name": "novetest reset",     "summary": "Wipe the active Project Store and re-initialize (requires --confirm)." }
     ],
     "operating": [
-      {
-        "name": "novetest test",
-        "summary": "Run tests with integrated orchestration and synthesize a recommendation.",
-        "group": "orchestration",
-        "availableInPhase": 6
-      },
-      {
-        "name": "novetest run",
-        "summary": "Execute a Test Target via the native engine and persist a Run Record.",
-        "group": "run",
-        "availableInPhase": 1
-      },
-      {
-        "name": "novetest licenses",
-        "summary": "List third-party components Nove Test redistributes or links to.",
-        "group": "orchestration",
-        "availableInPhase": 0
-      }
-      /* ... full list includes: status, inspect, compare, replay,
-         coverage.show, coverage.diff, regression.compare,
-         regression.latest, localization, localization.latest,
-         memory.list, memory.show, memory.delete */
-    ]
+      { "availableInPhase": 6, "group": "orchestration", "name": "novetest test", "summary": "Run tests with integrated orchestration and synthesize a recommendation." },
+      { "availableInPhase": 1, "group": "run",           "name": "novetest run",  "summary": "Execute a Test Target via the native engine and persist a Run Record." }
+      /* ... also: memory list/show/delete, inspect, status, coverage show/diff,
+         regression compare/latest, compare, localization, replay, licenses */
+    ],
+    "schemaVersion": 1
   },
   "errors": [],
+  "ok": true,
+  "schema": "novetest/v1",
   "warnings": []
 }
 ```
 
-Two arrays:
+Two arrays under `data`:
 
-- `data.onboarding[]` — verbs you typically run **once** to come online: `--version`, `--help`, `init`.
-- `data.operating[]` — verbs you run during normal use.
+- `onboarding[]` — `--version`, `--help`, `init`, `reset`.
+- `operating[]` — the 15 work verbs (`test`, `run`, `memory list/show/delete`, `inspect`, `status`, `coverage show/diff`, `regression compare/latest`, `compare`, `localization`, `replay`, `licenses`).
 
-Each item carries `name`, `summary`, `group`, and `availableInPhase`.
-The pair `(group, name)` is stable; rely on it for programmatic
-dispatch. `availableInPhase` lets you reason about maturity — at MVP,
-every operating verb has landed (phases 0–6 are all complete; phase 7
-MCP is post-MVP).
+Each item carries `name`, `summary`, `group`, and `availableInPhase`. The
+pair `(group, name)` is stable; rely on it for dispatch. `data.schemaVersion`
+is `1`.
 
 Exit code: **0**.
 
 ### Why an agent should call `--help` at startup
 
-Because the verb list is data, not documentation. If your agent ships
-with hard-coded knowledge of `["init", "test", "status", ...]` and
-the next Nove Test version adds a new verb you would benefit from
-(e.g. `novetest workspaces test` post-MVP), your agent can discover
-it without a code release — just by re-parsing this envelope.
-
-Pin against `data.operating[*].name`; do NOT pin against
-`availableInPhase` (it is informational, not a gate).
+The verb list is data, not documentation. Discover verbs from
+`data.operating[*].name` instead of hard-coding them, so a future release
+that adds a verb does not require a code change in your agent. Do **not**
+gate on `availableInPhase` — it is informational, not a capability flag.
 
 ---
 
-## 4. Env vars
+## 4. Output-mode env vars
 
 | Variable | Default | Effect |
 |---|---|---|
-| `NOVETEST_OUTPUT` | (auto: `text` on TTY, `json` when piped) | Force the output mode. **Set this to `json` once at session start.** |
-| `NOVETEST_INSTALL_PREFIX` | `~/.local/bin` | Install-script only. |
-| `NOVETEST_INSTALL_VERSION` | `latest` | Install-script only. Pin to a tag for deterministic installs. |
-| `NOVETEST_INSTALL_REPO` | `Nove-Lab/Nove-Test` | Install-script only. |
+| `NOVETEST_OUTPUT` | auto (`text` on TTY, `json` when piped) | Force the output mode. **Set to `json` once at session start.** |
 
-Precedence rule (canonical Unix):
+Precedence:
 
 ```
 explicit --output flag  >  NOVETEST_OUTPUT env  >  TTY auto-detect
 ```
 
-Two takeaways:
-
-- Setting `NOVETEST_OUTPUT=json` in the agent's environment is enough.
-  You do NOT need to also pass `--output json` on every call.
-- If you need a specific verb to override the env (rare), pass
-  `--output json` on that invocation. The flag wins.
+(`--output` is a global flag; it is stripped from anywhere in the argv
+before dispatch, so it works in any position — `novetest --output json
+status` and `novetest status --output json` are equivalent. Values:
+`text` / `json` / `ndjson`. JSON is pretty-printed with sorted keys; NDJSON
+is one compact envelope per line.) Setting `NOVETEST_OUTPUT=json` in the
+agent's environment is enough — you do not need `--output json` on every
+call. The install-script env vars in §1 are separate and do not affect
+runtime output.
 
 ---
 
-## 5. Verifying a clean install in your agent
-
-A minimal three-step probe:
+## 5. Pre-flight probe for a clean install
 
 ```bash
 # 1) Binary on PATH
 command -v novetest || { echo "novetest missing"; exit 1; }
 
 # 2) Version envelope round-trips
-NOVETEST_OUTPUT=json novetest --version | jq -e '.ok == true and .schema == "novetest/v1"' \
+NOVETEST_OUTPUT=json novetest --version \
+  | jq -e '.ok == true and .schema == "novetest/v1" and .data.installedVersion == "0.1.2"' \
   || { echo "version envelope malformed"; exit 1; }
 
 # 3) Help envelope enumerates the operating surface
-NOVETEST_OUTPUT=json novetest --help | jq -e '.data.operating | length > 10' \
+NOVETEST_OUTPUT=json novetest --help | jq -e '.data.operating | length >= 15' \
   || { echo "help envelope shrunk unexpectedly"; exit 1; }
 ```
 
-If all three pass, you can drive Nove Test.
-
----
-
-## What the install script does internally (for reference)
-
-1. Detects OS + arch.
-2. Resolves the asset name (`novetest-linux-x86_64` / `novetest-linux-aarch64` / `novetest-macos-universal2` / `novetest-windows-x86_64.exe`).
-3. Downloads the binary and its `.sha256` sidecar from the latest GitHub Release (or pinned version via `NOVETEST_INSTALL_VERSION`).
-4. Verifies SHA-256 locally. Mismatch → aborts.
-5. Atomic rename into `~/.local/bin/novetest{.exe}`.
-6. Checks PATH; prints hint if needed.
-
-No network calls happen at CLI invocation time. The first `novetest`
-invocation pays a one-time 5–25 second cost (PyApp self-extracts the
-bundled Python); subsequent invocations are warm.
+If all three pass, you can drive Nove Test. The first real invocation pays a
+one-time 5–15 second PyApp unpack cost; subsequent calls are warm.
 
 ---
 
 ## Next
 
-[quick-start.md](./quick-start.md) — the 4-step canonical workflow,
-every step pinned to its envelope shape.
+[quick-start.md](./quick-start.md) — the 4-step canonical workflow, every
+step pinned to its envelope shape.
