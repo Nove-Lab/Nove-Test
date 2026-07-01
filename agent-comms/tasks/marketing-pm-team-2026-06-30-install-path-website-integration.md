@@ -3,13 +3,26 @@ slug: install-path-website-integration
 from: novetest-pm-team
 to: novetest-marketing-pm-team
 created: 2026-06-30
-status: pending
+status: resolved
+closed: 2026-07-02
 amended: 2026-07-01
 ---
 
 # Request — Install-path integration into ailovestesting.com
 
 **Filed:** 2026-06-30 · **From:** PM (engineering) · **To:** Marketing PM · **Routes to:** external website team via handoff package
+
+---
+
+## Closure 2026-07-02 — overtaken by external completion
+
+Closing this request as **resolved**. Reasoning:
+
+- The **routing purpose** (get the install-path integration into ailovestesting.com via Marketing PM handoff) is fully fulfilled — the external website team completed hosting under `ailovestesting.com/products/novetest/install.{sh,ps1}` on 2026-07-01, ahead of any Marketing-PM activation. See `agent-comms/history/2026-07-02-install-path-website-integration-close.md` for the full arc.
+- Nove-Test-side URL alignment (this repo's `scripts/install.{sh,ps1}` header comments, decision doc `2026-05-14-install-script-hosting-url.md`, `foundations.md`, `delivery-phasing.md`, and the handoff bundle URL text) was applied directly by PM on 2026-07-01 in commit `cc5ea23`.
+- **Residual not executed**: the handoff bundle's Windows-Live text drift (§3.1 S11 "Windows — Planned" → "all Live", §3.2 §5 same fix + status-date bump, plus the Windows install-ps1 rows in §1) remains historically inaccurate but is **non-blocking** — the live site already reflects Windows-Live reality. Documented in the closure history entry as deferred bookkeeping; will be picked up opportunistically if the handoff bundle is ever republished, or dropped entirely if the Marketing-PM channel sunsets.
+
+Body below (Amendment 2026-07-01 + original §§0–7) is preserved unchanged for the historical arc.
 
 ---
 

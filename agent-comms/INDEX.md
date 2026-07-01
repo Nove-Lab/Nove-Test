@@ -8,7 +8,6 @@ Last regenerated: 2026-07-02
 _(none)_
 
 ## Pending
-- [marketing-pm-team-2026-06-30-install-path-website-integration.md](./tasks/marketing-pm-team-2026-06-30-install-path-website-integration.md) — `novetest-pm-team → novetest-marketing-pm-team` (install-path-website-integration)
 - [orchestration-team-2026-06-25-test-reruns-flag.md](./tasks/orchestration-team-2026-06-25-test-reruns-flag.md) — `novetest-pm-team → novetest-orchestration-team` (test-reruns-flag)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 - [2026-07-02-engine-selection-policy.md](./questions/2026-07-02-engine-selection-policy.md) — `novetest-pm-team → CEO` (engine-selection-policy)
@@ -25,3 +24,4 @@ _(none)_
 ## Recent history (last 7 days)
 - [2026-06-25-memory-wipe-primitive-and-module-path-contract.md](./history/2026-06-25-memory-wipe-primitive-and-module-path-contract.md) — `novetest-pm-team → all` (memory-wipe-primitive-and-module-path-contract)
 - [2026-06-25-novetest-reset-verb-paired-cycle-close.md](./history/2026-06-25-novetest-reset-verb-paired-cycle-close.md) — `novetest-pm-team → all` (novetest-reset-verb-paired-cycle-close)
+- [2026-07-02-install-path-website-integration-close.md](./history/2026-07-02-install-path-website-integration-close.md) — `novetest-pm-team → all` (install-path-website-integration-close)
