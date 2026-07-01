@@ -192,7 +192,7 @@ The one-line install command, **"free to install, free to use — and open sourc
 **"no Python / Node / JVM prerequisite,"** **Linux & macOS today (Windows — Planned)**, an optional
 2–3 step quickstart (`install → novetest init → novetest test`), and an optional "inspect the source
 on GitHub" link. Install command (copyable):
-`curl -fsSL https://ailovestesting.com/novetest/install.sh | sh`
+`curl -fsSL https://ailovestesting.com/products/novetest/install.sh | sh`
 (See `assets-and-links.md` for confirmed URLs.)
 
 ### S12 — The Novetest family (what's coming)

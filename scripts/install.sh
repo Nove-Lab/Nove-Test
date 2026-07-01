@@ -3,11 +3,11 @@
 # (SHA-256 verification + tampered-binary integration test).
 #
 # Canonical user invocation (per decisions/2026-05-14-install-script-hosting-url.md):
-#   curl -fsSL https://ailovestesting.com/novetest/install.sh | sh
+#   curl -fsSL https://ailovestesting.com/products/novetest/install.sh | sh
 #
 # Windows companion (added 2026-06-18, closes Open Q #16):
 #   scripts/install.ps1 (PowerShell 5.1+);
-#   irm https://ailovestesting.com/novetest/install.ps1 | iex
+#   irm https://ailovestesting.com/products/novetest/install.ps1 | iex
 #
 # This script is POSIX sh — verified on dash (Debian /bin/sh), ash (Alpine),
 # and bash 3.2 (the default macOS interpreter). No bashisms. No `set -o

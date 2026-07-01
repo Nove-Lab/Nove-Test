@@ -9,8 +9,8 @@ Read `README.md` and `site-requirements.md` first. Status as of 2026-06-01.
 
 | Link | URL |
 |---|---|
-| One-line install command | `curl -fsSL https://ailovestesting.com/novetest/install.sh \| sh` |
-| Install script (raw) | `https://ailovestesting.com/novetest/install.sh` |
+| One-line install command | `curl -fsSL https://ailovestesting.com/products/novetest/install.sh \| sh` |
+| Install script (raw) | `https://ailovestesting.com/products/novetest/install.sh` |
 | Public source repository (GitHub) | `https://github.com/Nove-Lab/Nove-Test` |
 | Website domain | `ailovestesting.com` |
 
