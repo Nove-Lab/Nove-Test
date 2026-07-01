@@ -1,7 +1,7 @@
 # install.ps1 — Windows companion to scripts/install.sh.
 #
 # Canonical user invocation (per decisions/2026-05-14-install-script-hosting-url.md):
-#   irm https://ailovestesting.com/novetest/install.ps1 | iex
+#   irm https://ailovestesting.com/products/novetest/install.ps1 | iex
 # Interim per Amendment 2026-06-10 (until DNS routing is wired):
 #   irm https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.ps1 | iex
 #

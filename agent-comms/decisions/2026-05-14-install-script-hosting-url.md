@@ -17,7 +17,7 @@ CEO-approved on 2026-05-14. Resolves Open Question #15 in
 The canonical one-line install URL for the novetest core product is:
 
 ```
-curl -fsSL https://ailovestesting.com/novetest/install.sh | sh
+curl -fsSL https://ailovestesting.com/products/novetest/install.sh | sh
 ```
 
 And the binding **brand namespace principle** for the whole product family:
@@ -38,8 +38,8 @@ And the binding **brand namespace principle** for the whole product family:
   product (no new domain or subdomain purchase/setup), keeps a single brand
   umbrella, single DNS zone / SSL cert / management point.
 - Keeps install / docs / landing URLs **parallel and predictable**:
-  `ailovestesting.com/novetest` (landing) · `/novetest/install.sh` (install) ·
-  `/novetest/docs` (docs).
+  `ailovestesting.com/products/novetest` (landing) · `/products/novetest/install.sh` (install) ·
+  `/products/novetest/docs` (docs).
 - Proven pattern — `uv` ships exactly this shape (`astral.sh/uv/install.sh`):
   company/brand domain + product-name path.
 - `.sh` extension kept deliberately for **transparency**: `curl | sh` users are
@@ -55,7 +55,7 @@ And the binding **brand namespace principle** for the whole product family:
   already specified in `tasks/release-team-2026-05-14-phase0-ci-and-distribution.md`.
   No task change needed.
 - **Before MVP launch:** CEO wires DNS + hosting so
-  `https://ailovestesting.com/novetest/install.sh` rewrites/redirects to the
+  `https://ailovestesting.com/products/novetest/install.sh` rewrites/redirects to the
   repo's `scripts/install.sh`. A subdomain is **not** required — this is a path
   route on the brand domain, zero additional purchase. PM issues a follow-up
   task to Release at that point.
@@ -89,7 +89,7 @@ None. First decision on distribution URLs. Resolves Open Question #15.
 
 **Context**: The 2026-06-10 v0.1.1 launch cycle (first public-facing
 Nove Test release) proceeds before the original rollout step "CEO wires
-DNS + hosting so https://ailovestesting.com/novetest/install.sh
+DNS + hosting so https://ailovestesting.com/products/novetest/install.sh
 rewrites/redirects to the repo's scripts/install.sh" has been completed.
 The `ailovestesting.com` domain is registered but homepage hosting +
 path routing are deferred to a later cycle when the marketing/homepage
@@ -103,7 +103,7 @@ curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/ins
 ```
 
 This is NOT a policy reversal. The canonical brand URL
-`https://ailovestesting.com/novetest/install.sh` remains the binding
+`https://ailovestesting.com/products/novetest/install.sh` remains the binding
 target per the original Decision §"Decision" + §"Brand namespace
 principle". `scripts/install.sh`'s in-file header keeps citing the
 canonical URL as the "canonical user invocation" — only the README's
@@ -123,10 +123,10 @@ externally-visible primary URL is temporarily the raw GitHub form.
 **Migration plan when DNS is wired** (later CEO-triggered cycle):
 
 1. CEO sets up Cloudflare Page Rules (Free tier, 3 rules included):
-   - URL pattern: `ailovestesting.com/novetest/install.sh`
+   - URL pattern: `ailovestesting.com/products/novetest/install.sh`
    - Setting: Forwarding URL (301 or 302)
    - Destination: `https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh`
-2. Verify with `curl -fsSL https://ailovestesting.com/novetest/install.sh | head` from a clean host.
+2. Verify with `curl -fsSL https://ailovestesting.com/products/novetest/install.sh | head` from a clean host.
 3. PM updates README primary install URL via single-line edit.
 4. (Optional) Pin Page Rule destination to a specific tagged version
    per the original Decision §"Rollout / Refinement (later, non-blocking)":
@@ -142,3 +142,42 @@ The raw GitHub URL remains supported indefinitely as a fallback /
 alternative install path even after the canonical URL is wired —
 similar to how many projects ship multiple equivalent install URLs
 for redundancy and inspect-first transparency.
+
+---
+
+## Amendment 2026-07-01 — URL path migration `/novetest/` → `/products/novetest/`
+
+**Context**: When the marketing / website team (external to novetest engineering)
+brought `ailovestesting.com` live, they hosted the install scripts under
+`/products/novetest/install.{sh,ps1}` to align with the site's product-page
+information architecture (`/products/<name>/...`). The originally-decided
+path `/novetest/install.sh` (§"Decision" + §"Brand namespace principle" of
+this decision doc, 2026-05-14) was retired without a redirect and now returns
+404. Confirmed live 2026-07-01.
+
+**Effect on this decision**:
+
+- The **brand-namespace principle** (path-namespacing under one brand domain,
+  one path segment per product) is unchanged and remains binding. Only the
+  path segment moved by one level: `/<product>/…` → `/products/<product>/…`.
+  Future products follow the same `/products/<product>/…` shape.
+- The **canonical install URLs** for `novetest` are now:
+  - `https://ailovestesting.com/products/novetest/install.sh` (Linux + macOS)
+  - `https://ailovestesting.com/products/novetest/install.ps1` (Windows)
+- Every path in §"Decision", §"Rationale" bullet 3, §"Rollout", and
+  Amendment 2026-06-10 has been rewritten to the new path. The historical
+  `/novetest/…` URLs are frozen in `WORKLOG.md` and `agent-comms/history/`
+  as retrospective statements of what was true at the time — those files are
+  immutable per project convention and are **not** back-patched.
+- The Cloudflare Page-Rules migration plan in Amendment 2026-06-10 §"Migration
+  plan when DNS is wired" is superseded: the external team owns hosting and
+  chose its own sync mechanism (see the addendum they received via
+  `ailovestesting.com/design/install-path-integration-request-2026-06-30.md`).
+  This decision doc no longer prescribes the sync mechanism; it only fixes the
+  canonical URLs.
+
+**Effective date**: 2026-07-01.
+
+**Supersedes**: URL paths in §"Decision", §"Rationale", §"Rollout", and
+Amendment 2026-06-10 (URL text only). The brand-namespace principle is
+unchanged.

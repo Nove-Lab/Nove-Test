@@ -531,7 +531,7 @@ User reality: a Go developer (or any non-Python SuT developer) running Nove Test
 ### Tier 1 - One-line install script
 
 ```bash
-curl -fsSL https://ailovestesting.com/novetest/install.sh | sh
+curl -fsSL https://ailovestesting.com/products/novetest/install.sh | sh
 ```
 
 The canonical URL and the brand namespace principle are fixed in
@@ -546,7 +546,7 @@ What the script does:
 
 Re-running upgrades. Idempotent.
 
-Target platforms (Tier 1): `linux-x86_64`, `linux-aarch64`, `macos-universal2` (lipo-fused arm64 + x86_64), `windows-x86_64`. Windows was added on 2026-06-18 (closes Open Q #16; canonical install URL `https://ailovestesting.com/novetest/install.ps1` per the `decisions/2026-05-14-install-script-hosting-url.md` brand-namespace principle, interim raw GitHub URL per Amendment 2026-06-10; `windows-arm64` remains unsupported pending python-build-standalone — see §54).
+Target platforms (Tier 1): `linux-x86_64`, `linux-aarch64`, `macos-universal2` (lipo-fused arm64 + x86_64), `windows-x86_64`. Windows was added on 2026-06-18 (closes Open Q #16; canonical install URL `https://ailovestesting.com/products/novetest/install.ps1` per the `decisions/2026-05-14-install-script-hosting-url.md` brand-namespace principle, interim raw GitHub URL per Amendment 2026-06-10; `windows-arm64` remains unsupported pending python-build-standalone — see §54).
 
 This is the only path the README headlines and the only path AI agents in onboarding flows are expected to suggest. It is also the path AI coding tools (Cursor, Claude Code, Cline, etc.) can run as a single tool call when a user asks them to set up Nove Test.
 
@@ -602,8 +602,8 @@ Ship `novetest self update` as a thin command that pulls the latest GitHub relea
 
 | Audience | Command |
 | --- | --- |
-| **Default for everyone (any language SuT, Linux/macOS)** | `curl -fsSL https://ailovestesting.com/novetest/install.sh \| sh` |
-| **Default for everyone — Windows** | `irm https://ailovestesting.com/novetest/install.ps1 \| iex` |
+| **Default for everyone (any language SuT, Linux/macOS)** | `curl -fsSL https://ailovestesting.com/products/novetest/install.sh \| sh` |
+| **Default for everyone — Windows** | `irm https://ailovestesting.com/products/novetest/install.ps1 \| iex` |
 | Inspect-first users / hermetic CI | Direct binary download + SHA-256 verify (Tier 2 above) |
 | macOS / Linux Homebrew users | `brew install nove/tap/novetest` (once the tap is published) |
 | Python developers | `uv tool install novetest` or `pipx install novetest` |
