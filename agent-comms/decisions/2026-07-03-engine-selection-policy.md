@@ -74,11 +74,18 @@ Consequences:
 ### D3 — execution: pin by default, explicit transient override allowed
 
 - Default: the pinned engine runs, with its native scope, from the anchor
-  directory. `target_expression` for Memory/Regression purposes is
-  normalized **relative to the anchor** (the workspace-relpath utility
-  promoted 2026-06-19 supplies the mechanics), so runs invoked from
-  different subdirectories form distinct, correctly-separated baseline
-  series.
+  directory. *(Clarified same-day, CEO-confirmed 2026-07-03:)* a **bare**
+  invocation (no target argument) is workspace-scoped (`target_expression
+  = ""`) **regardless of which subdirectory it was invoked from** — cwd
+  never silently narrows scope. Subsets require an **explicit target**,
+  and explicit target paths are normalized **relative to the anchor** (the
+  workspace-relpath utility promoted 2026-06-19 supplies the mechanics) so
+  the same ask from different cwds lands in the same baseline series and
+  distinct targets form distinct series. Rationale: uniform across all six
+  engines (cargo and Maven have no notion of scoping a run to an arbitrary
+  subdirectory, so cwd-implied targets could not be implemented uniformly)
+  and consistent with this decision's spirit — implicit behavior is total
+  and predictable; partiality is explicit.
 - `novetest test --engine <name>` / `novetest run --engine <name>` execute a
   one-off override **without re-pinning**. The run record carries its
   `engine_name` as today; mixed-engine histories in one store are legitimate
