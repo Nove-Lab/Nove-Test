@@ -3,11 +3,25 @@ slug: engine-selection-policy
 from: novetest-pm-team
 to: CEO
 type: question
-status: pending
+status: resolved
 created: 2026-07-02
+resolved: 2026-07-03
 ---
 
 # Question — Engine selection policy (auto-detect at init + explicit user override)
+
+> **RESOLVED 2026-07-03** by decision
+> [`2026-07-03-engine-selection-policy.md`](../decisions/2026-07-03-engine-selection-policy.md)
+> (the anchored-pin model). The six axes below were answered as follows:
+> Q1 → `--engine` on `init` (optional; required only when ambiguous) plus a
+> transient `--engine` override on `test`/`run`; no env var. Q2 → init pins
+> on a single marker, creates nothing otherwise (γ-variant, stricter).
+> Q3 → runtime ambiguity structurally eliminated (store implies pin); verbs
+> require an anchor via upward walk. Q4 → the two-list mismatch bug dies by
+> design (detection only at init). Q5 → out of scope, tracked separately.
+> Q6 → Open Q #18 stays open with reduced urgency; Open Q #17 resolved
+> (walk-up). The CEO's root fan-out idea was consciously withdrawn — see the
+> decision's §"Rejected alternatives". Body below preserved as the arc record.
 
 CEO surfaced this as the #1 next product direction on 2026-07-02: the six native engines (pytest, jest, JUnit, go test, cargo, dotnet) today have no user-facing way to be chosen; selection is a fixed-priority auto-detect that fires on every `run` / `test` invocation. CEO wants (A) auto-detection **at init** that persists, and (B) at minimum an explicit user override. Neither exists today. CEO paused before deciding; this file is the resume point.
 
