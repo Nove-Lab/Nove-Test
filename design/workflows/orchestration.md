@@ -16,12 +16,12 @@
 | --- | --- |
 | `novetest -v` / `novetest --version` | `orchestration/report_cli_identity` |
 | `novetest -h` / `novetest --help` | `orchestration/describe_command_surface` |
-| `novetest init` | `orchestration/initialize_project_workspace` |
+| `novetest init [--engine <name>]` | `orchestration/initialize_project_workspace` |
 | `novetest reset --confirm` | `orchestration/reset_project_workspace` |
 | `report_cli_identity()` | - |
 | `describe_command_surface()` | - |
-| `initialize_project_workspace(workspace_context)` | `memory/create_project_store` -> `run/assess_engine_readiness` |
-| `reset_project_workspace(workspace_context)` | `memory/locate_project_store` -> `memory/wipe_project_store` -> `orchestration/initialize_project_workspace` |
+| `initialize_project_workspace(workspace_context, engine?)` | `{ engine supplied: memory/create_project_store -> memory/set_pinned_engine -> run/probe_engine \| no engine flag: run/detect_engine_candidates -> run/probe_engine (per candidate) -> { one choice: memory/create_project_store -> memory/set_pinned_engine \| no marker: orchestration/discover_candidates_below (D4 bounded scan; nothing created) \| ambiguous: nothing created } }` |
+| `reset_project_workspace(workspace_context)` | `memory/locate_project_store` -> `memory/wipe_project_store` -> `orchestration/initialize_project_workspace` (at the wiped store's anchor, carrying the previous pin as the explicit `engine`) |
 
 ---
 
@@ -112,11 +112,32 @@ The wipe is atomic per the decision's §"Atomicity guarantee": the live `.novete
 
 ---
 
+## Anchored-pin verb resolution (decision `2026-07-03-engine-selection-policy`)
+
+Every operating verb resolves its governing Project Store through ONE shared
+helper, `orchestration/resolve_workspace` (implemented in
+`src/novetest/orchestration/anchor_resolution.py`, wrapping Memory's
+`find_nearest_store` upward walk):
+
+`orchestration/resolve_workspace` | `memory/locate_project_store` -> `{ pin present: done | legacy pin-less store: run/detect_engine_candidates -> run/probe_engine -> { one choice: memory/set_pinned_engine (silent D6 backfill) | ambiguous: error engine-ambiguous | no marker: proceed unpinned } | no store: error uninitialized }`
+
+Execution verbs (`test` / `run`) then dispatch on
+`orchestration/resolve_execution_engine`: the transient `--engine` override
+(D3, never re-pins) wins, else the store pin; `run/execute` always receives an
+explicit `(ecosystem, engine_name)` pair — the legacy `execute(engine=None)`
+auto-detect path has no orchestration caller anymore. Explicit target
+expressions are normalized to anchor-relative canonical POSIX form
+(`orchestration/normalize_target_expression`) before `run/resolve_test_target`;
+bare invocations stay workspace-scoped at the anchor regardless of the
+invoking subdirectory.
+
+---
+
 ## Notes
 
-- Section 1 onboarding flows must complete without a pre-existing Project Store. `novetest -v` and `novetest -h` are leaves (they only resolve CLI identity / command-surface state). `novetest init` is the only onboarding flow that mutates the workspace.
-- `initialize_project_workspace` composes Project Store creation (`memory/create_project_store`, idempotent) and native-engine readiness assessment (`run/assess_engine_readiness`). The readiness outcome is informational - a missing or misconfigured native engine does not roll back the created Project Store.
+- Section 1 onboarding flows must complete without a pre-existing Project Store. `novetest -v` and `novetest -h` are leaves (they only resolve CLI identity / command-surface state). `novetest init` is the only onboarding flow that mutates the workspace — and only on its success path: the `no-engine-detected` / `engine-ambiguous` outcomes create nothing (decision D1).
+- `initialize_project_workspace` composes engine choice (`run/detect_engine_candidates` + `run/probe_engine`), Project Store creation (`memory/create_project_store`, idempotent), and pin persistence (`memory/set_pinned_engine`). The readiness outcome is informational - a missing or misconfigured native engine does not roll back the created Project Store (a single-marker workspace pins even when its engine is misconfigured).
 - The `novetest test [target]` flow is the single place where Recommendations are emitted; `synthesize_recommendation` chains into `cite_recommendation_evidence` before returning.
 - `novetest compare` composes Regression and Coverage outputs at the orchestration layer; `novetest regression compare` and `novetest coverage diff` remain available as fact-only sub-product surfaces.
 - `evaluate_stage_eligibility` is reused only by the integrated `novetest test` flow; `build_status_view` is reused only by `novetest status`. Both fan out across all sub-products' `check_*_availability` interfaces.
-- Operating flows assume an initialized Project Store; resolution of the active store happens transparently inside `memory/*` calls (see `workflows/memory.md`) and is not shown as a separate step here.
+- Operating flows assume an initialized Project Store; resolution of the active store happens through the shared `orchestration/resolve_workspace` helper (see §"Anchored-pin verb resolution" above) and is not repeated as a step in each row.

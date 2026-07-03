@@ -1,0 +1,29 @@
+# serializer version: 1
+# name: test_dual_marker_lifecycle[engine_ambiguous_data]
+  dict({
+    'candidates': list([
+      dict({
+        'ecosystem': 'python',
+        'engine_name': 'pytest',
+        'path': '.',
+      }),
+      dict({
+        'ecosystem': 'javascript-typescript',
+        'engine_name': 'jest',
+        'path': '.',
+      }),
+    ]),
+  })
+# ---
+# name: test_markerless_init_reports_discovered_candidates[no_engine_detected_data]
+  dict({
+    'candidates': list([
+      dict({
+        'ecosystem': 'python',
+        'engine_name': 'pytest',
+        'path': 'backend',
+      }),
+    ]),
+    'scan_refused': False,
+  })
+# ---

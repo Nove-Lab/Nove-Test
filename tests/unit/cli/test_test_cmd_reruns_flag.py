@@ -184,7 +184,7 @@ def test_reruns_value_forwarded_to_workflow(
         app_module.test_cmd(reruns=reruns)
     assert exc_info.value.code == 3  # status "failed" → EXIT_USER_TESTS_FAILED
 
-    assert spy.calls == [{"target": "", "reruns": reruns}]
+    assert spy.calls == [{"target": "", "reruns": reruns, "engine": None}]
     payload = _captured_envelope(capsys)
     assert payload["command"] == "test"
     assert payload["ok"] is True
@@ -201,7 +201,7 @@ def test_bare_invocation_defaults_to_zero_reruns(
     with pytest.raises(SystemExit):
         app_module.test_cmd()
 
-    assert spy.calls == [{"target": "", "reruns": 0}]
+    assert spy.calls == [{"target": "", "reruns": 0, "engine": None}]
     _captured_envelope(capsys)  # drain
 
 

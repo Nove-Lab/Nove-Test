@@ -17,7 +17,8 @@ import pytest
 
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_NATIVE_PAYLOAD
-from novetest.memory import create_project_store
+from novetest.memory import create_project_store, get_project_store_state
+from novetest.memory.project_store import set_pinned_engine
 from novetest.models import RunRecord, RunReference
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
@@ -77,7 +78,12 @@ def _make_fact_set(ref: RunReference) -> CoverageFactSet:
 def store(tmp_path: Path) -> Any:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    return create_project_store(workspace)
+    store = create_project_store(workspace)
+    # Anchored-pin model (2026-07-03): execution workflows read the store's
+    # engine pin; a pin-less store raises EngineNotReadyError before the
+    # execute seam is reached. Pin pytest the way `init` would.
+    set_pinned_engine(store, "python", "pytest")
+    return get_project_store_state(store.path)
 
 
 @pytest.fixture
@@ -93,10 +99,12 @@ def stub_execute(monkeypatch: pytest.MonkeyPatch):
         run_id: str | None = None,
         timeout: float | None = 600.0,
         collect_coverage: bool = False,
+        engine: tuple[str, str] | None = None,
     ) -> tuple[RunRecord, tuple[Any, ...]]:
         captured["collect_coverage"] = collect_coverage
         captured["artifact_dir"] = artifact_dir
         captured["run_id"] = run_id
+        captured["engine"] = engine
         # The workflow expects artifact paths it can `relative_to(store.path)`.
         # We rebuild that on the fly here.
         artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -194,3 +202,37 @@ async def test_coverage_unavailable_outcome_is_forwarded(
     assert outcome.coverage_outcome.reason == REASON_MISSING_NATIVE_PAYLOAD
     # Memory entry is still returned; the run itself succeeded.
     assert outcome.memory_entry.run_record.status == "passed"
+
+
+async def test_pinned_engine_is_forwarded_to_execute(
+    store: Any, stub_execute: dict[str, Any]
+) -> None:
+    """The store pin reaches ``execute`` as an explicit pair (never None)."""
+
+    await run_target_in_store("", store)
+    assert stub_execute["engine"] == ("python", "pytest")
+
+
+async def test_engine_override_wins_without_repinning(
+    store: Any, stub_execute: dict[str, Any]
+) -> None:
+    """D3 transient override: forwarded to execute, pin on disk untouched."""
+
+    await run_target_in_store("", store, engine=("go", "go-test"))
+    assert stub_execute["engine"] == ("go", "go-test")
+    refreshed = get_project_store_state(store.path)
+    assert refreshed.pinned_engine is not None
+    assert refreshed.pinned_engine.engine_name == "pytest"
+
+
+async def test_pinless_store_raises_engine_missing(tmp_path: Path) -> None:
+    """A legacy pin-less store cannot execute: EngineNotReadyError, no scan."""
+
+    from novetest.run import EngineNotReadyError
+
+    workspace = tmp_path / "legacy"
+    workspace.mkdir()
+    legacy_store = create_project_store(workspace)
+    with pytest.raises(EngineNotReadyError) as exc_info:
+        await run_target_in_store("", legacy_store)
+    assert exc_info.value.readiness.state == "engine-missing"

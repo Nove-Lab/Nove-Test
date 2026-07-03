@@ -17,14 +17,25 @@ from __future__ import annotations
 
 
 def _seed_one_run(workspace) -> None:
-    """Materialize a Project Store under ``workspace`` with a single run."""
-    from novetest.memory.project_store import create_project_store
+    """Materialize a Project Store under ``workspace`` with a single run.
+
+    The store carries an engine pin the way any post-anchored-pin ``init``
+    leaves it (decision 2026-07-03-engine-selection-policy D1): ``reset``
+    carries the pin across the wipe, so the seeded shape must carry one —
+    the pin-less legacy shape is the D6 migration case, covered by the
+    anchored-pin e2e suite instead.
+    """
+    from novetest.memory.project_store import (
+        create_project_store,
+        set_pinned_engine,
+    )
     from novetest.memory.store import store_run_evidence
     from novetest.models.run_record import RunRecord
     from novetest.models.run_reference import RunReference
     from novetest.models.test_result import TestResult
 
     store = create_project_store(workspace)
+    set_pinned_engine(store, "python", "pytest")
     ref = RunReference(
         run_id="01D6RESET000000000000000A", created_at=1_700_000_000_000
     )

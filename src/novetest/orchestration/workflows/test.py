@@ -67,6 +67,10 @@ from novetest.models import LocalizationFinding as LocalizationFindingModel
 from novetest.models import MemoryEntry, ReplayResult, RunRecord
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.regression_fact_set import RegressionFactSet
+from novetest.orchestration.anchor_resolution import (
+    normalize_target_expression,
+    resolve_execution_engine,
+)
 from novetest.orchestration.recommendation import (
     FactBundle,
     Recommendation,
@@ -134,6 +138,7 @@ async def test_target_in_store(
     *,
     timeout: float | None = 600.0,
     reruns: int = 0,
+    engine: tuple[str, str] | None = None,
 ) -> TestOutcome:
     """Execute target, persist evidence, derive facts, synthesize recommendations.
 
@@ -164,10 +169,21 @@ async def test_target_in_store(
 
     ``reruns=0`` (the default) skips step 6b entirely — output is
     byte-identical to the pre-integration workflow.
+
+    ``engine`` is the transient ``--engine`` override pair (decision
+    ``2026-07-03-engine-selection-policy.md`` D3); ``None`` falls back to
+    the store's pin, and ``run/execute`` always receives an explicit pair
+    (no ``execute(engine=None)`` caller remains). The target expression is
+    normalized to anchor-relative canonical form first, so the same ask
+    from any cwd shares one baseline series.
     """
 
     workspace_path = store.path.parent
-    target = resolve_test_target(target_expression, workspace_path)
+    engine_pair = await resolve_execution_engine(store, engine)
+    normalized_expression = normalize_target_expression(
+        target_expression, workspace_path
+    )
+    target = resolve_test_target(normalized_expression, workspace_path)
     run_id = generate_ulid()
     artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
 
@@ -183,6 +199,7 @@ async def test_target_in_store(
         run_id=run_id,
         timeout=timeout,
         collect_coverage=True,
+        engine=engine_pair,
     )
 
     # Step 3 — persist. ``store_run_evidence`` mutates artifact paths to
@@ -331,31 +348,30 @@ def build_test_outcome_from_run_id(
         coverage_outcome if isinstance(coverage_outcome, CoverageFactSet) else None
     )
 
-    # Regression: compose baseline resolution (cache-only is fine — same
-    # logic ``status._latest_regression_available`` uses).
-    from novetest.memory import find_runs_for_target as _find_runs_for_target
+    # Regression: baseline selection goes through Regression's shared
+    # ``resolve_baseline_for_run`` selector — the ONE place the D5
+    # engine-scope filter lives (decision 2026-07-03-engine-selection-policy
+    # D5; ``inspect`` and ``status`` route through the same selector, so all
+    # three compositions agree by construction). The final read stays
+    # cache-only (``get_regression_facts``, never ``compare_runs``) because
+    # this path re-derives nothing.
+    from novetest.regression import (
+        REASON_NO_COMPARABLE_BASELINE as _REASON_NO_COMPARABLE_BASELINE,
+    )
     from novetest.regression import get_regression_facts as _get_regression_facts
+    from novetest.regression import resolve_baseline_for_run as _resolve_baseline
 
-    siblings = _find_runs_for_target(
-        store, target_entry.run_record.target_expression, include_tombstoned=False
-    )
-    priors = sorted(
-        (s for s in siblings if s.run_record.run_reference.created_at < ref.created_at),
-        key=lambda e: e.run_record.run_reference.created_at,
-        reverse=True,
-    )
     regression_outcome: RegressionFactSet | RegressionUnavailable
-    if not priors:
+    baseline_ref = _resolve_baseline(store, target_entry)
+    if baseline_ref is None:
         regression_outcome = RegressionUnavailable(
-            reason="no-comparable-baseline",
+            reason=_REASON_NO_COMPARABLE_BASELINE,
             detail=target_entry.run_record.target_expression,
             baseline_run_reference=None,
             target_run_reference=ref,
         )
     else:
-        regression_outcome = _get_regression_facts(
-            store, priors[0].run_record.run_reference, ref
-        )
+        regression_outcome = _get_regression_facts(store, baseline_ref, ref)
     regression_facts: RegressionFactSet | None = (
         regression_outcome
         if isinstance(regression_outcome, RegressionFactSet)

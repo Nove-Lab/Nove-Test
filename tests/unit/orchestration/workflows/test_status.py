@@ -64,6 +64,20 @@ from novetest.replay import (
 # ---------------------------------------------------------------------------
 
 
+class _StoreStub:
+    """Minimal ProjectStore double.
+
+    ``build_status_view`` touches only ``pinned_engine`` on the handle
+    (everything else goes through the monkeypatched Memory/engine seams),
+    so the double models exactly that one field. ``pinned_engine=None``
+    matches the legacy pin-less shape; the pin-passthrough test overrides
+    it with a real ``PinnedEngine``.
+    """
+
+    def __init__(self, pinned_engine: Any = None) -> None:
+        self.pinned_engine = pinned_engine
+
+
 def _make_entry(
     run_id: str,
     *,
@@ -322,7 +336,7 @@ def test_empty_store_returns_zero_history_and_all_unavailable(
     """A freshly-initialized store has no runs → no engine probes fire."""
 
     call_log = _patch_seams(monkeypatch, history=[])
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
 
     assert isinstance(view, StatusView)
     assert view.latest_entry is None
@@ -363,7 +377,7 @@ def test_single_run_with_no_derived_facts_reports_all_unavailable(
     entry = _make_entry("01RUN0000000000000000A", created_at=100)
     call_log = _patch_seams(monkeypatch, history=[entry])
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
 
     assert view.latest_entry is entry
     assert view.run_history_size == 1
@@ -401,7 +415,7 @@ def test_coverage_per_test_facts_persisted_marks_coverage_available(
         coverage_result=coverage_fact_set,
     )
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.coverage_available is True
     assert view.localization_available is False
     assert view.regression_available is False
@@ -441,7 +455,7 @@ def test_defect6_aggregate_granularity_coverage_facts_marks_coverage_available(
     )
     _patch_seams(monkeypatch, history=[entry], coverage_result=aggregate_facts)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.coverage_available is True
     assert view.to_dict()["sub_reports"] == {
         "coverage": "available",
@@ -465,7 +479,7 @@ def test_localization_findings_persisted_marks_localization_available(
     finding = _make_localization_finding(entry.run_record.run_reference)
     _patch_seams(monkeypatch, history=[entry], localization_result=finding)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.localization_available is True
     assert view.coverage_available is False
     assert view.regression_available is False
@@ -540,7 +554,7 @@ def test_localization_failure_proximity_findings_mark_localization_available(
     )
     _patch_seams(monkeypatch, history=[entry], localization_result=finding)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.localization_available is True
 
 
@@ -569,7 +583,7 @@ def test_regression_pair_cached_marks_regression_available(
         regression_result=fact_set,
     )
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.regression_available is True
     assert view.coverage_available is False
     assert view.localization_available is False
@@ -605,7 +619,7 @@ def test_regression_flag_consults_shared_selector_with_latest_entry(
         baseline_ref=prior.run_record.run_reference,
     )
 
-    build_status_view(object())  # type: ignore[arg-type]
+    build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert call_log["baseline_selector_calls"] == [latest]
     # The cache probe used the selector's answer as the baseline side.
     assert len(call_log["regression_calls"]) == 1
@@ -640,7 +654,7 @@ def test_regression_pair_not_cached_keeps_regression_unavailable(
         # No regression_result → fake_get_regression returns Unavailable.
     )
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.regression_available is False
     # The cache-read call still fires (with the correct pair args) — we
     # just don't derive on miss.
@@ -661,7 +675,7 @@ def test_regression_single_run_returns_unavailable_without_lookup(
     only = _make_entry("01ONLY000000000000000A", created_at=1_000)
     call_log = _patch_seams(monkeypatch, history=[only], baseline_ref=None)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.regression_available is False
     # No comparable baseline → short-circuit before the cache read.
     assert call_log["regression_calls"] == []
@@ -694,7 +708,7 @@ def test_regression_only_tombstoned_priors_returns_unavailable(
     history = [latest, tombstoned_prior]
     call_log = _patch_seams(monkeypatch, history=history, baseline_ref=None)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.regression_available is False
     # Selector answered None → no cache lookup attempted.
     assert call_log["regression_calls"] == []
@@ -749,7 +763,7 @@ def test_replay_no_cached_result_keeps_replay_unavailable(
         regression_result=regression_fact_set,
     )
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.coverage_available is True
     assert view.localization_available is True
     assert view.regression_available is True
@@ -780,7 +794,7 @@ def test_replay_result_persisted_marks_replay_available(
     result = _make_replay_result(entry.run_record.run_reference)
     _patch_seams(monkeypatch, history=[entry], replay_result=result)
 
-    view = build_status_view(object())  # type: ignore[arg-type]
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
     assert view.replay_available is True
     assert view.coverage_available is False
 
@@ -803,10 +817,11 @@ def test_to_dict_shape_pins_all_keys_present(monkeypatch: pytest.MonkeyPatch) ->
     entry = _make_entry("01SHAPECHECK0000000000A", created_at=1_500)
     _patch_seams(monkeypatch, history=[entry])
 
-    payload = build_status_view(object()).to_dict()  # type: ignore[arg-type]
+    payload = build_status_view(_StoreStub()).to_dict()  # type: ignore[arg-type]
     assert set(payload.keys()) == {
         "latest_run_reference",
         "run_history_size",
+        "pinned_engine",
         "sub_reports",
     }
     sub_reports = payload["sub_reports"]
@@ -817,3 +832,36 @@ def test_to_dict_shape_pins_all_keys_present(monkeypatch: pytest.MonkeyPatch) ->
         "localization",
         "replay",
     }
+
+
+# ---------------------------------------------------------------------------
+# pinned_engine passthrough (anchored-pin decision 2026-07-03, additive field)
+# ---------------------------------------------------------------------------
+
+
+def test_pinned_engine_surfaces_on_status_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The store handle's pin lands verbatim on ``data.pinned_engine``."""
+
+    from novetest.memory.project_store import PinnedEngine
+
+    entry = _make_entry("01PINCHECK000000000000A", created_at=1_500)
+    _patch_seams(monkeypatch, history=[entry])
+
+    store = _StoreStub(PinnedEngine(ecosystem="python", engine_name="pytest"))
+    payload = build_status_view(store).to_dict()  # type: ignore[arg-type]
+    assert payload["pinned_engine"] == {
+        "ecosystem": "python",
+        "engine_name": "pytest",
+    }
+
+
+def test_pinless_store_surfaces_null_pinned_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy pin-less handle surfaces ``pinned_engine: null`` (empty store too)."""
+
+    _patch_seams(monkeypatch, history=[])
+    payload = build_status_view(_StoreStub()).to_dict()  # type: ignore[arg-type]
+    assert payload["pinned_engine"] is None

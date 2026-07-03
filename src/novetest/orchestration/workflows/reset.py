@@ -6,6 +6,21 @@ existing ``init`` composition, exactly as
 §"Atomicity guarantee" prescribes: locate → refuse-if-absent → wipe →
 re-create skeleton → re-probe engine readiness.
 
+Anchored-pin integration (decision ``2026-07-03-engine-selection-policy.md``):
+
+- The re-init happens at the wiped store's **anchor** (``store.path.parent``),
+  not at the invocation cwd — resetting from a subdirectory must rebuild the
+  same workspace it wiped, never relocate the store (D2).
+- The previous store's engine pin is **carried over** to the re-created
+  store: the user consented to that engine at ``init`` time and ``reset``
+  wipes *evidence*, not intent. Without the carry-over, resetting a
+  dual-marker workspace would wipe the store and then fail ambiguous —
+  destroying state the user could not recover with a plain ``init``.
+- A legacy pin-less store makes the D1 engine choice **before** the wipe:
+  a single choice proceeds (wipe → re-init pinned to it); an ambiguous or
+  markerless anchor **refuses without wiping** and passes the failure
+  outcome to the CLI — reset never destroys state it cannot rebuild.
+
 The wipe primitive is public **at module path only** —
 ``novetest.memory.project_store`` (Memory deliberately did not re-export it
 through ``novetest.memory.__init__``). It is imported **lazily inside the
@@ -22,8 +37,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from novetest.orchestration.anchor_resolution import (
+    AmbiguousEngines,
+    choose_workspace_engine,
+)
+from novetest.orchestration.workflows.discovery import discover_candidates_below
 from novetest.orchestration.workflows.init import (
+    InitEngineAmbiguous,
     InitializationResult,
+    InitNoEngineDetected,
     initialize_project_workspace,
 )
 
@@ -45,7 +67,9 @@ class ResetResult:
     init_result: InitializationResult
 
 
-async def reset_project_workspace(workspace_path: Path) -> ResetResult:
+async def reset_project_workspace(
+    workspace_path: Path,
+) -> ResetResult | InitNoEngineDetected | InitEngineAmbiguous:
     """Wipe the active Project Store, then re-create it via ``init``.
 
     Raises (before any destructive action) when the workspace has no
@@ -56,6 +80,15 @@ async def reset_project_workspace(workspace_path: Path) -> ResetResult:
     store it cannot read. Any filesystem failure during the wipe surfaces
     as ``OSError`` (→ CLI ``store-wipe-failed`` / exit 5); the primitive's
     atomic-rename guard means the original store is still recoverable.
+
+    The engine to re-pin is resolved BEFORE any destructive action: the
+    previous pin when present, else the D1 choice for a legacy pin-less
+    store. When that choice fails (ambiguous / markerless anchor), the
+    matching ``InitEngineAmbiguous`` / ``InitNoEngineDetected`` outcome is
+    returned **without wiping** — the store is left untouched and the CLI
+    names the follow-up (``novetest init --engine <name>``, then retry).
+    With the pair fixed up-front, the post-wipe re-init goes through the
+    init workflow's explicit-``engine`` path and cannot fail.
     """
 
     from novetest.memory import locate_project_store
@@ -70,6 +103,28 @@ async def reset_project_workspace(workspace_path: Path) -> ResetResult:
             "No Project Store found in this directory or any ancestor; "
             "nothing to reset. Run `novetest init` to create one."
         )
+    anchor = store.path.parent
+    previous_pin = store.pinned_engine
+    if previous_pin is not None:
+        engine_pair = (previous_pin.ecosystem, previous_pin.engine_name)
+    else:
+        # Legacy pin-less store: make the D1 choice BEFORE the wipe so an
+        # ambiguous or markerless anchor refuses while everything is intact.
+        choice = await choose_workspace_engine(anchor)
+        if choice is None:
+            discovered = discover_candidates_below(anchor)
+            return InitNoEngineDetected(
+                candidates=discovered if discovered is not None else (),
+                scan_refused=discovered is None,
+            )
+        if isinstance(choice, AmbiguousEngines):
+            return InitEngineAmbiguous(candidates=choice.candidates)
+        engine_pair = (choice.ecosystem, choice.engine_name)
+
     wipe_report = wipe_project_store(store.path)
-    init_result = await initialize_project_workspace(workspace_path)
-    return ResetResult(wipe_report=wipe_report, init_result=init_result)
+    init_outcome = await initialize_project_workspace(anchor, engine=engine_pair)
+    if not isinstance(init_outcome, InitializationResult):
+        # Structurally unreachable (explicit-engine init always succeeds);
+        # kept for type soundness rather than an unchecked cast.
+        return init_outcome
+    return ResetResult(wipe_report=wipe_report, init_result=init_outcome)

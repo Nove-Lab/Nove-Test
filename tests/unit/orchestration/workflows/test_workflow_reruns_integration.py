@@ -31,7 +31,7 @@ from novetest.localization import LocalizationUnavailable
 from novetest.localization.results import (
     REASON_NO_COVERAGE as LOC_REASON_NO_COVERAGE,
 )
-from novetest.memory.project_store import ProjectStore
+from novetest.memory.project_store import PinnedEngine, ProjectStore
 from novetest.models import MemoryEntry, ReplayResult, RunRecord
 from novetest.models.run_reference import RunReference
 from novetest.models.test_result import TestResult
@@ -171,8 +171,14 @@ def _patch_seams(
 
 
 def _store(tmp_path: Path) -> ProjectStore:
+    # Anchored-pin model (2026-07-03): execution workflows read the handle's
+    # engine pin; a pin-less handle raises EngineNotReadyError before the
+    # execute seam is reached, so the synthetic handle carries one.
     return ProjectStore(
-        path=tmp_path / ".novetest", initialized_at=1, store_state="ready"
+        path=tmp_path / ".novetest",
+        initialized_at=1,
+        store_state="ready",
+        pinned_engine=PinnedEngine(ecosystem="python", engine_name="pytest"),
     )
 
 

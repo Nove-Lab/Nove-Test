@@ -36,6 +36,10 @@ from novetest.coverage import CoverageUnavailable, derive_coverage_facts
 from novetest.memory import ProjectStore, retrieve_run_evidence, store_run_evidence
 from novetest.models import MemoryEntry
 from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.orchestration.anchor_resolution import (
+    normalize_target_expression,
+    resolve_execution_engine,
+)
 from novetest.run import AdapterWarning, execute, resolve_test_target
 from novetest.utils.ulid import generate_ulid
 
@@ -71,12 +75,23 @@ async def run_target_in_store(
     *,
     timeout: float | None = 600.0,
     collect_coverage: bool = False,
+    engine: tuple[str, str] | None = None,
 ) -> RunOutcome:
     """Resolve target → execute → persist (→ optionally derive coverage facts).
 
-    The workspace path is the parent of ``store.path`` (i.e. the directory
-    that contains ``.novetest/``). ``target_expression`` is the user-facing
-    string from the CLI; resolution into file/directory/nodeid happens here.
+    The workspace path is the parent of ``store.path`` — the anchor directory
+    that contains ``.novetest/`` (decision
+    ``2026-07-03-engine-selection-policy.md`` D2/D3: the anchor, never the
+    invocation cwd, scopes execution). ``target_expression`` is the
+    user-facing string from the CLI, normalized to anchor-relative canonical
+    form before resolution so the same ask from any cwd lands in one
+    baseline series.
+
+    ``engine`` is the transient ``--engine`` override pair; ``None`` falls
+    back to the store's pin. Either way ``run/execute`` receives an explicit
+    pair — the legacy auto-detect path (``execute(engine=None)``) has no
+    caller here anymore. A pin-less store with no override raises
+    ``EngineNotReadyError`` (engine-missing) before any subprocess spawns.
 
     When ``collect_coverage=True``, the adapter is invoked with coverage
     instrumentation and the workflow follows up with
@@ -89,7 +104,11 @@ async def run_target_in_store(
     """
 
     workspace_path = store.path.parent
-    target = resolve_test_target(target_expression, workspace_path)
+    engine_pair = await resolve_execution_engine(store, engine)
+    normalized_expression = normalize_target_expression(
+        target_expression, workspace_path
+    )
+    target = resolve_test_target(normalized_expression, workspace_path)
     run_id = generate_ulid()
     artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
 
@@ -99,6 +118,7 @@ async def run_target_in_store(
         run_id=run_id,
         timeout=timeout,
         collect_coverage=collect_coverage,
+        engine=engine_pair,
     )
 
     relative_paths = {
