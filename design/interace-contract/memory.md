@@ -27,6 +27,18 @@
 | `locate_project_store(workspace_context)` | Internal | Workspace context (resolved from current working directory) | Active Project Store handle for the workspace, or unavailable state when no `.novetest/` has been initialized. All other Memory interfaces below resolve their durable state through this handle. (REQ-MEM-007) |
 | `get_project_store_state()` | Internal | (none; uses active Project Store) | Project Store metadata (storePath, initializedAt, storeState, schema/version markers) suitable for status, inspection, and self-update flows. |
 
+### 1.1 Engine pin & anchor discovery (anchored-pin decision, 2026-07-03)
+
+Pinned by `agent-comms/decisions/2026-07-03-engine-selection-policy.md` (D1, D2, D6). Store-level primitives only — the `init` workflow, `--engine` flags, and the D6 migration *flow* live in Orchestration; detection lives in Run.
+
+| Interface | Type | Input | Output |
+| --- | --- | --- | --- |
+| `find_nearest_store(start_path)` | Internal | Any path inside (or at) a candidate workspace; a file path walks from its parent | Nearest ancestor directory — including `start_path` itself — containing an initialized `.novetest/` (i.e. the **anchor/workspace directory**; the store is at `<returned>/.novetest/`), or unavailable (`None`) when the upward walk exhausts at the filesystem root. Implements D2: upward walk only, nearest wins, no downward traversal, no multi-store semantics (resolves Open Q #17). Matches on `store.json` presence without parsing: a metadata-less `.novetest/` (partial-init shape) is walked past; a corrupt one IS found and errors loudly at load. |
+| `get_pinned_engine(project_store)` | Internal | Project Store handle | `PinnedEngine(ecosystem, engine_name)` for a pinned store, or `None` for a legacy (pre-pin) store. Disk-authoritative (re-reads `store.json`); loading **never rewrites** — D6 backfill happens only via `set_pinned_engine`. Malformed pin ⇒ `ProjectStoreCorruptError` (never silent `None`); well-formed pin outside the supported matrix loads tolerantly (forward compatibility). |
+| `set_pinned_engine(project_store, ecosystem, engine_name)` | Internal | Project Store handle + engine pair | Persists (or overwrites — re-pin in place per D1, run history untouched) the `pinned_engine` object in `store.json`. Pair validated against the six supported pairs (REQ-RUN-006, Run's canonical list); unsupported pairs raise `ValueError` before any disk mutation. Same write-safety guarantees as all existing `store.json` writes. |
+
+**Schema-version note:** `pinned_engine` is an additive optional field with a tolerant reader; the key is omitted (not `null`) when unset, so pre-pin `store.json` files stay byte-identical. `schema_version` remains **1** — no bump.
+
 ---
 
 ## 2. Memory Interfaces
