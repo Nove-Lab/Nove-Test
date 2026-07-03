@@ -21,7 +21,7 @@ from novetest.run.adapters.pytest_adapter import run_pytest
 from novetest.run.engine_selector import select_native_engine
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.normalizer import normalize_native_result
-from novetest.run.readiness import assess_engine_readiness
+from novetest.run.readiness import assess_engine_readiness, probe_engine
 from novetest.run.reference import assign_run_reference
 from novetest.run.types import (
     AdapterWarning,
@@ -35,18 +35,31 @@ async def execute(
     test_target: TestTarget,
     *,
     artifact_dir: Path,
+    engine: tuple[str, str] | None = None,
     run_id: str | None = None,
     timeout: float | None = 600.0,
     collect_coverage: bool = False,
 ) -> tuple[RunRecord, tuple[AdapterWarning, ...]]:
     """Execute ``test_target`` and return ``(RunRecord, adapter_warnings)``.
 
+    ``engine`` is the externally resolved ``(ecosystem, engine_name)``
+    pair — the store pin, or a transient ``--engine`` override (decision
+    `2026-07-03-engine-selection-policy.md` D3). When provided, readiness
+    is probed for exactly that engine (`probe_engine`) and dispatch goes
+    straight to it: NO marker detection runs on the hot path. When
+    ``None``, the legacy auto-detect sequence runs unchanged
+    (`assess_engine_readiness` scan → `select_native_engine`).
+    TODO(run-team): drop the ``engine=None`` auto-detect branch once
+    `orchestration-team-2026-07-03-anchored-init-and-verb-resolution`
+    wires pins through the last caller.
+
     Sequence (mirroring `design/workflows/run.md` §1):
-    1. `assess_engine_readiness` — short-circuit with EngineNotReadyError on
-       any non-``ready`` state so callers can surface exit code 4 without
-       spawning a subprocess.
-    2. `select_native_engine` — pick the engine for the resolved target.
-    3. Invoke the adapter (`run_pytest`).
+    1. Readiness gate — `probe_engine` (pinned) or
+       `assess_engine_readiness` (auto-detect); short-circuit with
+       EngineNotReadyError on any non-``ready`` state so callers can
+       surface exit code 4 without spawning a subprocess.
+    2. Engine resolution — the supplied pin, or `select_native_engine`.
+    3. Invoke the adapter.
     4. `normalize_native_result` — build the Run Record.
     5. `assign_run_reference` — stamp a fresh ULID-derived reference.
 
@@ -65,10 +78,20 @@ async def execute(
     ``build_test_envelope``.
     """
 
-    readiness = await assess_engine_readiness(test_target.workspace_path)
-    if readiness.state != "ready":
-        raise EngineNotReadyError(readiness)
-    engine_context = select_native_engine(test_target)
+    if engine is not None:
+        ecosystem, engine_name = engine
+        readiness = await probe_engine(
+            test_target.workspace_path, ecosystem, engine_name
+        )
+        if readiness.state != "ready":
+            raise EngineNotReadyError(readiness)
+        assert readiness.engine_context is not None  # always set on "ready"
+        engine_context = readiness.engine_context
+    else:
+        readiness = await assess_engine_readiness(test_target.workspace_path)
+        if readiness.state != "ready":
+            raise EngineNotReadyError(readiness)
+        engine_context = select_native_engine(test_target)
     return await execute_with_engine_context(
         test_target,
         engine_context,
