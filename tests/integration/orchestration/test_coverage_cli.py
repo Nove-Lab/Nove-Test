@@ -17,6 +17,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from novetest.coverage.persistence import write_coverage_facts
+from novetest.memory.project_store import get_project_store_state
+from novetest.memory.store import store_run_evidence
+from novetest.models.coverage_fact_set import (
+    CoverageFactSet,
+    CoverageSummary,
+    FileCoverage,
+)
+from novetest.models.run_record import RunRecord
+from novetest.models.run_reference import RunReference
+
 
 def _run_with_coverage(coverage_workspace: Path, run_cli_in) -> str:
     """Execute `novetest run --coverage tests/` and return the new run_id."""
@@ -179,3 +190,104 @@ def test_coverage_diff_returns_not_found_for_fake_run_id(
     assert envelope["ok"] is False
     assert envelope["command"] == "coverage.diff"
     assert envelope["errors"][0]["code"] == "not-found"
+
+
+def _seed_cargo_fact_set(coverage_workspace: Path) -> str:
+    """Seed a cargo-test RunRecord + persisted CoverageFactSet in-process.
+
+    The D5 engine-mismatch CLI case needs a second engine's facts in the
+    same store. Running a real cargo toolchain here would make the test
+    host-dependent; seeding through the same persistence surface the
+    derive path uses (`store_run_evidence` + `write_coverage_facts`) is
+    deterministic and exercises the identical read path
+    (`compare_coverage_facts` → `get_coverage_facts`) in the subprocess.
+    """
+    store = get_project_store_state(coverage_workspace / ".novetest")
+    ref = RunReference(
+        run_id="01HCARGO00000000000000FACT", created_at=1_700_000_000_000
+    )
+    summary = CoverageSummary(
+        num_statements=3,
+        covered_statements=2,
+        missing_statements=1,
+        excluded_statements=0,
+        num_branches=0,
+        covered_branches=0,
+        missing_branches=0,
+        percent_covered=66.67,
+    )
+    fact_set = CoverageFactSet(
+        run_reference=ref,
+        engine_name="cargo-test",
+        ecosystem="rust",
+        mapping_granularity="aggregate",
+        summary=summary,
+        files=(
+            FileCoverage(
+                file_path="src/lib.rs",
+                executed_lines=(1, 2),
+                missing_lines=(3,),
+                excluded_lines=(),
+                executed_branches=(),
+                missing_branches=(),
+                summary=summary,
+            ),
+        ),
+        derived_at=1_700_000_001_000,
+    )
+    store_run_evidence(
+        store,
+        RunRecord(
+            run_reference=ref,
+            target_expression="tests/",
+            target_type="dir",
+            engine_name="cargo-test",
+            ecosystem="rust",
+            status="passed",
+            started_at=ref.created_at,
+            artifact_paths={},
+        ),
+    )
+    write_coverage_facts(store, fact_set)
+    return ref.run_id
+
+
+def test_coverage_diff_refuses_cross_engine_pair(
+    coverage_workspace: Path, run_cli_in
+) -> None:
+    """`novetest coverage diff <pytest_run> <cargo_run>` → the D5 guard.
+
+    Task 2026-07-03 coverage-compare-engine-guard acceptance criterion:
+    the CLI surfaces `coverage_delta.kind == "unavailable"` with the new
+    `engine-mismatch` reason — NO `CoverageDelta` is emitted for a
+    cross-engine pair. The reason renders through the existing generic
+    unavailable projection (`_coverage_delta_payload`) with zero CLI
+    changes; this test pins that end-to-end.
+    """
+    run_cli_in(coverage_workspace, ["init"])
+    pytest_run_id = _run_with_coverage(coverage_workspace, run_cli_in)
+    cargo_run_id = _seed_cargo_fact_set(coverage_workspace)
+
+    result = run_cli_in(
+        coverage_workspace, ["coverage", "diff", pytest_run_id, cargo_run_id]
+    )
+    # Unavailable is NOT a CLI error (2026-05-16 decision constraint #3):
+    # exit 0, ok: true — the verb succeeded; the refusal is the result.
+    assert result.returncode == 0, result.stderr
+    envelope = result.envelope()
+    assert envelope["command"] == "coverage.diff"
+    assert envelope["ok"] is True
+
+    delta = envelope["data"]["coverage_delta"]
+    assert isinstance(delta, dict)
+    assert delta["kind"] == "unavailable"
+    assert delta["reason"] == "engine-mismatch"
+    # Detail carries both engine names.
+    assert "pytest" in delta["detail"]
+    assert "cargo-test" in delta["detail"]
+    # Pair-level reason names the baseline side (2026-07-03 amendment to
+    # the 2026-05-16 envelope decision).
+    assert delta["run_reference"]["run_id"] == pytest_run_id
+    # No delta fields leak into the unavailable kind (constraint #1).
+    assert "file_deltas" not in delta
+    assert "files_added" not in delta

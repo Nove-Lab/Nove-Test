@@ -12,6 +12,7 @@ from novetest.coverage.compare import (
 )
 from novetest.coverage.persistence import write_coverage_facts
 from novetest.coverage.results import (
+    REASON_ENGINE_MISMATCH,
     REASON_MISSING_DERIVED_FACTS,
     REASON_RUN_NOT_FOUND,
     CoverageUnavailable,
@@ -71,11 +72,13 @@ def _make_fact_set(
     files: tuple[FileCoverage, ...],
     summary: CoverageSummary | None = None,
     granularity: str = "per-test",
+    engine_name: str = "pytest",
+    ecosystem: str = "python",
 ) -> CoverageFactSet:
     return CoverageFactSet(
         run_reference=RunReference(run_id=run_id, created_at=1_700_000_000_000),
-        engine_name="pytest",
-        ecosystem="python",
+        engine_name=engine_name,
+        ecosystem=ecosystem,
         mapping_granularity=granularity,
         summary=summary or _make_summary(),
         files=files,
@@ -289,6 +292,144 @@ def test_compare_target_unavailable_propagates(
     )
     assert isinstance(result, CoverageUnavailable)
     assert result.reason == REASON_MISSING_DERIVED_FACTS
+
+
+def test_compare_refuses_cross_engine_pair(
+    initialized_store: Path,
+    seed_fact_set: Callable[..., None],
+) -> None:
+    """Mixed-engine pair → ``CoverageUnavailable(REASON_ENGINE_MISMATCH)``.
+
+    D5 guard (decision 2026-07-03-engine-selection-policy §D5, Finding A
+    of the D5 cross-run audit): a pytest fact set diffed against a
+    cargo-test fact set must be refused, not silently reduced to file-set
+    noise. Mirrors Regression's ``compare_runs`` guard: same wire string
+    ("engine-mismatch"), same detail shape carrying BOTH engine names.
+    """
+    baseline = _make_fact_set(
+        "01HBASE",
+        files=(_make_file("src/x.py"),),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    target = _make_fact_set(
+        "01HTRGT",
+        files=(_make_file("src/lib.rs"),),
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_fact_set(initialized_store, baseline)
+    seed_fact_set(initialized_store, target)
+    store = get_project_store_state(initialized_store)
+
+    result = compare_coverage_facts(
+        store, baseline.run_reference, target.run_reference
+    )
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_ENGINE_MISMATCH
+    # Detail carries both names so consumers don't need a second lookup.
+    assert result.detail is not None
+    assert "pytest" in result.detail
+    assert "cargo-test" in result.detail
+    # Pair-level reason names the baseline side (2026-05-16 envelope
+    # decision binding constraint #4 tie-break, extended by the 2026-07-03
+    # amendment).
+    assert result.run_reference == baseline.run_reference
+
+
+def test_compare_engine_mismatch_reason_is_symmetric(
+    initialized_store: Path,
+    seed_fact_set: Callable[..., None],
+) -> None:
+    """Swapping the sides still refuses the pair; the named run_reference
+    follows the (new) baseline side, and the detail order follows the
+    argument order."""
+    pytest_side = _make_fact_set(
+        "01HPYT",
+        files=(_make_file("src/x.py"),),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    cargo_side = _make_fact_set(
+        "01HCRG",
+        files=(_make_file("src/lib.rs"),),
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_fact_set(initialized_store, pytest_side)
+    seed_fact_set(initialized_store, cargo_side)
+    store = get_project_store_state(initialized_store)
+
+    result = compare_coverage_facts(
+        store, cargo_side.run_reference, pytest_side.run_reference
+    )
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_ENGINE_MISMATCH
+    assert result.detail is not None
+    assert result.detail.index("cargo-test") < result.detail.index("pytest")
+    assert result.run_reference == cargo_side.run_reference
+
+
+def test_compare_same_engine_non_pytest_pair_still_produces_delta(
+    initialized_store: Path,
+    seed_fact_set: Callable[..., None],
+) -> None:
+    """The guard keys on INEQUALITY, not on any privileged engine name —
+    a cargo-test vs cargo-test pair passes through to the normal delta
+    path unchanged.
+
+    Note on the Regression-side embed (task item 4): this new reason is
+    unreachable through ``regression/compare.py::_maybe_coverage_change``
+    — ``compare_runs`` refuses cross-engine pairs with its OWN
+    ``REASON_ENGINE_MISMATCH`` guard (regression/compare.py:178-183)
+    BEFORE the coverage embed runs, and even if it were reachable the
+    embed folds ANY ``CoverageUnavailable`` into ``coverage_change =
+    None``. No Regression-side behavior change in this slice.
+    """
+    baseline = _make_fact_set(
+        "01HBASE",
+        files=(_make_file("src/lib.rs", executed=(1, 2), missing=(3,)),),
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    target = _make_fact_set(
+        "01HTRGT",
+        files=(_make_file("src/lib.rs", executed=(1, 2, 3), missing=()),),
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_fact_set(initialized_store, baseline)
+    seed_fact_set(initialized_store, target)
+    store = get_project_store_state(initialized_store)
+
+    result = compare_coverage_facts(
+        store, baseline.run_reference, target.run_reference
+    )
+    assert isinstance(result, CoverageDelta)
+    assert result.file_deltas[0].newly_covered_lines == (3,)
+
+
+def test_compare_engine_guard_fires_after_availability_checks(
+    initialized_store: Path,
+    seed_fact_set: Callable[..., None],
+) -> None:
+    """Ordering pin: a missing side still surfaces its OWN unavailability
+    reason (run-not-found / missing-derived-facts), NOT engine-mismatch —
+    the guard only fires once both fact sets resolved. Keeps the
+    2026-05-16 decision's constraint #4 semantics intact for the
+    single-side-missing case."""
+    baseline = _make_fact_set(
+        "01HBASE",
+        files=(_make_file("src/x.py"),),
+        engine_name="pytest",
+    )
+    seed_fact_set(initialized_store, baseline)
+    store = get_project_store_state(initialized_store)
+    missing_ref = RunReference(run_id="01HMISS", created_at=1_700_000_000_000)
+
+    result = compare_coverage_facts(store, baseline.run_reference, missing_ref)
+    assert isinstance(result, CoverageUnavailable)
+    assert result.reason == REASON_RUN_NOT_FOUND
 
 
 def test_compare_carries_summary_before_and_after(

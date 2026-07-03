@@ -29,6 +29,12 @@ REASON_MISSING_NATIVE_PAYLOAD: Final[str] = "missing-native-payload"
 REASON_MISSING_DERIVED_FACTS: Final[str] = "missing-derived-facts"
 REASON_NATIVE_PAYLOAD_CORRUPT: Final[str] = "native-payload-corrupt"
 REASON_INCOMPARABLE_GRANULARITY: Final[str] = "incomparable-granularity"
+# D5 guard (decision 2026-07-03-engine-selection-policy §D5, Finding A of
+# the D5 cross-run audit): ``compare_coverage_facts`` refuses cross-engine
+# pairs the same way Regression's ``compare_runs`` does. Same wire string
+# as Regression's ``REASON_ENGINE_MISMATCH`` ("engine-mismatch") so agents
+# can match one constant across both engines' unavailable envelopes.
+REASON_ENGINE_MISMATCH: Final[str] = "engine-mismatch"
 
 KNOWN_REASONS: frozenset[str] = frozenset(
     {
@@ -37,6 +43,7 @@ KNOWN_REASONS: frozenset[str] = frozenset(
         REASON_MISSING_DERIVED_FACTS,
         REASON_NATIVE_PAYLOAD_CORRUPT,
         REASON_INCOMPARABLE_GRANULARITY,
+        REASON_ENGINE_MISMATCH,
     }
 )
 

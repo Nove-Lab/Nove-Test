@@ -58,7 +58,7 @@ propagated from `compare_coverage_facts`. Carries the offending
 {
   "kind": "unavailable",
   "run_reference": { "run_id": "<ULID>", "created_at": "<ISO8601-UTC>" },
-  "reason": "missing-derived-facts" | "native-payload-corrupt" | "run-not-found",
+  "reason": "missing-derived-facts" | "native-payload-corrupt" | "run-not-found" | "engine-mismatch",
   "detail": "human-readable explanation"
 }
 ```
@@ -66,6 +66,18 @@ propagated from `compare_coverage_facts`. Carries the offending
 The `reason` enum mirrors `coverage_outcome.kind: "unavailable"` —
 `REASON_*` constants in `src/novetest/coverage/results.py` are the
 source of truth.
+
+> **Amendment 2026-07-03** (PM pre-authorized in
+> `tasks/coverage-team-2026-07-03-coverage-compare-engine-guard.md`;
+> policy source `decisions/2026-07-03-engine-selection-policy.md` D5):
+> additive reason `"engine-mismatch"` — emitted by
+> `compare_coverage_facts` when the two sides' `CoverageFactSet.engine_name`
+> values differ. Same wire string as Regression's `REASON_ENGINE_MISMATCH`
+> so agents match one constant across both engines. For this pair-level
+> reason, `run_reference` names the **baseline** side (extending binding
+> constraint #4's tie-break convention to reasons not attributable to a
+> single side); `detail` carries both engine names
+> (`baseline engine_name='pytest' != target engine_name='cargo-test'`).
 
 ## Binding constraints
 

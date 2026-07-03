@@ -26,7 +26,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Self
 
-from novetest.coverage.results import CoverageUnavailable
+from novetest.coverage.results import (
+    REASON_ENGINE_MISMATCH,
+    CoverageUnavailable,
+)
 from novetest.coverage.retrieval import get_coverage_facts
 from novetest.memory.project_store import ProjectStore
 from novetest.models.coverage_fact_set import (
@@ -189,6 +192,16 @@ def compare_coverage_facts(
     Both sides must have previously-derived facts. If either side is
     missing, return ``CoverageUnavailable`` propagated from
     ``get_coverage_facts``.
+
+    Cross-engine pairs are refused (``REASON_ENGINE_MISMATCH``) — D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md``: cross-run analyses
+    never cross an engine boundary. A pytest fact set diffed against a
+    cargo-test fact set would produce a "delta" that is pure file-set noise
+    (disjoint path universes) or, worse, silently-wrong line arithmetic on
+    coincidentally-shared paths. The guard lives here on the engine side —
+    not at the CLI call sites — so every present and future consumer
+    (``coverage diff``, ``compare``, Regression's coverage embed, any
+    Orchestration composition) is protected by construction.
     """
     baseline = get_coverage_facts(store, baseline_run_reference)
     if isinstance(baseline, CoverageUnavailable):
@@ -196,6 +209,23 @@ def compare_coverage_facts(
     target = get_coverage_facts(store, target_run_reference)
     if isinstance(target, CoverageUnavailable):
         return target
+
+    if baseline.engine_name != target.engine_name:
+        # Mirrors regression/compare.py's engine guard (same wire string
+        # "engine-mismatch", same detail shape carrying both names).
+        # ``run_reference`` names the baseline side per the 2026-05-16
+        # envelope decision's tie-break convention (binding constraint #4:
+        # when the unavailability is not attributable to a single side,
+        # the baseline is named); the detail string identifies both sides
+        # so consumers don't need to guess.
+        return CoverageUnavailable(
+            reason=REASON_ENGINE_MISMATCH,
+            detail=(
+                f"baseline engine_name={baseline.engine_name!r} "
+                f"!= target engine_name={target.engine_name!r}"
+            ),
+            run_reference=baseline.run_reference,
+        )
 
     return _build_delta(baseline, target)
 

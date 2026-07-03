@@ -128,14 +128,20 @@ def seed_fact_set(
 
     Used by tests that need to set up two-or-more runs with already-derived
     facts (e.g. ``compare_coverage_facts``) without going through the
-    coverage.py JSON path.
+    coverage.py JSON path. The seeded RunRecord carries the fact set's
+    ``engine_name`` / ``ecosystem`` so mixed-engine scenarios (the D5
+    engine-mismatch guard) stay consistent between Memory and Coverage.
     """
 
     def _seed(store_path: Path, fact_set: CoverageFactSet) -> None:
         store = get_project_store_state(store_path)
         store_run_evidence(
             store,
-            make_run_record(run_reference=fact_set.run_reference),
+            make_run_record(
+                run_reference=fact_set.run_reference,
+                engine_name=fact_set.engine_name,
+                ecosystem=fact_set.ecosystem,
+            ),
         )
         write_coverage_facts(store, fact_set)
 
