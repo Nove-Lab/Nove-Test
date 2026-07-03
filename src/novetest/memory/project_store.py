@@ -4,6 +4,23 @@ Implements the Section 1 interfaces of
 ``design/interace-contract/memory.md`` against the file-only layout pinned in
 ``design/implementation-plan/foundations.md`` §4. No SQLite, no caches — the
 filesystem is the source of truth.
+
+Schema note — engine pin (anchored-pin decision, 2026-07-03). ``store.json``
+may carry an optional ``pinned_engine`` object::
+
+    "pinned_engine": {"ecosystem": "python", "engine_name": "pytest"}
+
+recording which engine the user anchored at ``init`` (decision D1 in
+``agent-comms/decisions/2026-07-03-engine-selection-policy.md``). This is an
+additive optional field with a tolerant reader: legacy (pre-pin) stores load
+with ``pinned_engine=None`` and are NEVER rewritten on load — backfill happens
+only through ``set_pinned_engine`` (Orchestration's D6 migration flow). Because
+every store.json readable before this change remains readable unchanged,
+``SCHEMA_VERSION`` stays at 1 (no bump). A *malformed* pin (wrong JSON shape)
+is corruption, not absence — silently treating it as ``None`` would trigger a
+silent D6 re-detect that overwrites user intent. A well-formed pin naming a
+pair outside the currently supported matrix loads fine (forward tolerance for
+stores pinned by newer novetest versions); pair validation is write-time only.
 """
 
 from __future__ import annotations
@@ -13,7 +30,7 @@ import os
 import shutil
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
@@ -58,11 +75,31 @@ _STAGING_DIR_PREFIX = ".novetest.deleting."
 
 
 @dataclass(slots=True, frozen=True)
+class PinnedEngine:
+    """The (ecosystem, engine) pair anchored in ``store.json`` at init time.
+
+    Persisted as the optional ``pinned_engine`` object (see module docstring).
+    Values are plain strings from the six-pair matrix (REQ-RUN-006) at write
+    time; the reader deliberately does not re-validate pair membership.
+    """
+
+    ecosystem: str
+    engine_name: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"ecosystem": self.ecosystem, "engine_name": self.engine_name}
+
+
+@dataclass(slots=True, frozen=True)
 class ProjectStore:
     """Handle for an initialized ``.novetest/`` Project Store.
 
     ``path`` points at the ``.novetest/`` directory itself, not its workspace
     parent. The remaining fields mirror ``store.json``.
+
+    ``pinned_engine`` reflects the pin *as of load time*; the handle is frozen,
+    so after ``set_pinned_engine`` re-read via ``get_pinned_engine`` (disk is
+    authoritative) rather than trusting a handle obtained earlier.
     """
 
     CURRENT_SCHEMA_VERSION: ClassVar[int] = SCHEMA_VERSION
@@ -71,6 +108,7 @@ class ProjectStore:
     initialized_at: int
     store_state: str
     schema_version: int = SCHEMA_VERSION
+    pinned_engine: PinnedEngine | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +116,9 @@ class ProjectStore:
             "store_path": str(self.path),
             "initialized_at": self.initialized_at,
             "store_state": self.store_state,
+            "pinned_engine": (
+                self.pinned_engine.to_dict() if self.pinned_engine is not None else None
+            ),
         }
 
     @classmethod
@@ -100,6 +141,7 @@ class ProjectStore:
             initialized_at=initialized_at,
             store_state=store_state,
             schema_version=int(schema_version),
+            pinned_engine=_parse_pinned_engine(path, d.get("pinned_engine")),
         )
 
 
@@ -183,18 +225,97 @@ def locate_project_store(
             return _read_metadata(pinned_path)
         return None
 
-    current = start_path.resolve()
-    # `current` may be a file (e.g. a CLI invocation pointed at a script);
-    # walk up from its parent in that case.
+    anchor = find_nearest_store(start_path)
+    if anchor is None:
+        return None
+    return _read_metadata(anchor / STORE_DIRNAME)
+
+
+def find_nearest_store(start: Path) -> Path | None:
+    """Walk upward from ``start``; return the nearest anchor directory, or ``None``.
+
+    Implements decision D2 of
+    ``agent-comms/decisions/2026-07-03-engine-selection-policy.md``: every verb
+    resolves its workspace by walking **upward** (git-style) from cwd to the
+    filesystem root — never downward, nearest wins, no multi-store semantics.
+
+    The returned path is the **workspace/anchor directory that contains**
+    ``.novetest/`` (the store itself is at ``<returned>/.novetest/``), so D6
+    migration callers can run engine detection at the anchor directly. ``start``
+    itself is the first candidate; a ``start`` pointing at a file walks from its
+    parent.
+
+    Match predicate is ``<dir>/.novetest/store.json`` existence — the same
+    predicate ``locate_project_store`` has always used (that function now
+    delegates its walk here, so the two cannot diverge). Consequences,
+    consistent with existing store.json conventions:
+
+    - a ``.novetest/`` *without* ``store.json`` (partial-init crash shape) is
+      not a store and is walked past to the next ancestor;
+    - a ``.novetest/`` with a *corrupt* ``store.json`` IS found — this function
+      never parses; loading the result (``get_project_store_state`` /
+      ``locate_project_store``) raises ``ProjectStoreCorruptError`` there, so a
+      broken store errors loudly instead of being silently shadowed by an
+      ancestor.
+
+    No ``NOVETEST_HOME`` handling here — that short-circuit belongs to
+    ``locate_project_store``.
+    """
+    current = start.resolve()
     if current.is_file():
         current = current.parent
     while True:
-        candidate = current / STORE_DIRNAME / STORE_METADATA_FILENAME
-        if candidate.exists():
-            return _read_metadata(current / STORE_DIRNAME)
+        if (current / STORE_DIRNAME / STORE_METADATA_FILENAME).exists():
+            return current
         if current.parent == current:
             return None
         current = current.parent
+
+
+def get_pinned_engine(store: ProjectStore) -> PinnedEngine | None:
+    """Return the engine pin for ``store``, or ``None`` for a legacy (pre-pin) store.
+
+    Reads ``store.json`` fresh from disk — the frozen handle may predate a
+    ``set_pinned_engine`` call, and disk is authoritative. Reading NEVER
+    rewrites the file (legacy stores stay byte-identical; backfill is the
+    caller's explicit D6 flow via ``set_pinned_engine``). Raises
+    ``ProjectStoreCorruptError`` if ``store.json`` is unreadable or the pin is
+    malformed, consistent with every other metadata read.
+    """
+    return _read_metadata(store.path).pinned_engine
+
+
+def set_pinned_engine(store: ProjectStore, ecosystem: str, engine_name: str) -> None:
+    """Persist (or overwrite) the engine pin in ``store``'s ``store.json``.
+
+    Overwriting an existing pin is legal — decision D1's re-pin-in-place: same
+    store, pin updated, run history untouched. The pair is validated against
+    the six supported pairs (REQ-RUN-006); unsupported pairs raise
+    ``ValueError`` before any disk mutation. The rewrite carries the same
+    write-safety guarantees as every existing ``store.json`` write (single
+    ``write_text``), and re-reads the metadata from disk first so a stale
+    handle cannot clobber fields changed since the handle was loaded.
+    """
+    # Deferred import: the canonical pair list is Run's single source of truth
+    # (consolidated per the 2026-07-03 decision); importing it inside the
+    # function keeps Memory import-light at module load and touches Run only
+    # on this validation-time-only path. No cycle exists (Run never imports
+    # Memory), so this is a layering courtesy, not a workaround.
+    from novetest.run.engine_selector import list_supported_engine_pairs
+
+    pair = (ecosystem, engine_name)
+    supported = list_supported_engine_pairs()
+    if pair not in supported:
+        raise ValueError(
+            f"Unsupported (ecosystem, engine) pair {pair!r}; supported pairs: "
+            + ", ".join(f"({e!r}, {n!r})" for e, n in supported)
+        )
+    current = _read_metadata(store.path)
+    updated = replace(
+        current,
+        pinned_engine=PinnedEngine(ecosystem=ecosystem, engine_name=engine_name),
+    )
+    _write_metadata(store.path / STORE_METADATA_FILENAME, updated)
 
 
 def get_project_store_state(store_path: Path) -> ProjectStore:
@@ -224,12 +345,41 @@ def _read_metadata(store_path: Path) -> ProjectStore:
 
 
 def _write_metadata(metadata_path: Path, store: ProjectStore) -> None:
-    payload = {
+    payload: dict[str, Any] = {
         "schema_version": store.schema_version,
         "initialized_at": store.initialized_at,
         "store_state": store.store_state,
     }
+    # Additive optional field: omitted entirely when unset, so a pre-pin
+    # store.json never grows a key it did not have (see module docstring).
+    if store.pinned_engine is not None:
+        payload["pinned_engine"] = store.pinned_engine.to_dict()
     metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _parse_pinned_engine(store_path: Path, raw: object) -> PinnedEngine | None:
+    """Parse the optional ``pinned_engine`` value from ``store.json``.
+
+    Absent (``None``) is the legacy shape and loads as ``None``. Anything
+    present must be a two-string-key object; malformation is corruption (NOT
+    silently ``None`` — see module docstring). Pair membership in the
+    supported matrix is deliberately not checked here (forward tolerance).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ProjectStoreCorruptError(
+            f"store.json at {store_path} has malformed pinned_engine "
+            f"(expected object, got {type(raw).__name__})"
+        )
+    ecosystem = raw.get("ecosystem")
+    engine_name = raw.get("engine_name")
+    if not isinstance(ecosystem, str) or not isinstance(engine_name, str):
+        raise ProjectStoreCorruptError(
+            f"store.json at {store_path} has malformed pinned_engine "
+            f"(expected string 'ecosystem' and 'engine_name' keys, got {raw!r})"
+        )
+    return PinnedEngine(ecosystem=ecosystem, engine_name=engine_name)
 
 
 def wipe_project_store(store_path: Path) -> WipeReport:
