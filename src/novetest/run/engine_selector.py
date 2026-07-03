@@ -90,8 +90,12 @@ def _marker_evidence(root: Path, markers: tuple[str, ...]) -> tuple[str, ...]:
 
     Literal markers are reported in declaration order under their
     declared name; glob markers are reported as sorted, de-duplicated
-    root-relative paths (identifiable downstream when multiple matches
-    at different depths share a basename).
+    root-relative paths in POSIX form on every platform (identifiable
+    downstream when multiple matches at different depths share a
+    basename). POSIX separators are load-bearing: evidence strings flow
+    into readiness/init envelopes consumed by AI agents, so the same
+    workspace must serialize identically on Windows and POSIX hosts
+    (2026-07-03 fast-follow; ``str(PurePath)`` yields ``\\`` on Windows).
     """
 
     literal_hits: list[str] = []
@@ -99,7 +103,7 @@ def _marker_evidence(root: Path, markers: tuple[str, ...]) -> tuple[str, ...]:
     for marker in markers:
         if "*" in marker:
             for match in root.glob(marker):
-                glob_hits.add(str(match.relative_to(root)))
+                glob_hits.add(match.relative_to(root).as_posix())
         elif (root / marker).exists():
             literal_hits.append(marker)
     return tuple(literal_hits) + tuple(sorted(glob_hits))
