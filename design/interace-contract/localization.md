@@ -34,7 +34,7 @@
 
 ## Notes
 
-- Localization depends on Memory (`retrieve_run_evidence`), Coverage (`get_coverage_facts` / `derive_coverage_facts`), and optionally Regression (`get_regression_facts`).
+- Localization depends on Memory (`retrieve_run_evidence`), Coverage (`get_coverage_facts` / `derive_coverage_facts`), and optionally Regression (`resolve_baseline_for_run` + `get_regression_facts` — the prior pair is selected by Regression's shared engine-scoped selector per D5 of `decisions/2026-07-03-engine-selection-policy.md`; cross-run analyses never cross an engine boundary).
 - Every Localization Finding preserves traceability to the run evidence used to rank it (NFR-LOC-001) via Evidence Citations attached during derivation.
 - Localization may still produce findings without Regression Facts, provided failed Test Results and Coverage Facts are available (REQ-LOC-003 assumption).
 

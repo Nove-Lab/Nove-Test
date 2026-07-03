@@ -37,8 +37,10 @@ implements:
                                           (latest-analyzable → derive).
 - ``try_get_latest_regression_facts``   — best-effort regression-prior
                                           probe; returns ``None`` when no
-                                          comparable baseline pair has
-                                          cached Regression Facts.
+                                          comparable baseline pair
+                                          (same target, same engine per
+                                          D5) has cached Regression
+                                          Facts.
 - ``parse_failure_log`` /
   ``resolve_failure_text`` /
   ``derive_failure_proximity``          — failure_proximity sub-module
