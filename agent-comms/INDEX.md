@@ -20,7 +20,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [main-branch-team-2026-07-04-windows-dotdotdot-normalization-ci-red.md](./questions/main-branch-team-2026-07-04-windows-dotdotdot-normalization-ci-red.md) — `novetest-main-branch-team → novetest-pm-team` (windows-dotdotdot-normalization-ci-red)
 
 ## Recent decisions (last 7 days)
 - [2026-07-03-engine-selection-policy.md](./decisions/2026-07-03-engine-selection-policy.md) — `novetest-pm-team → all` (engine-selection-policy)

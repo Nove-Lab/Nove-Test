@@ -119,3 +119,14 @@ only.
   directory now FAILS (used to create a store). PM doc pass required.
 - CI matrix cite: post-merge `gh workflow run ci.yml --ref main` (session
   gh identity dispatch-restricted).
+
+## ADDENDUM 2026-07-04 — post-merge CI verdict
+
+CI at `7ddfc0f` (run 28671731628): **7/10** — 3 windows jobs red on ONE
+test: `test_anchor_resolution.py::test_normalize_engine_native_pattern_passes_through`
+(`./...` mangled to `...` via the Win32 trailing-dot `.exists()` quirk).
+Triage + kick-back:
+`questions/main-branch-team-2026-07-04-windows-dotdotdot-normalization-ci-red.md`.
+Treat `./...` pass-through scenarios as KNOWN-RED on Windows until the
+fast-follow lands; all other scenarios in this doc are CI-green on 7/7
+POSIX legs + perf.
