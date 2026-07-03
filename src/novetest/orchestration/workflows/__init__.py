@@ -1,7 +1,9 @@
 """Top-level workflow compositions consumed by the CLI."""
 
 from novetest.orchestration.workflows.init import (
+    InitEngineAmbiguous,
     InitializationResult,
+    InitNoEngineDetected,
     initialize_project_workspace,
 )
 from novetest.orchestration.workflows.inspect import (
@@ -22,6 +24,8 @@ from novetest.orchestration.workflows.test import (
 
 
 __all__ = [
+    "InitEngineAmbiguous",
+    "InitNoEngineDetected",
     "InitializationResult",
     "InspectView",
     "ResetResult",

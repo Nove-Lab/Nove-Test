@@ -47,14 +47,19 @@ from novetest.memory import (
     RunEvidenceNotFoundError,
     delete_run_evidence,
     list_run_history,
-    locate_project_store,
     retrieve_run_evidence,
 )
 from novetest.models import ReplayResult, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.orchestration.anchor_resolution import (
+    EngineAmbiguousError,
+    resolve_workspace,
+)
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
 from novetest.orchestration.workflows import (
+    InitEngineAmbiguous,
+    InitNoEngineDetected,
     build_inspect_view,
     build_status_view,
     initialize_project_workspace,
@@ -74,7 +79,13 @@ from novetest.replay import (
     ReplayUnavailable,
     replay_run,
 )
-from novetest.run import AdapterInvocationError, AdapterWarning, EngineNotReadyError
+from novetest.run import (
+    AdapterInvocationError,
+    AdapterWarning,
+    EngineCandidate,
+    EngineNotReadyError,
+    list_supported_engine_pairs,
+)
 
 
 _SUBCOMMAND_TOKENS: frozenset[str] = frozenset(
@@ -146,8 +157,15 @@ def _uninitialized(command: str) -> Envelope:
 
 
 def _require_store(command: str) -> ProjectStore:
+    """Resolve the governing Project Store for a verb (anchored-pin D2 + D6).
+
+    THE single workspace-resolution seam every verb routes through: wraps
+    ``orchestration.anchor_resolution.resolve_workspace`` (upward walk to the
+    nearest ``.novetest/`` + lazy engine-pin migration for legacy stores).
+    The returned handle reflects the post-migration pin state.
+    """
     try:
-        store = locate_project_store(Path.cwd())
+        store = asyncio.run(resolve_workspace(Path.cwd()))
     except ProjectStoreCorruptError as exc:
         _emit_and_exit(
             Envelope(
@@ -157,9 +175,69 @@ def _require_store(command: str) -> ProjectStore:
             ),
             EXIT_STORAGE,
         )
+    except EngineAmbiguousError as exc:
+        # D6 migration on a legacy pin-less store found no single engine
+        # choice — the user must pin explicitly (re-pin in place).
+        _emit_and_exit(
+            Envelope(
+                command=command,
+                ok=False,
+                data={"candidates": _engine_candidates_payload(exc.candidates)},
+                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
     if store is None:
         _emit_and_exit(_uninitialized(command), EXIT_USAGE)
     return store
+
+
+def _engine_candidates_payload(
+    candidates: tuple[EngineCandidate, ...],
+) -> list[dict[str, str]]:
+    """Project marker-level engine candidates onto the D7 ``data.candidates`` shape.
+
+    Same three-key shape (``path`` / ``ecosystem`` / ``engine_name``) as the
+    ``no-engine-detected`` discovery report, so agents parse one candidate
+    schema across both error codes. ``path`` is ``"."`` here — ambiguity is
+    always about the anchor/init directory itself.
+    """
+    return [
+        {"path": ".", "ecosystem": c.ecosystem, "engine_name": c.engine_name}
+        for c in candidates
+    ]
+
+
+def _validate_engine_flag(command: str, engine: str | None) -> tuple[str, str] | None:
+    """Map ``--engine <name>`` onto its ``(ecosystem, engine_name)`` pair.
+
+    ``None`` passes through (flag absent). Values outside the six-engine
+    matrix fail flag validation (``invalid-flag``, exit 2) — mirroring the
+    ``--formula`` pattern: a bad flag is a transport error, so the workflow
+    layer never sees it (decision 2026-07-03-engine-selection-policy D1/D7).
+    """
+    if engine is None:
+        return None
+    for ecosystem, engine_name in list_supported_engine_pairs():
+        if engine_name == engine:
+            return (ecosystem, engine_name)
+    supported = sorted(name for _, name in list_supported_engine_pairs())
+    _emit_and_exit(
+        Envelope(
+            command=command,
+            ok=False,
+            errors=(
+                EnvelopeError(
+                    code="invalid-flag",
+                    message=(
+                        f"Invalid --engine={engine!r}; "
+                        f"expected one of {supported!r}"
+                    ),
+                ),
+            ),
+        ),
+        EXIT_USAGE,
+    )
 
 
 def _readiness_payload(readiness: Any) -> dict[str, Any]:
@@ -205,11 +283,29 @@ def _adapter_to_envelope_warnings(
 
 
 @app.command
-def init() -> None:
-    """Initialize a Project Store in the current working directory."""
+def init(
+    *,
+    engine: Annotated[str | None, Parameter(name=["--engine"])] = None,
+) -> None:
+    """Initialize a Project Store in the current working directory.
+
+    Anchors an engine pin per decision
+    ``2026-07-03-engine-selection-policy.md`` (D1/D4/D7): exactly one viable
+    engine pins automatically; a markerless directory creates NOTHING and
+    reports discovered sub-project candidates (``no-engine-detected``,
+    exit 4); an ambiguous workspace creates NOTHING and requires
+    ``--engine <name>`` (``engine-ambiguous``, exit 2). ``--engine`` is
+    optional in all cases and wins over detection; re-running
+    ``init --engine <other>`` on an existing store re-pins in place (run
+    history retained). Invalid ``--engine`` values fail flag validation
+    (``invalid-flag``, exit 2).
+    """
     workspace = Path.cwd()
+    engine_pair = _validate_engine_flag("init", engine)
     try:
-        result = asyncio.run(initialize_project_workspace(workspace))
+        result = asyncio.run(
+            initialize_project_workspace(workspace, engine=engine_pair)
+        )
     except FileNotFoundError as exc:
         _emit_and_exit(
             Envelope(
@@ -229,13 +325,90 @@ def init() -> None:
             EXIT_STORAGE,
         )
 
+    if isinstance(result, InitNoEngineDetected):
+        _emit_and_exit(
+            _no_engine_detected_envelope("init", workspace, result), EXIT_ENGINE_MISSING
+        )
+    if isinstance(result, InitEngineAmbiguous):
+        _emit_and_exit(
+            _engine_ambiguous_envelope("init", result.candidates), EXIT_USAGE
+        )
+
     data: dict[str, Any] = {
         "store_path": str(result.store.path),
         "store_state": result.store.store_state,
         "initialized_at": result.store.initialized_at,
         "engine_readiness": _readiness_payload(result.engine_readiness),
+        "pinned_engine": (
+            result.store.pinned_engine.to_dict()
+            if result.store.pinned_engine is not None
+            else None
+        ),
     }
     _emit_and_exit(Envelope(command="init", ok=True, data=data), EXIT_OK)
+
+
+def _no_engine_detected_envelope(
+    command: str, workspace: Path, outcome: InitNoEngineDetected
+) -> Envelope:
+    """D7 ``no-engine-detected`` envelope: nothing created, candidates reported."""
+    if outcome.scan_refused:
+        guidance = (
+            "the candidate discovery scan is refused at a filesystem root or "
+            "$HOME (decision D4); cd into your project directory and run "
+            "`novetest init` there"
+        )
+    elif outcome.candidates:
+        guidance = (
+            "candidate projects were discovered below (data.candidates); "
+            "cd into the one you want and run `novetest init` there — "
+            "novetest never initializes a directory you are not standing in"
+        )
+    else:
+        guidance = (
+            "no candidate projects were found within the bounded discovery "
+            "scan (depth <= 2); cd into your project directory and run "
+            "`novetest init` there"
+        )
+    return Envelope(
+        command=command,
+        ok=False,
+        data={
+            "candidates": [c.to_dict() for c in outcome.candidates],
+            "scan_refused": outcome.scan_refused,
+        },
+        errors=(
+            EnvelopeError(
+                code="no-engine-detected",
+                message=(
+                    f"No supported engine marker found at {workspace}; "
+                    f"no Project Store was created. Note: {guidance}."
+                ),
+            ),
+        ),
+    )
+
+
+def _engine_ambiguous_envelope(
+    command: str, candidates: tuple[EngineCandidate, ...]
+) -> Envelope:
+    """D7 ``engine-ambiguous`` envelope: nothing created, explicit choice required."""
+    names = ", ".join(c.engine_name for c in candidates)
+    return Envelope(
+        command=command,
+        ok=False,
+        data={"candidates": _engine_candidates_payload(candidates)},
+        errors=(
+            EnvelopeError(
+                code="engine-ambiguous",
+                message=(
+                    f"Multiple viable engines detected ({names}); no Project "
+                    "Store was created. Choose one explicitly: "
+                    "`novetest init --engine <name>`."
+                ),
+            ),
+        ),
+    )
 
 
 @app.command(name="reset")
@@ -307,6 +480,12 @@ def reset_cmd(
             EXIT_STORAGE,
         )
 
+    if isinstance(result, (InitNoEngineDetected, InitEngineAmbiguous)):
+        # Legacy pin-less store on an anchor with no single engine choice:
+        # the workflow refused BEFORE wiping — the store is untouched.
+        envelope, exit_code = _reset_refusal_envelope(result)
+        _emit_and_exit(envelope, exit_code)
+
     data: dict[str, Any] = {
         "store_path": str(result.init_result.store.path),
         "store_state": result.init_result.store.store_state,
@@ -318,11 +497,69 @@ def reset_cmd(
     _emit_and_exit(Envelope(command="reset", ok=True, data=data), EXIT_OK)
 
 
+def _reset_refusal_envelope(
+    outcome: InitNoEngineDetected | InitEngineAmbiguous,
+) -> tuple[Envelope, int]:
+    """``reset`` refusal for a legacy pin-less store (BEFORE any wipe).
+
+    Same D7 codes as ``init`` (``no-engine-detected`` / ``engine-ambiguous``)
+    with reset-specific guidance: the store was NOT wiped; pin an engine via
+    ``novetest init --engine <name>`` (re-pins in place), then retry.
+    """
+    followup = (
+        "the store was NOT wiped. Run `novetest init --engine <name>` at the "
+        "workspace root to pin one (re-pins in place; run history retained), "
+        "then retry `novetest reset --confirm`."
+    )
+    if isinstance(outcome, InitEngineAmbiguous):
+        names = ", ".join(c.engine_name for c in outcome.candidates)
+        return (
+            Envelope(
+                command="reset",
+                ok=False,
+                data={"candidates": _engine_candidates_payload(outcome.candidates)},
+                errors=(
+                    EnvelopeError(
+                        code="engine-ambiguous",
+                        message=(
+                            "reset refused: this Project Store has no engine "
+                            f"pin and the workspace matches multiple engines "
+                            f"({names}); " + followup
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    return (
+        Envelope(
+            command="reset",
+            ok=False,
+            data={
+                "candidates": [c.to_dict() for c in outcome.candidates],
+                "scan_refused": outcome.scan_refused,
+            },
+            errors=(
+                EnvelopeError(
+                    code="no-engine-detected",
+                    message=(
+                        "reset refused: this Project Store has no engine pin "
+                        "and no engine marker was found at the workspace root; "
+                        + followup
+                    ),
+                ),
+            ),
+        ),
+        EXIT_ENGINE_MISSING,
+    )
+
+
 @app.command(name="run")
 def run_cmd(
     target: str = "",
     *,
     coverage: Annotated[bool, Parameter(name=["--coverage", "-c"])] = False,
+    engine: Annotated[str | None, Parameter(name=["--engine"])] = None,
 ) -> None:
     """Execute the resolved Test Target and persist the Run Record.
 
@@ -332,11 +569,31 @@ def run_cmd(
     ``CoverageUnavailable`` outcome) is reported under the envelope's
     ``data.coverage_outcome`` block; without the flag, the key is omitted
     entirely so non-coverage runs stay byte-equivalent to Phase 1.
+
+    ``--engine <name>`` executes a one-off override of the store's pinned
+    engine WITHOUT re-pinning (decision 2026-07-03-engine-selection-policy
+    D3); invalid names fail flag validation (``invalid-flag``, exit 2).
     """
     store = _require_store("run")
+    engine_pair = _validate_engine_flag("run", engine)
     try:
         outcome = asyncio.run(
-            run_target_in_store(target, store, collect_coverage=coverage)
+            run_target_in_store(
+                target, store, collect_coverage=coverage, engine=engine_pair
+            )
+        )
+    except EngineAmbiguousError as exc:
+        # Only reachable via a TOCTOU race (a marker appearing between the
+        # _require_store migration and the workflow's own D6 fallback);
+        # mapped anyway so the fragile path stays structured.
+        _emit_and_exit(
+            Envelope(
+                command="run",
+                ok=False,
+                data={"candidates": _engine_candidates_payload(exc.candidates)},
+                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
+            ),
+            EXIT_USAGE,
         )
     except EngineNotReadyError as exc:
         _emit_and_exit(
@@ -1335,6 +1592,7 @@ def test_cmd(
     target: str = "",
     *,
     reruns: Annotated[int, Parameter(name=["--reruns"])] = 0,
+    engine: Annotated[str | None, Parameter(name=["--engine"])] = None,
 ) -> None:
     """Execute the integrated `novetest test [target]` workflow.
 
@@ -1365,6 +1623,10 @@ def test_cmd(
     The ``data.run_reference`` / ``data.stage_eligibility`` /
     ``data.recommendation_schema_version`` / ``data.recommendations``
     fields are the wire surface AI agents pin against (brief §5).
+
+    ``--engine <name>`` executes a one-off override of the store's pinned
+    engine WITHOUT re-pinning (decision 2026-07-03-engine-selection-policy
+    D3); invalid names fail flag validation (``invalid-flag``, exit 2).
     """
 
     store = _require_store("test")
@@ -1385,8 +1647,22 @@ def test_cmd(
             ),
             EXIT_USAGE,
         )
+    engine_pair = _validate_engine_flag("test", engine)
     try:
-        outcome = asyncio.run(test_target_in_store(target, store, reruns=reruns))
+        outcome = asyncio.run(
+            test_target_in_store(target, store, reruns=reruns, engine=engine_pair)
+        )
+    except EngineAmbiguousError as exc:
+        # TOCTOU guard — see run_cmd's matching clause.
+        _emit_and_exit(
+            Envelope(
+                command="test",
+                ok=False,
+                data={"candidates": _engine_candidates_payload(exc.candidates)},
+                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
     except EngineNotReadyError as exc:
         _emit_and_exit(
             Envelope(

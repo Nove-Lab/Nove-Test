@@ -41,6 +41,7 @@ from novetest.memory import (
     ProjectStore,
     list_run_history,
 )
+from novetest.memory.project_store import PinnedEngine
 from novetest.models import MemoryEntry, ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.regression import (
@@ -53,7 +54,13 @@ from novetest.replay import get_replay_result
 
 @dataclass(slots=True, frozen=True)
 class StatusView:
-    """Status entity surfaced by ``novetest status``."""
+    """Status entity surfaced by ``novetest status``.
+
+    ``pinned_engine`` surfaces the store's anchored engine pin (decision
+    ``2026-07-03-engine-selection-policy.md``; additive envelope field).
+    ``None`` only for a legacy pin-less store on a markerless anchor —
+    every store touched by ``init`` or the D6 migration carries a pin.
+    """
 
     latest_entry: MemoryEntry | None
     run_history_size: int
@@ -61,6 +68,7 @@ class StatusView:
     regression_available: bool = False
     localization_available: bool = False
     replay_available: bool = False
+    pinned_engine: PinnedEngine | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -70,6 +78,11 @@ class StatusView:
                 else None
             ),
             "run_history_size": self.run_history_size,
+            "pinned_engine": (
+                self.pinned_engine.to_dict()
+                if self.pinned_engine is not None
+                else None
+            ),
             "sub_reports": {
                 "coverage": "available" if self.coverage_available else "unavailable",
                 "regression": "available" if self.regression_available else "unavailable",
@@ -124,7 +137,11 @@ def build_status_view(store: ProjectStore) -> StatusView:
     history = list_run_history(store)
     latest = history[0] if history else None
     if latest is None:
-        return StatusView(latest_entry=None, run_history_size=0)
+        return StatusView(
+            latest_entry=None,
+            run_history_size=0,
+            pinned_engine=store.pinned_engine,
+        )
 
     latest_ref = latest.run_record.run_reference
     coverage_available = isinstance(
@@ -144,6 +161,7 @@ def build_status_view(store: ProjectStore) -> StatusView:
         regression_available=regression_available,
         localization_available=localization_available,
         replay_available=replay_available,
+        pinned_engine=store.pinned_engine,
     )
 
 
