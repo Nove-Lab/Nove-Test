@@ -88,3 +88,15 @@ from novetest.run import detect_engine_candidates
    decision wanted on who owns pre-merge spot-run rights.
 3. The team branch was pushed to origin solely for the (403-blocked)
    spot-run attempt; Main Branch deletes it post-merge as part of cleanup.
+
+## Post-merge CI verdict (the binding cite — recorded by Main Branch)
+
+- **Run `28643184018`** on merge push `12e0d0a`: **conclusion SUCCESS, 10/10 jobs** —
+  `test (windows-latest / py3.11)`: success,
+  `test (windows-latest / py3.12)`: success,
+  `test (windows-latest / py3.13)`: success
+  (the 3 jobs red at `b982fad`, run `28633288553`), plus
+  ubuntu×3 / macos×3 / perf all success.
+- Acceptance criterion "Full CI matrix 10/10 at the merge commit" is MET.
+  PM may cite this run id to close the fast-follow AND the parent
+  pin-driven-dispatch cycle, unblocking Wave 2.
