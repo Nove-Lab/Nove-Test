@@ -78,3 +78,35 @@ local-source-dep cache invalidation).
 **First documented.** 2026-05-16 (Manual Test cycle for
 `coverage-show-diff` — see
 `agent-comms/history/2026-05-16-phase0-complete-and-phase2-2.5-entry.md`).
+
+---
+
+## Shell-profile `PYTHONPATH` leaks a foreign Python 3.10 tree into the venv
+
+**Symptom.** Any `uv run` / `pytest` invocation in this repo crashes on
+`import novetest.localization` with a numpy C-extension
+`ModuleNotFoundError` (or other binary-incompatibility import errors),
+even though the venv is intact.
+
+**Diagnosis.** The host shell profile exports a ROS2/Python-3.10
+`PYTHONPATH`. Python prepends `PYTHONPATH` to `sys.path` ahead of venv
+site-packages, so the 3.10 numpy (and friends) shadow the 3.11 venv's
+packages. Not a project misconfiguration; nothing in this repo sets
+`PYTHONPATH`.
+
+**Sanctioned response.** Prefix every project command with an explicit
+unset:
+
+```sh
+env -u PYTHONPATH uv run novetest <verb> <args>
+env -u PYTHONPATH uv run pytest -q tests/...
+```
+
+**Status.** Open. Recurs on every session run from the affected host
+profile; the prefix fully unblocks. Root cause is host-level (shell
+profile), out of repo scope.
+
+**First documented.** 2026-07-03 (proposed by Regression team in
+`agent-comms/questions/regression-team-2026-07-03-d5-cross-run-audit.md`;
+second recurrence — the 2026-06-25 reset-verb WORKLOG entry already used
+the prefix without codifying it).
