@@ -193,7 +193,7 @@ def _build_full_fixture(*, with_regression: bool = True, with_localization: bool
         coverage_facts=coverage,
         regression_facts=regression,
         localization_findings=finding,
-        replay_result=replay,
+        replay_results=(replay,) if replay is not None else (),
     )
     return _Fixture(ref_baseline=baseline, ref_target=target, bundle=bundle)
 

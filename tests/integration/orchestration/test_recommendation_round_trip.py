@@ -15,7 +15,8 @@ Per-kind retrieval interfaces:
 - ``localization_finding`` → ``localization/get_localization_findings(run_ref)``
 - ``coverage_fact`` → ``coverage/get_coverage_facts(run_ref)``
 - ``regression_fact`` → ``regression/get_regression_facts(baseline_ref, target_ref)``
-- ``replay_result`` → (Phase 5 dep — skipped with comment)
+- ``replay_result`` → ``replay/get_replay_result(run_ref)`` (reachable via
+  ``novetest test --reruns N`` since the 2026-06-25 integration cycle)
 - ``test_result`` → ``memory/retrieve_run_evidence(run_ref)`` + find by ``test_id``
 - ``run_reference`` → ``memory/list_run_history()`` + verify in history
 """
@@ -32,7 +33,9 @@ from novetest.localization import LocalizationFinding, get_localization_findings
 from novetest.localization.symbol_resolver import clear_resolver_cache
 from novetest.memory import list_run_history, retrieve_run_evidence
 from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.models.replay_result import ReplayResult
 from novetest.models.run_reference import RunReference
+from novetest.replay import get_replay_result
 from novetest.orchestration.recommendation import (
     CATEGORY_INVESTIGATE_LOCATION,
     CATEGORY_REGRESSION_WITH_LOCALIZATION,
@@ -165,8 +168,14 @@ async def test_investigate_location_citations_round_trip(tmp_path: Path) -> None
                 e.run_record.run_reference.run_id == ref.run_id for e in history
             ), f"run_reference citation {citation!r} not in run history"
         elif kind == "replay_result":
-            # Phase 5 dep — skipped in Phase 6 entry per brief §"Out of scope".
-            pytest.skip("replay_result citations land in Phase 5")
+            # Reachable since the 2026-06-25 ``--reruns`` integration:
+            # resolve via the canonical cache-read interface.
+            ref = _resolve_run_reference(citation)
+            assert ref is not None
+            resolved_replay = get_replay_result(store, ref)
+            assert isinstance(resolved_replay, ReplayResult), (
+                f"replay_result citation {citation!r} did not resolve"
+            )
         else:
             pytest.fail(f"Unknown citation kind: {kind!r}")
 

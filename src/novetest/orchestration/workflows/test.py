@@ -10,11 +10,13 @@ Composes the canonical Phase-6 chain (workflows/orchestration.md §2):
       → coverage/derive_coverage_facts
       → regression/resolve_latest_baseline → regression/compare_runs
       → localization/derive_localization_findings
+      → replay/replay_run                       (opt-in: --reruns N > 0
+                                                 AND failed tests)
       → orchestration/build_fact_bundle
       → orchestration/synthesize_recommendation
         (citations chained inside)
 
-Error policy (brief §5):
+Error policy (brief §5 + 2026-06-25 ``--reruns`` decision):
 
 - Steps 5-8 are **best-effort**: any single-engine failure becomes
   ``stage_eligibility.<stage> = "unavailable"`` (with the engine's
@@ -23,9 +25,17 @@ Error policy (brief §5):
 - Step 2 (``run/execute``) is fatal. The CLI handler maps the same
   exception surface ``novetest run`` does and re-uses the Run error
   envelope unchanged.
-- Replay step is intentionally absent in Phase 6 entry: ``replay_result``
-  is always ``None``; ``stage_eligibility.replay`` is always
-  ``"not_run"``. Phase 5 lands the wiring.
+- The Replay step is opt-in via ``reruns`` (the ``--reruns N`` CLI flag;
+  decision ``2026-06-25-test-reruns-flag-and-replay-integration``).
+  Default ``0`` keeps the pre-integration behavior byte-for-byte:
+  ``replay_results`` empty, ``stage_eligibility.replay == "not_run"``.
+  With ``N > 0`` and at least one failed test, ONE whole-run
+  ``replay_run`` attempt executes with ``reruns=N`` (the Replay engine's
+  attempt granularity is the original run — its classifier performs the
+  per-test divergence analysis internally; there is no per-test replay
+  scoping in the engine API). A ``ReplayUnavailable`` attempt outcome is
+  best-effort like steps 5-8: ``stage_eligibility.replay =
+  "unavailable"`` (reason preserved) and the invocation still succeeds.
 
 Output shape: a ``TestOutcome`` dataclass that the CLI handler projects
 onto the brief §5 envelope shape (verbatim). The handler stays thin —
@@ -54,7 +64,7 @@ from novetest.memory import (
     store_run_evidence,
 )
 from novetest.models import LocalizationFinding as LocalizationFindingModel
-from novetest.models import MemoryEntry, RunRecord
+from novetest.models import MemoryEntry, ReplayResult, RunRecord
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.orchestration.recommendation import (
@@ -64,11 +74,15 @@ from novetest.orchestration.recommendation import (
     build_fact_bundle,
     synthesize_recommendation,
 )
+from novetest.orchestration.recommendation.fact_bundle import (
+    record_has_failed_tests,
+)
 from novetest.regression import (
     RegressionUnavailable,
     compare_runs,
     resolve_latest_baseline,
 )
+from novetest.replay import ReplayUnavailable, get_replay_result, replay_run
 from novetest.run import AdapterWarning, execute, resolve_test_target
 from novetest.utils.ulid import generate_ulid
 
@@ -119,10 +133,12 @@ async def test_target_in_store(
     store: ProjectStore,
     *,
     timeout: float | None = 600.0,
+    reruns: int = 0,
 ) -> TestOutcome:
     """Execute target, persist evidence, derive facts, synthesize recommendations.
 
-    Sequence per brief §5 / workflows/orchestration.md §2:
+    Sequence per brief §5 / workflows/orchestration.md §2 (+ the
+    2026-06-25 ``--reruns`` decision for step 6b):
 
     1. Resolve target via Run engine.
     2. ``run/execute`` with coverage instrumentation always-on (the
@@ -134,11 +150,20 @@ async def test_target_in_store(
     4. Derive Coverage Facts via ``derive_coverage_facts`` (best-effort).
     5. Resolve baseline + compare via Regression engine (best-effort).
     6. Derive Localization Findings (best-effort).
+    6b. Opt-in Replay: when ``reruns > 0`` AND the Run Record has failed
+        tests, invoke ONE whole-run ``replay/replay_run`` attempt with
+        ``reruns=reruns`` (best-effort — a ``ReplayUnavailable`` outcome
+        surfaces on the eligibility slot, never fails the invocation).
+        The replay-execution runs persist as first-class Memory Entries,
+        exactly as the standalone ``novetest replay`` verb's do.
     7. Build ``StageEligibility`` from the per-stage outcomes.
-    8. Build ``FactBundle`` from the surviving facts.
-    9. Synthesize recommendations.
+    8. Build ``FactBundle`` from the surviving facts (Replay Results in
+       ``replay_results``).
+    9. Synthesize recommendations (``flaky_suspected`` is reachable when
+       the attempt classified ``inconsistent``).
 
-    No Replay step — Phase 5 dep (per brief §"Out of scope").
+    ``reruns=0`` (the default) skips step 6b entirely — output is
+    byte-identical to the pre-integration workflow.
     """
 
     workspace_path = store.path.parent
@@ -218,21 +243,45 @@ async def test_target_in_store(
         else None
     )
 
+    # Step 6b — opt-in Replay (2026-06-25 decision). One whole-run attempt:
+    # the Replay engine's attempt granularity is the original run (its
+    # classifier does the per-test divergence analysis internally), so a
+    # single ``replay_run(..., reruns=N)`` call replays every test — the
+    # failed ones included — N times and classifies the session.
+    # ``replay_outcome is None`` means "not attempted" (flag absent or no
+    # failed tests) and preserves the pre-integration ``"not_run"`` slot.
+    replay_outcome: ReplayResult | ReplayUnavailable | None = None
+    if reruns > 0 and record_has_failed_tests(run_record):
+        replay_outcome = await replay_run(
+            store,
+            run_record.run_reference,
+            reruns=reruns,
+            timeout=timeout,
+        )
+        if isinstance(replay_outcome, ReplayResult):
+            # Refresh the Memory Entry so ``has_replay_result`` reflects
+            # the persisted ``replay_result.json`` (mirrors the coverage
+            # refresh at step 4).
+            entry = retrieve_run_evidence(store, run_record.run_reference)
+
     # Step 7 — build StageEligibility from the four per-stage outcomes.
     stage_eligibility = _build_stage_eligibility(
         coverage_outcome=coverage_outcome,
         regression_outcome=regression_outcome,
         localization_outcome=localization_outcome,
+        replay_outcome=replay_outcome,
     )
 
-    # Step 8 — bundle the surviving facts. Replay always None here.
+    # Step 8 — bundle the surviving facts.
     bundle = build_fact_bundle(
         run_record=run_record,
         stage_eligibility=stage_eligibility,
         coverage_facts=coverage_facts,
         regression_facts=regression_facts,
         localization_findings=localization_findings,
-        replay_result=None,
+        replay_results=(
+            (replay_outcome,) if isinstance(replay_outcome, ReplayResult) else ()
+        ),
     )
 
     # Step 9 — pure rule-based synthesis.
@@ -324,10 +373,23 @@ def build_test_outcome_from_run_id(
         else None
     )
 
+    # Replay: cache-only read (mirrors ``inspect``). A cached Replay Result
+    # (produced by ``test --reruns`` or the standalone ``replay`` verb)
+    # folds into the bundle so re-derivation matches the live-path output;
+    # a cache miss means "never attempted" → the ``not_run`` slot (the
+    # live path's attempted-but-unavailable state persists nothing, so it
+    # is indistinguishable from never-attempted on re-derive — acceptable:
+    # the NFR-ORCH-002 round-trip contract covers persisted facts).
+    cached_replay = get_replay_result(store, ref)
+    replay_outcome: ReplayResult | None = (
+        cached_replay if isinstance(cached_replay, ReplayResult) else None
+    )
+
     stage_eligibility = _build_stage_eligibility(
         coverage_outcome=coverage_outcome,
         regression_outcome=regression_outcome,
         localization_outcome=localization_outcome,
+        replay_outcome=replay_outcome,
     )
 
     bundle = build_fact_bundle(
@@ -336,7 +398,7 @@ def build_test_outcome_from_run_id(
         coverage_facts=coverage_facts,
         regression_facts=regression_facts,
         localization_findings=localization_findings,
-        replay_result=None,
+        replay_results=(replay_outcome,) if replay_outcome is not None else (),
     )
     recommendations = synthesize_recommendation(bundle)
     return TestOutcome(
@@ -359,16 +421,24 @@ def _build_stage_eligibility(
     coverage_outcome: CoverageFactSet | CoverageUnavailable,
     regression_outcome: RegressionFactSet | RegressionUnavailable,
     localization_outcome: LocalizationFinding | LocalizationUnavailable,
+    replay_outcome: ReplayResult | ReplayUnavailable | None = None,
 ) -> StageEligibility:
     """Compute the four-slot ``StageEligibility`` from per-engine outcomes.
 
-    Per brief §5 envelope shape:
+    Per brief §5 envelope shape (+ the 2026-06-25 ``--reruns`` decision
+    for the replay slot):
 
     - ``coverage``     → ``"available"`` iff CoverageFactSet
     - ``regression``   → ``"available"`` iff RegressionFactSet
     - ``localization`` → the finding's ``mode`` when available, else
       ``"unavailable"``
-    - ``replay``       → always ``"not_run"`` in Phase 6 (Phase 5 dep)
+    - ``replay``       → ``"not_run"`` when no attempt was made
+      (``replay_outcome is None`` — flag absent or no failed tests;
+      byte-preserves the pre-integration slot), ``"available"`` for a
+      completed attempt (a ``ReplayResult`` of ANY classification,
+      including the valid ``unable_to_replay`` — mirroring the standalone
+      ``replay`` verb's exit-0 treatment), ``"unavailable"`` when the
+      attempt could not start (``ReplayUnavailable``).
 
     ``per_stage_reasons`` captures the verbatim engine reason for each
     unavailable stage (preserved for ``unavailable_analysis``'s
@@ -383,6 +453,15 @@ def _build_stage_eligibility(
         localization_state = localization_outcome.mode
     else:
         localization_state = "unavailable"
+    if replay_outcome is None:
+        replay_state = "not_run"
+        replay_reason: str | None = "replay_not_run"
+    elif isinstance(replay_outcome, ReplayResult):
+        replay_state = "available"
+        replay_reason = None
+    else:
+        replay_state = "unavailable"
+        replay_reason = replay_outcome.reason
 
     reasons: dict[str, str | None] = {
         "coverage": (
@@ -400,13 +479,13 @@ def _build_stage_eligibility(
             if isinstance(localization_outcome, LocalizationFinding)
             else localization_outcome.reason
         ),
-        "replay": "replay_not_run",
+        "replay": replay_reason,
     }
     return StageEligibility(
         coverage=coverage_state,
         regression=regression_state,
         localization=localization_state,
-        replay="not_run",
+        replay=replay_state,
         per_stage_reasons=reasons,
     )
 

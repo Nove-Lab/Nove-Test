@@ -87,7 +87,11 @@ class _BundleParts:
             coverage_facts=self.coverage,
             regression_facts=self.regression,
             localization_findings=self.localization,
-            replay_result=self.replay,
+            # Harness convenience: the single optional ``replay`` slot maps
+            # onto the tuple-shaped ``replay_results`` field (2026-06-25
+            # ``--reruns`` rename); multi-result cases live in
+            # ``test_match_flaky_suspected_list.py``.
+            replay_results=(self.replay,) if self.replay is not None else (),
         )
 
 

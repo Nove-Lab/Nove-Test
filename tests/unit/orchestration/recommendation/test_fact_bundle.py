@@ -158,7 +158,7 @@ class TestBuildFactBundle:
         assert bundle.coverage_facts is None
         assert bundle.regression_facts is None
         assert bundle.localization_findings is None
-        assert bundle.replay_result is None
+        assert bundle.replay_results == ()
 
 
 class TestSummaryHelpers:

@@ -1,0 +1,28 @@
+# serializer version: 1
+# name: test_reruns_flag_produces_flaky_suspected_end_to_end
+  dict({
+    'category': 'flaky_suspected',
+    'citations': list([
+      dict({
+        'kind': 'replay_result',
+        'selector': dict({
+          'classification': 'inconsistent',
+          'test_id': 'tests/test_flaky_behavior.py::test_flaky_outcome_is_even_invocation',
+        }),
+      }),
+      dict({
+        'kind': 'test_result',
+        'selector': dict({
+          'test_id': 'tests/test_flaky_behavior.py::test_flaky_outcome_is_even_invocation',
+        }),
+      }),
+    ]),
+    'priority': 5,
+    'slots': dict({
+      'reruns_failed': 1,
+      'reruns_total': 2,
+      'test_id': 'tests/test_flaky_behavior.py::test_flaky_outcome_is_even_invocation',
+    }),
+    'summary': 'Test `tests/test_flaky_behavior.py::test_flaky_outcome_is_even_invocation` flaky: 1/2 reruns failed.',
+  })
+# ---

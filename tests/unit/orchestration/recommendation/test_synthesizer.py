@@ -133,7 +133,7 @@ def _bundle(*, with_regression: bool, with_localization: bool, fail: bool,
         coverage_facts=None,  # always unavailable in these unit fixtures
         regression_facts=regression,
         localization_findings=finding,
-        replay_result=None,
+        replay_results=(),
     )
 
 
