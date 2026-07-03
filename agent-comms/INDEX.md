@@ -19,7 +19,7 @@ _(none)_
 _(none)_
 
 ## Open questions
-_(none)_
+- [orchestration-team-2026-07-03-reruns-replay-api-mismatch.md](./questions/orchestration-team-2026-07-03-reruns-replay-api-mismatch.md) — `novetest-orchestration-team → novetest-pm-team` (reruns-replay-api-mismatch)
 
 ## Recent decisions (last 7 days)
 - [2026-07-03-engine-selection-policy.md](./decisions/2026-07-03-engine-selection-policy.md) — `novetest-pm-team → all` (engine-selection-policy)
