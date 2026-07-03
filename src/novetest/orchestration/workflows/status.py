@@ -39,12 +39,15 @@ from novetest.coverage import get_coverage_facts
 from novetest.localization import LocalizationFinding, get_localization_findings
 from novetest.memory import (
     ProjectStore,
-    find_runs_for_target,
     list_run_history,
 )
 from novetest.models import MemoryEntry, ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet
-from novetest.regression import RegressionFactSet, get_regression_facts
+from novetest.regression import (
+    RegressionFactSet,
+    get_regression_facts,
+    resolve_baseline_for_run,
+)
 from novetest.replay import get_replay_result
 
 
@@ -150,35 +153,27 @@ def _latest_regression_available(
     """Return True iff a cached ``regression_facts.json`` exists for the
     natural ``(prior_sibling, latest_entry)`` pair on the same target.
 
-    Mirrors ``inspect.py::_resolve_inspect_regression``'s pair-selection
-    logic — the most-recent strictly-older sibling on the same
-    ``target_expression`` (tombstones excluded). The difference is the
-    final read: ``inspect`` calls ``compare_runs`` (which derives on
-    cache miss); ``status`` calls ``get_regression_facts`` (cache-only)
-    because ``status`` MUST NOT derive as a side effect.
+    Pair selection is Regression's shared ``resolve_baseline_for_run``
+    selector — the most-recent strictly-older live sibling on the same
+    ``target_expression`` AND the same ``engine_name`` (D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md``) — the exact
+    selector ``inspect.py::_resolve_inspect_regression`` composes, so the
+    two verbs agree by construction. The difference is the final read:
+    ``inspect`` calls ``compare_runs`` (which derives on cache miss);
+    ``status`` calls ``get_regression_facts`` (cache-only) because
+    ``status`` MUST NOT derive as a side effect.
 
-    A run with no prior siblings (fresh store, single run on the target)
-    returns ``False`` — the natural "no comparable baseline" answer.
-    Two runs on the same target without a prior ``regression compare`` /
-    ``compare`` invocation also return ``False`` because the pair file
-    has never been written.
+    A run with no comparable prior (fresh store, single run on the target,
+    or only cross-engine priors) returns ``False`` — the natural "no
+    comparable baseline" answer. Two comparable runs without a prior
+    ``regression compare`` / ``compare`` invocation also return ``False``
+    because the pair file has never been written.
     """
 
-    siblings = find_runs_for_target(
-        store,
-        latest_entry.run_record.target_expression,
-        include_tombstoned=False,
-    )
-    latest_ref = latest_entry.run_record.run_reference
-    prior = [
-        s
-        for s in siblings
-        if s.run_record.run_reference.created_at < latest_ref.created_at
-    ]
-    if not prior:
+    baseline_ref = resolve_baseline_for_run(store, latest_entry)
+    if baseline_ref is None:
         return False
-    prior.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
-    baseline_ref = prior[0].run_record.run_reference
+    latest_ref = latest_entry.run_record.run_reference
     return isinstance(
         get_regression_facts(store, baseline_ref, latest_ref), RegressionFactSet
     )

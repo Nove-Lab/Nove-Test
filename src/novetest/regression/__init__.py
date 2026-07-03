@@ -10,6 +10,7 @@ Public API exposes the Internal interfaces from
 
 - ``compare_runs``                    — public entry point (cache-aware)
 - ``derive_regression_facts``         — write-side helper (always re-derives)
+- ``resolve_baseline_for_run``        — shared engine-aware baseline selector (D5)
 - ``resolve_latest_baseline``         — pair selector for the active target
 - ``derive_latest_regression``        — composes resolve + compare end-to-end
 - ``get_regression_facts``            — cache-read helper
@@ -36,6 +37,7 @@ from novetest.regression.compare import (
     compare_runs,
     derive_latest_regression,
     derive_regression_facts,
+    resolve_baseline_for_run,
     resolve_latest_baseline,
 )
 from novetest.regression.results import (
@@ -74,5 +76,6 @@ __all__ = [
     "derive_latest_regression",
     "derive_regression_facts",
     "get_regression_facts",
+    "resolve_baseline_for_run",
     "resolve_latest_baseline",
 ]

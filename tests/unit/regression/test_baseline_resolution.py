@@ -1,16 +1,28 @@
 """Unit tests for the baseline-resolution helpers.
 
-Covers ``resolve_latest_baseline``, ``derive_latest_regression``, and
-``check_regression_availability`` against a real Project Store seeded via
-the same public ``store_run_evidence`` + ``delete_run_evidence`` seams the
-``find_runs_for_target`` tests use. No mocking of Memory.
+Covers ``resolve_baseline_for_run``, ``resolve_latest_baseline``,
+``derive_latest_regression``, and ``check_regression_availability`` against
+a real Project Store seeded via the same public ``store_run_evidence`` +
+``delete_run_evidence`` seams the ``find_runs_for_target`` tests use. No
+mocking of Memory.
 
-- ``resolve_latest_baseline`` → 7 cases (empty, single, exact-two, reverse
-  insertion order, three-runs, tombstoned-middle, mixed-targets).
+- ``resolve_latest_baseline`` → 7 pure-series cases (empty, single,
+  exact-two, reverse insertion order, three-runs, tombstoned-middle,
+  mixed-targets) — this block is the "pure series behavior unchanged"
+  snapshot for the D5 engine-scoping slice — plus 3 mixed-engine cases.
+- ``resolve_baseline_for_run`` → 3 direct cases (skip newer + cross-engine,
+  only-cross-engine priors, tombstoned same-engine prior).
 - ``derive_latest_regression`` → 5 cases (empty, single, all-tombstoned,
-  latest-tombstoned-with-live-prior, happy-path).
+  latest-tombstoned-with-live-prior, happy-path) + 1 mixed-engine case.
 - ``check_regression_availability`` → 5 cases (unknown, no siblings, one
-  sibling, all-siblings-tombstoned, tombstoned-input-with-live-sibling).
+  sibling, all-siblings-tombstoned, tombstoned-input-with-live-sibling)
+  + 2 engine-scoping cases.
+
+Engine scoping is D5 of
+``agent-comms/decisions/2026-07-03-engine-selection-policy.md``: baseline /
+candidate selection for cross-run analyses filters by the target run's
+``engine_name``; mixed-engine histories are legitimate (D3 transient
+``--engine`` override) and must resolve to the nearest same-engine prior.
 """
 
 from __future__ import annotations
@@ -25,6 +37,7 @@ from novetest.models.run_reference import RunReference
 from novetest.models.test_result import TestResult
 from novetest.regression.compare import (
     derive_latest_regression,
+    resolve_baseline_for_run,
     resolve_latest_baseline,
 )
 from novetest.regression.results import (
@@ -35,11 +48,13 @@ from novetest.regression.retrieval import check_regression_availability
 from novetest.models.regression_fact_set import RegressionFactSet
 
 
-# Three hand-picked timestamps; chronological order is OLD < MID < NEW so
-# tests can write any insertion order and still assert the same result.
+# Four hand-picked timestamps; chronological order is OLD < MID < NEW <
+# NEWEST so tests can write any insertion order and still assert the same
+# result.
 _TS_OLD = 1_700_000_000_000
 _TS_MID = 1_700_000_001_000
 _TS_NEW = 1_700_000_002_000
+_TS_NEWEST = 1_700_000_003_000
 
 
 def _ref(run_id: str, created_at: int) -> RunReference:
@@ -213,6 +228,206 @@ def test_resolve_mixed_targets_only_considers_matching_expression(
     assert target_ref.run_id == "01HIT2"
 
 
+# --- resolve_latest_baseline: D5 engine scoping --------------------------------
+#
+# Mixed-engine histories on ONE target are legitimate (decision D3 transient
+# --engine override). D5's binding rule: the baseline must share the target
+# run's engine_name; the target itself stays the newest live run regardless
+# of engine.
+
+
+def test_resolve_mixed_engine_series_picks_same_engine_baseline(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Series [pytest, cargo-test, pytest]: the newest pytest run resolves
+    the OLDER pytest run as baseline, skipping the cargo-test run in
+    between (pre-D5 this reported unavailable via the guaranteed
+    ``REASON_ENGINE_MISMATCH`` neighbor). The task's headline acceptance
+    case."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, tuple)
+    baseline_ref, target_ref = result
+    assert baseline_ref.run_id == "01PYOLD"
+    assert target_ref.run_id == "01PYNEW"
+
+
+def test_resolve_target_selection_is_engine_agnostic(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Series [pytest, pytest, cargo-test]: the TARGET is the newest live
+    run regardless of engine (the cargo-test run), and since no cargo-test
+    prior exists the result is unavailable — with the engine carried in
+    ``detail`` so the operator sees the D5 filter (not run scarcity)
+    eliminated the two pytest candidates."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYMID", _TS_MID),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_NEW),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "tests/ (engine=cargo-test)"
+
+
+def test_resolve_single_run_per_engine_returns_engine_detail(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Series [cargo-test, pytest] (one run each): the pytest target has no
+    pytest prior → unavailable with the engine-suffixed detail. The plain
+    ``detail=target_expression`` form stays reserved for the
+    fewer-than-two-runs case (see the pure-series tests above)."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_OLD),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "tests/ (engine=pytest)"
+
+
+# --- resolve_baseline_for_run (the shared D5 selector) -------------------------
+
+
+def test_baseline_for_run_skips_newer_and_cross_engine_siblings(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Input = the MIDDLE pytest run of [pytest, cargo-test, pytest(input),
+    pytest(newer)]: the selector must skip the newer pytest run (not
+    strictly older) AND the cargo-test run (cross-engine), landing on the
+    oldest pytest run."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    input_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYMID", _TS_NEW),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEWEST", _TS_NEWEST),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_baseline_for_run(store, input_entry)
+    assert result is not None
+    assert result.run_id == "01PYOLD"
+
+
+def test_baseline_for_run_returns_none_when_only_cross_engine_priors(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """All strictly-older siblings run a different engine → ``None`` (the
+    caller surfaces it as unavailable / False)."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO1", _TS_OLD),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO2", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    input_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    assert resolve_baseline_for_run(store, input_entry) is None
+
+
+def test_baseline_for_run_skips_tombstoned_same_engine_prior(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """A tombstoned same-engine prior is excluded (Memory's
+    ``include_tombstoned=False`` convention); the next-older live
+    same-engine run wins."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    mid_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYMID", _TS_MID),
+        target_expression="tests/",
+    )
+    input_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    delete_run_evidence(store, mid_entry.run_record.run_reference)
+
+    result = resolve_baseline_for_run(store, input_entry)
+    assert result is not None
+    assert result.run_id == "01PYOLD"
+
+
 # --- derive_latest_regression ------------------------------------------------
 
 
@@ -340,6 +555,52 @@ def test_derive_latest_happy_path_returns_fact_set(
     assert result.test_transitions[0].category == "still_passing"
 
 
+def test_derive_latest_mixed_engine_series_produces_facts(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """D5 acceptance case end-to-end: series [pytest(fail), cargo-test,
+    pytest(pass)] on one target — ``derive_latest_regression`` resolves the
+    same-engine pair AND produces a fact set (the pair clears
+    ``compare_runs``' engine guard by construction). Pre-D5 this returned
+    ``REASON_NO_COMPARABLE_BASELINE``-adjacent noise: the resolver picked
+    the cargo-test neighbor and ``compare_runs`` refused it."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+        test_results=(
+            TestResult(node_id="tests/x.py::a", outcome="failed", duration_ms=7),
+        ),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+        test_results=(
+            TestResult(node_id="tests::rust_case", outcome="passed", duration_ms=3),
+        ),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+        test_results=(
+            TestResult(node_id="tests/x.py::a", outcome="passed", duration_ms=6),
+        ),
+    )
+    store = get_project_store_state(initialized_store)
+    result = derive_latest_regression(store)
+    assert isinstance(result, RegressionFactSet)
+    assert result.baseline_run_reference.run_id == "01PYOLD"
+    assert result.target_run_reference.run_id == "01PYNEW"
+    assert result.baseline_engine_name == "pytest"
+    assert result.target_engine_name == "pytest"
+    assert result.summary.fixed == 1
+
+
 # --- check_regression_availability -------------------------------------------
 
 
@@ -445,3 +706,60 @@ def test_check_tombstoned_input_with_live_sibling_returns_true(
     assert result is True
     # Sanity: the live sibling is in fact present.
     assert old_entry.run_record.run_reference.run_id == "01OLD"
+
+
+def test_check_only_cross_engine_sibling_returns_false(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """D5: a sibling produced by a different engine is NOT a comparable
+    prior — counting it would report "available" for a comparison
+    ``compare_runs`` is guaranteed to refuse."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_OLD),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    new_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = check_regression_availability(
+        store, new_entry.run_record.run_reference
+    )
+    assert result is False
+
+
+def test_check_same_engine_sibling_among_cross_engine_noise_returns_true(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """D5: one same-engine sibling among cross-engine noise flips
+    availability True — mirrors the [pytest, cargo-test, pytest] resolver
+    case."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01CARGO", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    new_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01PYNEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = check_regression_availability(
+        store, new_entry.run_record.run_reference
+    )
+    assert result is True

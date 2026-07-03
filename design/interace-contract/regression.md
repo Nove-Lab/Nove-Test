@@ -25,16 +25,19 @@
 | `novetest regression compare <run_id1> <run_id2>` | External | Two Run References | Regression Fact set covering test outcome transitions (pass-to-fail, fail-to-pass), native output differences, and Coverage changes when Coverage Facts are available for both runs |
 | `novetest regression latest` | External | (none; resolved against current Run History) | Regression Fact set comparing the two most recent comparable Run Records for the same resolved Test Target, or explicit unavailable state when no comparable pair exists |
 | `compare_runs(run_reference_1, run_reference_2)` | Internal | Two Run References | Regression Fact set with transition records, output-difference records, and Coverage-change records |
-| `resolve_latest_baseline(test_target)` | Internal | Test Target (or active Test Target context) | Pair of Run References (baseline_run_reference, target_run_reference) for the most recent comparable runs sharing the same resolved Test Target, or unavailable state |
+| `resolve_baseline_for_run(memory_entry)` | Internal | Memory Entry of a target run | Run Reference of the newest strictly-older live run sharing the target run's Test Target AND `engine_name` (D5), or none when no comparable baseline exists. The single shared engine-aware selector consumed by `resolve_latest_baseline` and by Orchestration's `inspect` / `status` compositions |
+| `resolve_latest_baseline(test_target)` | Internal | Test Target (or active Test Target context) | Pair of Run References (baseline_run_reference, target_run_reference) for the most recent comparable runs sharing the same resolved Test Target and the same engine, or unavailable state. The target is the newest live run on the Test Target (engine-agnostic); the baseline is the newest older run with the target's `engine_name` |
 | `derive_latest_regression()` | Internal | (none; uses current Run History) | Regression Fact set for the resolved latest pair, or unavailable state (composes `resolve_latest_baseline` then `compare_runs`) |
 | `get_regression_facts(run_reference_1, run_reference_2)` | Internal | Two Run References | Previously derived Regression Fact set for the run pair, or unavailable state if not yet derived |
-| `check_regression_availability(run_reference)` | Internal | Run Reference | Availability flag indicating whether a comparable prior run exists for the same Test Target (used by Orchestration eligibility evaluation and Localization) |
+| `check_regression_availability(run_reference)` | Internal | Run Reference | Availability flag indicating whether a comparable prior run (same Test Target, same `engine_name`) exists (used by Orchestration eligibility evaluation and Localization) |
 
 ---
 
 ## Notes
 
-- Baseline selection is target-scoped (REQ-REG-001); regression results are deterministic for the same stored evidence state (NFR-REG-001).
+- Baseline selection is target-scoped (REQ-REG-001) AND engine-scoped (`decisions/2026-07-03-engine-selection-policy.md` D5): baseline/candidate selection for cross-run analyses filters by the target run's `engine_name`, so a mixed-engine history (legitimate under D3's transient `--engine` override) resolves to the nearest same-engine prior instead of reporting unavailable. Regression results are deterministic for the same stored evidence state (NFR-REG-001).
+- `compare_runs`' `REASON_ENGINE_MISMATCH` guard remains as defense-in-depth for explicitly user-picked pairs; engine-aware selection makes it unreachable from `resolve_latest_baseline` / `inspect` / `status` compositions.
+- When `resolve_latest_baseline` finds older runs on the target but none sharing the target's engine, the `REASON_NO_COMPARABLE_BASELINE` `detail` is `"<target_expression> (engine=<engine_name>)"`; the plain `detail=<target_expression>` form is reserved for the fewer-than-two-runs case (pre-D5 wording preserved).
 - Regression depends on Memory (`retrieve_run_evidence`, `find_runs_for_target`) and optionally on Coverage (`compare_coverage_facts`, `get_coverage_facts`) when coverage changes are incorporated.
 - Localization consumes Regression Facts via `get_regression_facts` to focus on changed behavior when available.
 

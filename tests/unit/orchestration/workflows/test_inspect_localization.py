@@ -131,8 +131,8 @@ def _patch_all_seams(
     )
     monkeypatch.setattr(
         inspect_module,
-        "find_runs_for_target",
-        lambda _store, _target, *, include_tombstoned=False: [entry],
+        "resolve_baseline_for_run",
+        lambda _store, _entry: None,
     )
     monkeypatch.setattr(
         inspect_module,
@@ -143,8 +143,7 @@ def _patch_all_seams(
             run_reference=ref,
         ),
     )
-    # Regression section: only one run so no baseline → unavailable.
-    from novetest.regression import REASON_NO_COMPARABLE_BASELINE, RegressionUnavailable
+    # Regression section: selector answers None (no baseline) → unavailable.
     monkeypatch.setattr(
         inspect_module,
         "compare_runs",
@@ -412,8 +411,8 @@ def test_inspect_never_calls_derive_localization_findings(
     )
     monkeypatch.setattr(
         inspect_module,
-        "find_runs_for_target",
-        lambda _s, _t, *, include_tombstoned=False: [entry],
+        "resolve_baseline_for_run",
+        lambda _s, _entry: None,
     )
     monkeypatch.setattr(
         inspect_module,
