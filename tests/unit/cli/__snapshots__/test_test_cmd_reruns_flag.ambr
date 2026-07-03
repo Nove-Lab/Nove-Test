@@ -1,0 +1,80 @@
+# serializer version: 1
+# name: test_default_envelope_snapshot
+  dict({
+    'command': 'test',
+    'data': dict({
+      'recommendation_schema_version': 1,
+      'recommendations': list([
+      ]),
+      'run_reference': dict({
+        'created_at': 1000,
+        'run_id': '01TESTRUN0000000000000000A',
+        'schema_version': 1,
+      }),
+      'stage_eligibility': dict({
+        'coverage': 'unavailable',
+        'localization': 'unavailable',
+        'regression': 'unavailable',
+        'replay': 'not_run',
+      }),
+    }),
+    'errors': list([
+    ]),
+    'ok': True,
+    'schema': 'novetest/v1',
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_reruns_happy_envelope_snapshot
+  dict({
+    'command': 'test',
+    'data': dict({
+      'recommendation_schema_version': 1,
+      'recommendations': list([
+        dict({
+          'category': 'flaky_suspected',
+          'evidence_citations': list([
+            dict({
+              'kind': 'replay_result',
+              'run_reference': dict({
+                'created_at': 1000,
+                'run_id': '01TESTRUN0000000000000000A',
+              }),
+              'selector': dict({
+                'classification': 'inconsistent',
+                'test_id': 'tests/test_a.py::test_flaky',
+              }),
+            }),
+          ]),
+          'priority': 5,
+          'recommendation_id': 'rec_01TESTRUN0000000000000000A_flaky0',
+          'slots': dict({
+            'reruns_failed': 2,
+            'reruns_total': 5,
+            'run_reference': '01TESTRUN0000000000000000A',
+            'test_id': 'tests/test_a.py::test_flaky',
+          }),
+          'summary': 'tests/test_a.py::test_flaky diverged in 2 of 5 replay reruns — suspected flaky.',
+        }),
+      ]),
+      'run_reference': dict({
+        'created_at': 1000,
+        'run_id': '01TESTRUN0000000000000000A',
+        'schema_version': 1,
+      }),
+      'stage_eligibility': dict({
+        'coverage': 'unavailable',
+        'localization': 'unavailable',
+        'regression': 'unavailable',
+        'replay': 'available',
+      }),
+    }),
+    'errors': list([
+    ]),
+    'ok': True,
+    'schema': 'novetest/v1',
+    'warnings': list([
+    ]),
+  })
+# ---

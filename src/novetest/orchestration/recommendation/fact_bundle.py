@@ -7,10 +7,10 @@ this file owns:
 
 - the ``FactBundle`` dataclass (immutable, slots),
 - the ``StageEligibility`` dataclass that records per-stage availability,
-- a Replay placeholder type (Phase 5 dep — see §"Replay placeholder"),
 - the ``build_fact_bundle`` builder that maps each engine's
   ``FactSet | Unavailable`` discriminator value onto the bundle's
-  ``FactSet | None`` slot.
+  ``FactSet | None`` slot (and the ``--reruns`` replay sub-workflow's
+  outcome onto the ``replay_results`` tuple slot).
 
 Determinism contract (synthesis design doc §4): same ``FactBundle`` in,
 byte-identical ``list[Recommendation]`` out. Builder helpers below avoid
@@ -48,6 +48,7 @@ __all__ = [
     "build_fact_bundle",
     "has_failed_tests",
     "passed_count",
+    "record_has_failed_tests",
     "skipped_count",
     "total_count",
 ]
@@ -176,12 +177,18 @@ class FactBundle:
     """Bundle of facts the synthesizer reasons over for a single run.
 
     ``coverage_facts`` / ``regression_facts`` / ``localization_findings``
-    / ``replay_result`` are ``None`` exactly when the corresponding engine
-    returned Unavailable (or has not been called — Phase 6 entry stops at
-    Localization; Replay always ``None``). The ``StageEligibility`` slot
-    is the source of truth for "which stages had something to say" — the
-    synthesizer reads from there for ``unavailable_analysis`` and from the
-    fact-set slots for the other categories.
+    are ``None`` exactly when the corresponding engine returned Unavailable
+    (or has not been called). ``replay_results`` is a (possibly empty)
+    tuple of Replay Results: empty when Replay was not invoked
+    (``--reruns`` absent / no failed tests) or the attempt could not start
+    (``ReplayUnavailable``); today the integrated workflow performs at most
+    one whole-run Replay Attempt per invocation, so the tuple holds 0 or 1
+    elements — the tuple shape is the 2026-06-25 ``--reruns`` brief's pin
+    (future per-test replay scoping would yield multiple). The
+    ``StageEligibility`` slot is the source of truth for "which stages had
+    something to say" — the synthesizer reads from there for
+    ``unavailable_analysis`` and from the fact-set slots for the other
+    categories.
 
     ``run_reference`` is duplicated from ``run_record.run_reference`` for
     the convenience of synthesis code that needs the ref without dereferencing
@@ -194,7 +201,7 @@ class FactBundle:
     coverage_facts: CoverageFactSet | None
     regression_facts: RegressionFactSet | None
     localization_findings: LocalizationFinding | None
-    replay_result: ReplayResult | None
+    replay_results: tuple[ReplayResult, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +216,7 @@ def build_fact_bundle(
     coverage_facts: CoverageFactSet | None,
     regression_facts: RegressionFactSet | None,
     localization_findings: LocalizationFinding | None,
-    replay_result: ReplayResult | None = None,
+    replay_results: tuple[ReplayResult, ...] = (),
 ) -> FactBundle:
     """Compose a ``FactBundle`` from already-resolved engine outcomes.
 
@@ -221,10 +228,11 @@ def build_fact_bundle(
     aggregation step that produces an immutable bundle the synthesizer
     can read in any order.
 
-    ``replay_result`` defaults to ``None`` for the Phase 6 entry slice —
-    the integrated workflow does not call Replay yet (Phase 5 dep). The
-    parameter is kept on the signature so Phase 5 wiring is a one-line
-    diff: pass the result through.
+    ``replay_results`` defaults to the empty tuple — the integrated
+    workflow only invokes Replay when ``--reruns N > 0`` AND the Run
+    Record has failed tests (2026-06-25 decision). A ``ReplayUnavailable``
+    attempt outcome also maps to the empty tuple (the eligibility slot,
+    not the bundle, carries the unavailability reason).
     """
 
     return FactBundle(
@@ -234,7 +242,7 @@ def build_fact_bundle(
         coverage_facts=coverage_facts,
         regression_facts=regression_facts,
         localization_findings=localization_findings,
-        replay_result=replay_result,
+        replay_results=replay_results,
     )
 
 
@@ -245,6 +253,17 @@ def has_failed_tests(bundle: FactBundle) -> bool:
     user an explanation — i.e. tests failed AND some stage was
     unavailable) and by ``all_green`` (which requires zero failures).
 
+    Thin wrapper over ``record_has_failed_tests`` (which the integrated
+    workflow also uses pre-bundle to decide whether the ``--reruns``
+    replay sub-workflow triggers) so the two call sites share one
+    fail-detection semantic.
+    """
+    return record_has_failed_tests(bundle.run_record)
+
+
+def record_has_failed_tests(record: RunRecord) -> bool:
+    """Return True iff ``record`` reports at least one failing test.
+
     The probe uses ``summary_counts.failed`` first when present (the
     common case — pytest, jest, go, cargo all populate this), and falls
     back to scanning ``test_results`` for fail-like outcomes when the
@@ -253,10 +272,10 @@ def has_failed_tests(bundle: FactBundle) -> bool:
     ``dict[str, int]``-typed at the model layer so a future adapter
     could in principle ship without it.
     """
-    counts = bundle.run_record.summary_counts
+    counts = record.summary_counts
     if "failed" in counts:
         return counts["failed"] > 0
-    return any(_is_fail_outcome(tr.outcome) for tr in bundle.run_record.test_results)
+    return any(_is_fail_outcome(tr.outcome) for tr in record.test_results)
 
 
 def _is_fail_outcome(outcome: str) -> bool:

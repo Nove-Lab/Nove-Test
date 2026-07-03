@@ -1331,7 +1331,11 @@ def inspect_cmd(run_id: str) -> None:
 
 
 @app.command(name="test")
-def test_cmd(target: str = "") -> None:
+def test_cmd(
+    target: str = "",
+    *,
+    reruns: Annotated[int, Parameter(name=["--reruns"])] = 0,
+) -> None:
     """Execute the integrated `novetest test [target]` workflow.
 
     Chains Run → Memory → Coverage → Regression → Localization →
@@ -1341,6 +1345,17 @@ def test_cmd(target: str = "") -> None:
     policy). Run execution (step 2) is fatal; the handler maps the same
     exception surface ``run_cmd`` does (``EngineNotReadyError`` +
     ``AdapterInvocationError``) and re-uses the same envelope shape.
+
+    ``--reruns N`` (default 0 = off; decision
+    ``2026-06-25-test-reruns-flag-and-replay-integration``) opts into the
+    Replay sub-workflow: when the run has failed tests, one whole-run
+    Replay Attempt executes with ``reruns=N`` and its result feeds the
+    synthesizer — an ``inconsistent`` classification makes the
+    ``flaky_suspected`` category reachable, and
+    ``data.stage_eligibility.replay`` transitions ``"not_run"`` →
+    ``"available"``. ``N=1`` is the cheapest opt-in; ``5`` is the
+    recommended floor for flake detection. Negative values are rejected
+    with ``invalid-flag`` (exit 2), mirroring the ``--formula`` pattern.
 
     Recommendations are synthesized in-memory from the
     ``FactBundle`` — never persisted (Open Q #9 / brief §2). Re-deriving
@@ -1353,8 +1368,25 @@ def test_cmd(target: str = "") -> None:
     """
 
     store = _require_store("test")
+    if reruns < 0:
+        _emit_and_exit(
+            Envelope(
+                command="test",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="invalid-flag",
+                        message=(
+                            f"Invalid --reruns={reruns!r}; "
+                            "expected a non-negative integer"
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
     try:
-        outcome = asyncio.run(test_target_in_store(target, store))
+        outcome = asyncio.run(test_target_in_store(target, store, reruns=reruns))
     except EngineNotReadyError as exc:
         _emit_and_exit(
             Envelope(

@@ -64,7 +64,7 @@ def _make_outcome(*, status: str, recommendations: list[Recommendation] | None =
         coverage_facts=None,
         regression_facts=None,
         localization_findings=None,
-        replay_result=None,
+        replay_results=(),
     )
     return TestOutcome(
         memory_entry=entry,

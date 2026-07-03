@@ -64,7 +64,8 @@ async def test_flaky_suspected_fires_when_replay_result_inconsistent(
     assert result.classification == "inconsistent"
 
     # Build a FactBundle carrying the real ReplayResult (mirrors how the
-    # integrated workflow would pass it through once Replay is woven in).
+    # integrated ``novetest test --reruns N`` workflow passes it through
+    # since the 2026-06-25 integration cycle — tuple-shaped slot).
     original_record = retrieve_run_evidence(init.store, original_ref).run_record
     eligibility = StageEligibility(
         coverage="available",
@@ -79,7 +80,7 @@ async def test_flaky_suspected_fires_when_replay_result_inconsistent(
         coverage_facts=None,
         regression_facts=None,
         localization_findings=None,
-        replay_result=result,
+        replay_results=(result,),
     )
 
     recommendations = synthesize_recommendation(bundle)

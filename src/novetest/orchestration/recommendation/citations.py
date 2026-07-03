@@ -188,17 +188,35 @@ def _coverage_gap_citations(
 def _flaky_suspected_citations(
     hit: CategoryHit, bundle: FactBundle
 ) -> list[dict[str, Any]]:
-    """One replay_result + one test_result."""
+    """One replay_result + one test_result.
+
+    The replay_result citation references the Replay Result THIS hit was
+    emitted from — matched deterministically on the hit payload's
+    ``(run_reference, test_id)`` pair against ``bundle.replay_results``
+    (first match wins; the matcher copies both keys from the result, so a
+    match always exists for matcher-produced hits). The test_result
+    citation alone still satisfies the REQ-ORCH-005 ≥1-citation floor for
+    defensively-constructed hits with no matching result.
+    """
 
     cites: list[dict[str, Any]] = []
-    if bundle.replay_result is not None:
+    source = next(
+        (
+            rr
+            for rr in bundle.replay_results
+            if rr.run_reference.run_id == hit.payload.get("run_reference")
+            and (rr.test_id or "") == hit.payload.get("test_id")
+        ),
+        None,
+    )
+    if source is not None:
         cites.append(
             {
                 "kind": KIND_REPLAY_RESULT,
-                "run_reference": bundle.replay_result.run_reference.to_dict(),
+                "run_reference": source.run_reference.to_dict(),
                 "selector": {
-                    "classification": bundle.replay_result.classification,
-                    "test_id": bundle.replay_result.test_id,
+                    "classification": source.classification,
+                    "test_id": source.test_id,
                 },
             }
         )

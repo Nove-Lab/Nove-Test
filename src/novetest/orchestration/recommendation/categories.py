@@ -353,35 +353,36 @@ def match_coverage_gap(bundle: FactBundle) -> list[CategoryHit]:
 
 
 def match_flaky_suspected(bundle: FactBundle) -> list[CategoryHit]:
-    """Trigger on a Replay Result classified ``inconsistent``.
+    """Trigger on Replay Results classified ``inconsistent``.
 
-    Brief §1 (priority 5). Phase 5 dep — the trigger logic ships in
-    Phase 6 against the ``ReplayResult`` placeholder (see
-    ``fact_bundle.py``); Phase 5 will provide the real Replay engine and
-    the integrated workflow will populate ``bundle.replay_result``. Until
-    then the integrated test workflow always passes ``replay_result=None``
-    so this matcher returns ``[]`` for real runs.
+    Brief §1 (priority 5), reachable from ``novetest test --reruns N``
+    since the 2026-06-25 integration cycle: the integrated workflow
+    populates ``bundle.replay_results`` with the Replay Attempt outcome(s)
+    for the run (today at most one whole-run attempt; the tuple shape is
+    forward-compatible with per-test replay scoping). One hit per result
+    classified ``inconsistent``, emitted in tuple order — the tuple is
+    deterministic, so the hit list is too.
     """
 
-    rr = bundle.replay_result
-    if rr is None:
-        return []
-    if rr.classification != "inconsistent":
-        return []
-    test_id = rr.test_id or ""
-    return [
-        CategoryHit(
-            category=CATEGORY_FLAKY_SUSPECTED,
-            priority=PRIORITIES[CATEGORY_FLAKY_SUSPECTED],
-            primary_slot=test_id,
-            payload={
-                "test_id": test_id,
-                "reruns_total": rr.reruns_total,
-                "reruns_failed": rr.reruns_failed,
-                "run_reference": rr.run_reference.run_id,
-            },
+    hits: list[CategoryHit] = []
+    for rr in bundle.replay_results:
+        if rr.classification != "inconsistent":
+            continue
+        test_id = rr.test_id or ""
+        hits.append(
+            CategoryHit(
+                category=CATEGORY_FLAKY_SUSPECTED,
+                priority=PRIORITIES[CATEGORY_FLAKY_SUSPECTED],
+                primary_slot=test_id,
+                payload={
+                    "test_id": test_id,
+                    "reruns_total": rr.reruns_total,
+                    "reruns_failed": rr.reruns_failed,
+                    "run_reference": rr.run_reference.run_id,
+                },
+            )
         )
-    ]
+    return hits
 
 
 def match_unavailable_analysis(bundle: FactBundle) -> list[CategoryHit]:
@@ -434,9 +435,9 @@ def match_all_green(bundle: FactBundle) -> list[CategoryHit]:
     rf = bundle.regression_facts
     if rf is not None and rf.summary.regressed > 0:
         return []
-    # ``flaky_suspected`` candidate? Replay always None in Phase 6, so this
-    # branch is a no-op until Phase 5; pre-wired for symmetry.
-    if bundle.replay_result is not None and bundle.replay_result.classification == "inconsistent":
+    # ``flaky_suspected`` candidate? Any inconsistent Replay Result on the
+    # bundle disqualifies ``all_green`` (mirrors the matcher's trigger).
+    if any(rr.classification == "inconsistent" for rr in bundle.replay_results):
         return []
     return [
         CategoryHit(
