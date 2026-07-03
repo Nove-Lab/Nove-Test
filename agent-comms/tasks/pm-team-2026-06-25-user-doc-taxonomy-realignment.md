@@ -10,6 +10,7 @@ related:
   - design/user-doc/human
   - design/user-doc/agent
   - design/website-plan/handoff/docs
+  - agent-comms/decisions/2026-07-03-engine-selection-policy.md
 ---
 
 # Task: PM — Realign user-doc + Docs handoff with the real recommendation taxonomy
@@ -84,3 +85,24 @@ Total file count: 9 files.
 
 - After the `--reruns` cycle merges, this task expands slightly: documenting the new `--reruns` flag's effect on `flaky_suspected` becomes part of the same doc surface. Plan for that follow-up edit pass.
 - If marketing team raises questions about category names while this task is pending, point them at the marketing demo (real names) and at this task; do not introduce a third naming.
+
+---
+
+## Amendment 2026-07-03 — rescope after the 2026-06-26 user-doc rewrite (CEO-approved cycle plan)
+
+**Status check (2026-07-03):** the full user-doc rewrite at `ef61eda` (2026-06-26, 23 files) already resolved the main scope of this task:
+
+- `grep -rln "tests_failed|new_test_failure|coverage_regressed|flaky_suspect|recovered_from_failure" design/user-doc design/website-plan/handoff/docs` → **0 hits**. Steps 3–6 done.
+- `--reruns` forward-reference annotations (step 8) → present in 8 files. Done.
+
+**Residual scope (still owed by this task):**
+
+1. **Step 7 — SSoT pin section**: verified 2026-07-03 that `design/implementation-plan/recommendation-synthesis.md` still has NO "Closed taxonomy v1 — authoritative list" section. Add it, pointing at `categories.py`, with the step-9 checklist for future taxonomy additions.
+2. **`rm -rf .novetest` → `novetest reset --confirm` per-occurrence review** (carried forward from the reset cycle close, 2026-06-25): 8 files still contain `rm -rf .novetest`. NOT a blind sed — uninstall contexts (`human/install.md:263` and its handoff mirror) legitimately keep `rm -rf` (uninstall removes the store without re-init); recovery contexts should offer `reset --confirm` first. Note: `reset --confirm` **refuses** on a corrupt store (exit 5, `store-corrupt`, live store preserved), so corrupt-store rows (e.g. `agent/after-test.md:98`) must keep manual removal as the documented fallback — do not over-substitute.
+
+**Fold-in scope (new, per the CEO-approved 2026-07-03 cycle plan — this task is Wave 3):**
+
+3. **Anchored-pin doc pass** (after `orchestration-team-2026-07-03-anchored-init-and-verb-resolution` merges): `design/user-doc/{human,agent}/languages.md` + `design/website-plan/handoff/docs/supported-languages.md` claim "You do **not** pass an `--engine` flag" — false post-merge. Document: init pin + `data.pinned_engine`, `--engine` on init (ambiguous case) and as transient override on test/run, walk-up anchor resolution (verbs work from subdirectories), bare-vs-explicit-target semantics (D3), new error codes `no-engine-detected` / `engine-ambiguous` with `data.candidates` shapes, D6 silent backfill. Source envelope shapes from the Orchestration handoff, not from the brief.
+4. **`--reruns` doc pass** (after `orchestration-team-2026-06-25-test-reruns-flag` merges): replace the "pending integration cycle" annotations — `flaky_suspected` becomes reachable via `novetest test --reruns N`; document the flag and the `replay_result` citation kind in worked examples.
+
+**Trigger:** execute as ONE consolidated PM doc commit once both Wave 1 (reruns) and Wave 2 (anchored-pin) slices are merged and verified. Do not start earlier — envelope shapes must be sourced from merged handoffs, not from briefs.
