@@ -206,6 +206,18 @@ async def resolve_execution_engine(
     )
 
 
+def _has_all_dots_component(candidate: Path) -> bool:
+    """True when any component of ``candidate`` consists solely of dots.
+
+    ``...`` (go's package wildcard) and longer dot runs are engine-native
+    pattern syntax, never filesystem names novetest should resolve. ``.``
+    never survives ``Path`` parsing and ``..`` is genuine parent
+    navigation, so neither triggers.
+    """
+
+    return any(part != ".." and set(part) == {"."} for part in candidate.parts)
+
+
 def normalize_target_expression(target_expression: str, anchor: Path) -> str:
     """Normalize an explicit target to anchor-relative canonical POSIX form (D3).
 
@@ -215,14 +227,20 @@ def normalize_target_expression(target_expression: str, anchor: Path) -> str:
       invocations are total regardless of the invoking subdirectory);
     - an absolute path → relativized against the anchor
       (``to_workspace_relative_posix``, never-absolute on every platform);
+    - a relative path with an all-dots component (go's ``./...`` wildcard
+      family) → verbatim, decided lexically and NEVER probed: Win32 strips
+      trailing dots from path components, so ``(anchor / '...').exists()``
+      answers for the anchor itself and the probe would reroute the
+      pattern into the existing-subpath branch, mangling ``./...`` to
+      ``...`` (the 2026-07-04 windows-latest CI red);
     - a relative path that exists under the anchor → its canonical POSIX
       subpath (strips ``./`` prefixes, trailing slashes, and platform
       separators, so ``./tests/test_x.py`` ≡ ``tests/test_x.py`` — one
       baseline series per ask);
-    - anything else → verbatim. Engine-native patterns (go's ``./...``)
-      and not-yet-existing paths pass through untouched — we do not
-      pre-validate, keeping parity with the native engine's own resolution
-      rules (same philosophy as ``run/resolve_test_target``).
+    - anything else → verbatim. Engine-native patterns and not-yet-existing
+      paths pass through untouched — we do not pre-validate, keeping
+      parity with the native engine's own resolution rules (same
+      philosophy as ``run/resolve_test_target``).
 
     ``::``-suffixed node ids (``tests/test_x.py::test_a``) normalize their
     path half and reattach the node half unchanged.
@@ -239,6 +257,8 @@ def normalize_target_expression(target_expression: str, anchor: Path) -> str:
     candidate = Path(path_part)
     if candidate.is_absolute():
         normalized = to_workspace_relative_posix(candidate, anchor)
+    elif _has_all_dots_component(candidate):
+        normalized = path_part
     elif (anchor / candidate).exists():
         normalized = to_workspace_relative_posix(anchor / candidate, anchor)
     else:

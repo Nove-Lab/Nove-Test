@@ -394,6 +394,53 @@ def test_normalize_engine_native_pattern_passes_through(workspace: Path) -> None
     assert normalize_target_expression("./...", workspace) == "./..."
 
 
+def test_normalize_all_dots_component_never_probes_filesystem(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verbatim decision for all-dots components is purely lexical.
+
+    Win32 strips trailing dots from path components, so an ``exists()``
+    probe on ``anchor / '...'`` answers for the anchor itself and rerouted
+    go's ``./...`` into the existing-subpath branch (``'...'`` — the
+    2026-07-04 windows-latest CI red). A recording spy makes that Windows
+    failure shape observable on POSIX: if the fix regresses to consulting
+    the filesystem, ``probed`` is non-empty on every platform (a raising
+    bomb instead of a spy would INTERNALERROR pytest's own report
+    machinery, which also calls ``Path.exists``).
+    """
+
+    probed: list[Path] = []
+    real_exists = Path.exists
+
+    def spy(self: Path) -> bool:
+        probed.append(self)
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", spy)
+    assert normalize_target_expression("./...", workspace) == "./..."
+    assert normalize_target_expression("...", workspace) == "..."
+    assert normalize_target_expression("./sub/...", workspace) == "./sub/..."
+    assert probed == []  # never consulted — the decision is lexical
+
+
+def test_normalize_parent_component_still_probes(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``..`` is parent navigation, not pattern syntax — the all-dots
+    lexical guard must not swallow it; the exists-probe path is unchanged."""
+
+    probed: list[Path] = []
+    real_exists = Path.exists
+
+    def spy(self: Path) -> bool:
+        probed.append(self)
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", spy)
+    assert normalize_target_expression("../ghost.py", workspace) == "../ghost.py"
+    assert probed  # the probe ran; the path does not exist → verbatim
+
+
 def test_normalize_nonexistent_path_passes_through(workspace: Path) -> None:
     """No pre-validation: parity with the native engine's own resolution."""
 
