@@ -8,7 +8,7 @@ Last regenerated: 2026-07-04
 _(none)_
 
 ## Pending
-- [orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md](./tasks/orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md) — `novetest-pm-team → novetest-orchestration-team` (windows-dotdotdot-normalization-fastfollow)
+_(none)_
 
 ## Blocked
 _(none)_
@@ -22,4 +22,5 @@ _(none)_
 ## Recent history (last 7 days)
 - [2026-07-02-install-path-website-integration-close.md](./history/2026-07-02-install-path-website-integration-close.md) — `novetest-pm-team → all` (install-path-website-integration-close)
 - [2026-07-03-anchored-pin-wave1-reruns-and-windows-fastfollow.md](./history/2026-07-03-anchored-pin-wave1-reruns-and-windows-fastfollow.md) — `novetest-pm-team → all` (anchored-pin-wave1-reruns-and-windows-fastfollow)
+- [2026-07-04-anchored-pin-program-close.md](./history/2026-07-04-anchored-pin-program-close.md) — `novetest-pm-team → all` (anchored-pin-program-close)
 - [2026-07-04-anchored-pin-wave2-close.md](./history/2026-07-04-anchored-pin-wave2-close.md) — `novetest-pm-team → all` (anchored-pin-wave2-close)
