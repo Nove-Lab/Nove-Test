@@ -54,6 +54,10 @@ NOVETEST_OUTPUT=json novetest init
       "state": "ready"
     },
     "initialized_at": 1782370092699,
+    "pinned_engine": {
+      "ecosystem": "python",
+      "engine_name": "pytest"
+    },
     "store_path": "/home/you/calc-demo/.novetest",
     "store_state": "ready"
   },
@@ -66,6 +70,7 @@ NOVETEST_OUTPUT=json novetest init
 
 | Field | Meaning |
 |---|---|
+| `data.pinned_engine` | The `(ecosystem, engine_name)` pair `init` **pinned** — every later verb runs this engine; nothing is re-detected at run time. Also on the `status` envelope. |
 | `data.engine_readiness.state` | `"ready"` / `"engine-missing"` / `"engine-misconfigured"` — the three real states. Route on this. (`"engine-not-ready"` is **not** a state.) |
 | `data.engine_readiness.engine` | Detected `engine_name`, e.g. `"pytest"`. `null` when no engine. |
 | `data.engine_readiness.evidence` | Detected marker files, e.g. `["pyproject.toml"]`. |
@@ -76,6 +81,22 @@ NOVETEST_OUTPUT=json novetest init
 `init` exits **0** even when `state` is `engine-missing` (the store is
 created regardless). Gate "can I run tests?" on
 `engine_readiness.state == "ready"`, not on the exit code.
+
+Two `init` outcomes create **nothing** and require routing: exit 4 +
+`errors[0].code = "no-engine-detected"` (markerless directory —
+`data.candidates[]` lists sub-projects to `cd` into and init) and
+exit 2 + `errors[0].code = "engine-ambiguous"` (several viable engines
+— re-run `novetest init --engine <name>`). Details:
+[languages.md](./languages.md#engine-selection-the-anchored-pin--no-run-time-detection).
+
+### Where to run subsequent verbs from
+
+Any subdirectory of the workspace: every verb walks **up** from cwd to
+the nearest `.novetest/` (like git) and anchors there. A bare
+`novetest test` is always workspace-scoped regardless of cwd; explicit
+relative targets are interpreted **anchor-relative**, so the same
+target string from different subdirectories lands in the same baseline
+series. No `.novetest/` on the walk → exit 2, `uninitialized`.
 
 ---
 

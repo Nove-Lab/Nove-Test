@@ -8,12 +8,24 @@ command each adapter invokes (shown simplified — coverage runs add a few
 extra flags), the per-test ID convention, and whether coverage facts are
 produced.
 
-`novetest` auto-detects the engine from workspace markers. You **do
-not** pass an `--engine` flag. The detected pair appears as
-`data.engine_readiness.ecosystem` + `data.engine_readiness.engine` on
-the `init` envelope, and as `data.memory_entry.run_record.engine_name`
-+ `…ecosystem` on every run. Pin `NOVETEST_OUTPUT=json` for stable
-machine output.
+`novetest init` detects the engine from workspace markers and **pins**
+it into the Project Store; every later verb runs the pinned engine —
+nothing is re-detected at run time. The pin appears as
+`data.pinned_engine` (`{"ecosystem": …, "engine_name": …}`) on the
+`init` and `status` envelopes, alongside the existing
+`data.engine_readiness.*` fields; each run still carries
+`data.memory_entry.run_record.engine_name` + `…ecosystem`. Pin
+`NOVETEST_OUTPUT=json` for stable machine output.
+
+`--engine <name>` exists in exactly two places — route on the error
+codes below, do not guess:
+
+- `novetest init --engine <name>` — required only when `init` refuses
+  with `engine-ambiguous`; also re-pins an existing store in place
+  (run history retained).
+- `novetest test|run --engine <name>` — one-off override for a single
+  invocation; the pin is NOT changed. Invalid value on any verb →
+  `invalid-flag`, exit 2.
 
 ## The six supported pairs
 
@@ -34,19 +46,30 @@ Do **not** emit `engine_name` values like `go`, `cargo`, `dotnet`,
 occur. Java rejects JUnit 4 and TestNG; .NET rejects MSTest and NUnit;
 Rust requires `cargo-nextest` (no plain `cargo test`).
 
-## Detection priority (single-engine at MVP)
+## Engine selection (the anchored pin — no run-time detection)
 
-`novetest test` runs **one engine at a time**. When several ecosystems
-match the same workspace root, readiness disambiguates with a fixed
-priority:
+`novetest test` runs **one engine at a time**: the pinned one. `init`
+outcomes to route on:
 
-```
-pytest > jest > go-test > cargo-test > junit > xunit
-```
+| `init` situation | Exit | Envelope | Your move |
+|---|---|---|---|
+| Exactly one viable engine | 0 | `data.pinned_engine` set | proceed |
+| No marker at this directory | 4 | `errors[0].code = "no-engine-detected"`; `data.candidates[]` = `[{ecosystem, engine_name, path}]` (bounded scan: depth ≤ 2, vendor dirs skipped; `data.scan_refused: true` at `/` and `$HOME`) | `cd` into each candidate `path` and run `init` there. **Nothing was created.** |
+| ≥ 2 viable engines (or ≥ 2 markers with zero toolchains ready) | 2 | `errors[0].code = "engine-ambiguous"`; `data.candidates[]` | re-run `novetest init --engine <name>`. **Nothing was created.** |
 
-A repo with both `pyproject.toml` and `package.json` always routes to
-**pytest**; the other matches are ignored at that invocation. There is
-no single-envelope polyglot orchestration at MVP — use one
+"Viable" = marker present AND toolchain-READY. A `pyproject.toml` +
+tooling-only `package.json` root (jest not installed) pins `pytest`
+silently — the same repo can therefore init cleanly on one host and
+return `engine-ambiguous` on another. Never cache init outcomes across
+machines.
+
+Legacy pin-less stores: the first verb backfills `pinned_engine`
+silently when unambiguous, or exits 2 with `engine-ambiguous`
+(instructing re-init) when not. `reset --confirm` re-inits **at the
+anchor** and carries the pin; on an ambiguous pin-less store it
+refuses with `engine-ambiguous` and wipes nothing.
+
+There is no single-envelope polyglot orchestration at MVP — use one
 `.novetest/` per ecosystem subdirectory.
 
 ### Polyglot: one `.novetest/` per ecosystem subdirectory

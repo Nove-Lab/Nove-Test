@@ -2,8 +2,9 @@
 from: novetest-pm-team
 to: novetest-pm-team
 type: task
-status: pending
+status: resolved
 created: 2026-06-25
+resolved: 2026-07-04
 slug: user-doc-taxonomy-realignment
 related:
   - src/novetest/orchestration/recommendation/categories.py
@@ -14,6 +15,23 @@ related:
 ---
 
 # Task: PM — Realign user-doc + Docs handoff with the real recommendation taxonomy
+
+> **RESOLVED 2026-07-04** — Wave 3 consolidated doc pass executed. Residual
+> item 1 (SSoT pin): `recommendation-synthesis.md` §8 added with the
+> taxonomy-change checklist, cross-linked from all four category-listing
+> pages. Residual item 2 (`rm -rf .novetest` review): per-occurrence review
+> found ALL remaining occurrences are uninstall or corrupt/wipe-failed
+> contexts where `reset --confirm` cannot help — correct as-is, zero edits.
+> Fold-in 3 (anchored-pin): languages ×3 + quick-start ×3 rewritten from
+> the merged slice's Manual-Test-observed envelopes (pin, --engine, walk-up,
+> D3 bare/explicit semantics, no-engine-detected / engine-ambiguous,
+> host-dependent viability, lazy backfill); dangling walk-up anchor in
+> agent/quick-start repaired; new-error troubleshooting entries added.
+> Fold-in 4 (--reruns): all five "never fires today" flaky_suspected
+> annotations replaced with the ratified whole-run semantics incl. the
+> empty-test_id nuance; worked usage added to human/after-test. Also folded:
+> Manual Test Observation 2 (zero-collected explicit target reports passed)
+> as troubleshooting cautions. Retire this file at the next cycle close.
 
 - **Owner**: novetest-pm-team (self)
 - **Status**: pending

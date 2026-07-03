@@ -73,6 +73,22 @@ invoked from outside the project tree, `cd` into it first.
 
 **Idempotency.** Safe to retry indefinitely after `init`.
 
+### `no-engine-detected` (exit 4, `init` only)
+
+Markerless directory; nothing created. `data.candidates[]` lists
+`{ecosystem, engine_name, path}` sub-projects (bounded scan, depth ≤ 2;
+`data.scan_refused: true` at `/` and `$HOME` — scan not attempted).
+Recovery: `cd` into each candidate `path`, run `init` there. Do NOT
+create `.novetest/` in directories the operator didn't designate.
+
+### `engine-ambiguous` (exit 2)
+
+≥ 2 viable engines (marker + toolchain-READY) at the init directory —
+or a legacy pin-less store at such a root. Nothing is created/wiped.
+Recovery: `novetest init --engine <name>` with a value from
+`data.candidates[]`. Viability is host-dependent; never cache this
+outcome across machines.
+
 ### `engine-engine-missing` (exit 4)
 
 ```json
@@ -312,11 +328,20 @@ Route on `category`:
 | `investigate_location` | 2 | SBFL-ranked suspicious location. Open `slots.file` @ `slots.primary_line`. |
 | `investigate_regression` | 3 | Newly-failing transition vs baseline. |
 | `coverage_gap` | 4 | Uncovered lines overlap a suspect location. |
-| `flaky_suspected` | 5 | **Never fires today** (replay isn't wired into `test`). |
+| `flaky_suspected` | 5 | Fires only with `novetest test --reruns N` (N ≥ 1) when the failed run's whole-run replay diverges. Empty `test_id` = divergence across several tests. |
 | `unavailable_analysis` | 6 | Tests failed but a stage was unavailable. Read `slots.reason_per_stage`. |
+
+(Authoritative category list: `design/implementation-plan/recommendation-synthesis.md` §8.)
 | `all_green` | 7 | No failures, no regressions. (Exclusive — never coexists with another.) |
 
 ---
+
+## Zero-collected explicit targets (NOT an error — but check)
+
+An explicit target that matches nothing (typo, non-anchor-relative
+path) yields `collected: 0, total: 0, status: "passed"`, exit 0.
+Before treating a targeted run as green, assert
+`data.memory_entry.run_record.total > 0`.
 
 ## Stage-eligibility surprises (NOT errors)
 

@@ -176,8 +176,10 @@ Each recommendation has exactly these keys: `recommendation_id`,
 | 2 | `investigate_location` | A localization finding, confidence ∈ {high, medium}, rank ≤ 3. |
 | 3 | `investigate_regression` | A `regressed` (newly-failing) transition vs baseline. |
 | 4 | `coverage_gap` | Uncovered lines overlap a localization entry's span. |
-| 5 | `flaky_suspected` | Replay classified `inconsistent`. **Never fires from `test`** (replay isn't wired in). |
+| 5 | `flaky_suspected` | Replay classified `inconsistent`. Reachable via `novetest test --reruns N` (N ≥ 1, default 0 = never replays): one whole-run replay when the run has failures; `stage_eligibility.replay` flips `not_run` → `available`/`unavailable`. When divergence spreads across several tests, v1 emits ONE hit whose `test_id` is empty — do not assume per-test attribution. |
 | 6 | `unavailable_analysis` | Tests failed AND some stage was `unavailable`. |
+
+(Category strings are the authoritative code constants — `design/implementation-plan/recommendation-synthesis.md` §8. Never route on paraphrases.)
 | 7 | `all_green` | Zero failures AND zero regressed. Mutually exclusive with all others. |
 
 Behavioural notes:
