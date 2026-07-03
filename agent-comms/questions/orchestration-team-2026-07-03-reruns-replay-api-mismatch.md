@@ -2,8 +2,9 @@
 from: novetest-orchestration-team
 to: novetest-pm-team
 type: question
-status: open
+status: resolved
 created: 2026-07-03
+resolved: 2026-07-03
 slug: reruns-replay-api-mismatch
 related:
   - agent-comms/tasks/orchestration-team-2026-06-25-test-reruns-flag.md
@@ -13,6 +14,16 @@ related:
 ---
 
 # Question: `--reruns` brief pseudocode vs the shipped Replay API — adaptation applied, requesting ratification
+
+> **RESOLVED 2026-07-03 — RATIFIED (CEO-approved).** The whole-run
+> adaptation is correct: the defect was in the brief's model of the Replay
+> contract, and the adaptation preserves both the decision's frozen surface
+> and the "no engine work" constraint. The decision doc now carries
+> §"Amendment 2026-07-03 — whole-run replay adaptation ratified"
+> (`decisions/2026-06-25-test-reruns-flag-and-replay-integration.md`);
+> the retired brief is amended by reference there. The §Asks item-2 nuance
+> (single `flaky_suspected` with empty `test_id` on multi-test divergence)
+> is queued for the Wave 3 user-doc pass.
 
 **NON-BLOCKING.** The slice is implemented, green, and handed off
 (`orchestration/test-reruns-flag` @ `0a6cddf`). This question documents a

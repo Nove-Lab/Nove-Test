@@ -110,3 +110,38 @@ PM coordinates with the marketing-PM / website team if a follow-on demo update i
 - Auto-tuning of `--reruns` based on test characteristics.
 - Replay budgeting / timeout aggregation across multiple failed tests (the per-test `--timeout` from the existing `replay` primitive is used as-is).
 - MCP transport surface for the new flag (Phase 7 inherits).
+
+---
+
+## Amendment 2026-07-03 — whole-run replay adaptation ratified
+
+The original §"Decision" item 1 and §"Integrated workflow sequence" item 3
+pinned a **per-failed-test loop** (`replay_run(..., target=test_id)` per
+failed test). That composition was unimplementable against the shipped
+Replay engine: `replay_run` has no `target` parameter (attempt granularity
+is the whole original run, `src/novetest/replay/engine.py:49`);
+`ReplayUnavailableError` is a returned discriminator, never raised; and
+persistence is keyed by original run id only, so N iterations would
+overwrite one another while re-executing the full suite `N_failed × reruns`
+times.
+
+**Ratified adaptation** (shipped `0a6cddf`, question
+`orchestration-team-2026-07-03-reruns-replay-api-mismatch`): when
+`--reruns N > 0` and the Run Record has failed tests, ONE whole-run
+`replay_run(store, original_ref, reruns=N, timeout=...)` attempt is made;
+the Replay classifier performs per-test divergence analysis internally.
+`FactBundle.replay_results: tuple[ReplayResult, ...]` holds 0 or 1 elements
+today and is forward-compatible with a future per-test-scoped Replay API.
+Every element of the frozen surface (flag signature, default-0 byte
+identity, `invalid-flag` handling, envelope diff shape, exit-code
+dominance, persistence location) ships exactly as originally pinned.
+
+Behavioral nuance for the user-doc pass (Wave 3): with multiple flaky
+tests in one run, v1 emits ONE `flaky_suspected` recommendation whose
+`test_id` is empty when divergence spreads across several tests. Per-test
+attribution would be a Replay-engine feature request (per-test scoping),
+not an orchestration change — out of scope unless demand surfaces.
+
+The retired task brief (`orchestration-team-2026-06-25-test-reruns-flag`,
+removed with the wave-1 cycle close) is amended by reference: its §2
+pseudocode is superseded by this section.
