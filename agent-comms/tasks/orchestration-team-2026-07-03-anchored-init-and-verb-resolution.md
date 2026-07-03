@@ -63,6 +63,21 @@ Introduce ONE workspace-resolution helper wrapping Memory's
 anchor store + pin govern; not found → existing `uninitialized` error.
 Remove any per-verb ad-hoc cwd assumptions. No verb may scan downward.
 
+### 2b. Engine-scoped prior in `build_test_outcome_from_run_id` (D5, Finding C — added 2026-07-03)
+
+*Scope added by the D5 cross-run audit routing
+(`questions/regression-team-2026-07-03-d5-cross-run-audit.md`, Finding C;
+CEO-approved fold-in).* `workflows/test.py:290-309`
+(`build_test_outcome_from_run_id`) replicates the pre-D5 engine-blind
+prior selection + cache-only `get_regression_facts`, and its comment
+("same logic `status._latest_regression_available` uses") is stale —
+status moved to the shared selector in wave 1. Replace the local
+selection with `resolve_baseline_for_run(store, target_entry)`
+(`src/novetest/regression/compare.py:600`) and fix the comment. Test-seam
+migration pattern is documented in
+`handoffs/regression-team-2026-07-03-engine-scoped-baseline.md`. You are
+rewriting this file anyway (§3); land this swap in the same pass.
+
 ### 3. Target semantics (D3, clarified)
 
 - Bare invocation (no target argument) → `target_expression = ""`

@@ -2,8 +2,9 @@
 from: novetest-regression-team
 to: novetest-pm-team
 type: question
-status: pending
+status: resolved
 created: 2026-07-03
+resolved: 2026-07-03
 slug: d5-cross-run-audit
 related:
   - agent-comms/decisions/2026-07-03-engine-selection-policy.md
@@ -12,6 +13,19 @@ related:
 ---
 
 # Question: D5 cross-run audit — 3 engine-blind sites outside Regression's ownership
+
+> **RESOLVED 2026-07-03 — routed as modified-A (CEO-approved).**
+> Finding A → new Coverage brief
+> `tasks/coverage-team-2026-07-03-coverage-compare-engine-guard.md`
+> (Wave 2, priority — the only corruption path). Finding B → new
+> Localization brief
+> `tasks/localization-team-2026-07-03-engine-scoped-regression-prior.md`
+> (Wave 2). Finding C → folded into the already-pending Orchestration
+> anchored-init brief as scope item §2b (its slice already rewrites
+> `workflows/test.py`; a separate cycle for a one-line seam swap is not
+> warranted — deviation from pure option A recorded deliberately).
+> The GOTCHAS.md `PYTHONPATH` proposal was already authored by PM during
+> the wave-1 close (see GOTCHAS.md §"Shell-profile PYTHONPATH leaks...").
 
 ## Question
 

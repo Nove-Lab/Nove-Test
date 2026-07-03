@@ -8,16 +8,16 @@ Last regenerated: 2026-07-03
 _(none)_
 
 ## Pending
+- [coverage-team-2026-07-03-coverage-compare-engine-guard.md](./tasks/coverage-team-2026-07-03-coverage-compare-engine-guard.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-engine-guard)
+- [localization-team-2026-07-03-engine-scoped-regression-prior.md](./tasks/localization-team-2026-07-03-engine-scoped-regression-prior.md) — `novetest-pm-team → novetest-localization-team` (engine-scoped-regression-prior)
 - [orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md](./tasks/orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md) — `novetest-pm-team → novetest-orchestration-team` (anchored-init-and-verb-resolution)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
-- [regression-team-2026-07-03-d5-cross-run-audit.md](./questions/regression-team-2026-07-03-d5-cross-run-audit.md) — `novetest-regression-team → novetest-pm-team` (d5-cross-run-audit)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [orchestration-team-2026-07-03-reruns-replay-api-mismatch.md](./questions/orchestration-team-2026-07-03-reruns-replay-api-mismatch.md) — `novetest-orchestration-team → novetest-pm-team` (reruns-replay-api-mismatch)
-- [regression-team-2026-07-03-d5-cross-run-audit.md](./questions/regression-team-2026-07-03-d5-cross-run-audit.md) — `novetest-regression-team → novetest-pm-team` (d5-cross-run-audit)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-07-03-engine-selection-policy.md](./decisions/2026-07-03-engine-selection-policy.md) — `novetest-pm-team → all` (engine-selection-policy)
