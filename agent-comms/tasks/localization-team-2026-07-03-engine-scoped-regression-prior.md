@@ -2,7 +2,7 @@
 from: novetest-pm-team
 to: novetest-localization-team
 type: task
-status: pending
+status: done
 created: 2026-07-03
 slug: engine-scoped-regression-prior
 related:

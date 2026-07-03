@@ -12,6 +12,9 @@ _(none)_
 - [orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md](./tasks/orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md) — `novetest-pm-team → novetest-orchestration-team` (anchored-init-and-verb-resolution)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 - [localization-team-2026-07-03-engine-scoped-regression-prior.md](./handoffs/localization-team-2026-07-03-engine-scoped-regression-prior.md) — `novetest-localization-team → novetest-main-branch-team` (engine-scoped-regression-prior)
+- [2026-07-04-anchored-init-and-verb-resolution.md](./verifications/2026-07-04-anchored-init-and-verb-resolution.md) — `novetest-main-branch-team → novetest-manual-test-team` (anchored-init-and-verb-resolution)
+- [2026-07-04-coverage-compare-engine-guard.md](./verifications/2026-07-04-coverage-compare-engine-guard.md) — `novetest-main-branch-team → novetest-manual-test-team` (coverage-compare-engine-guard)
+- [2026-07-04-engine-scoped-regression-prior.md](./verifications/2026-07-04-engine-scoped-regression-prior.md) — `novetest-main-branch-team → novetest-manual-test-team` (engine-scoped-regression-prior)
 
 ## Blocked
 _(none)_
