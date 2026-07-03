@@ -1,11 +1,17 @@
 """Engine readiness assessment for a Project Workspace.
 
 Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
-1. `detect_engine_candidates` scans workspace markers and returns the
-   inferred (ecosystem, engine) candidates.
-2. `assess_engine_readiness` reconciles those candidates with the supported
-   pairs from `list_supported_engine_pairs`, then per-engine does a deeper
-   check:
+1. `engine_selector.detect_engine_candidates` scans workspace markers and
+   returns the inferred (ecosystem, engine) candidates in canonical
+   priority order — the single marker/priority table in `engine_selector`
+   is the only ordering authority (decision
+   `2026-07-03-engine-selection-policy.md` §"Kills the two-priority-lists
+   latent bug by design").
+2. `assess_engine_readiness` probes the FIRST candidate — by construction
+   the same engine `select_native_engine` would dispatch.
+   `probe_engine` probes ONE explicitly named engine instead (the store
+   pin, a transient ``--engine`` override, or init's per-candidate
+   readiness pass). Per-engine, the probe does a deeper check:
    - pytest: pytest config present + pytest + pytest-json-report importable
      from the resolved interpreter.
    - jest: ``node`` on PATH + jest declared in ``package.json``
@@ -31,6 +37,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from novetest.run.adapters.junit_adapter import (
@@ -39,98 +46,17 @@ from novetest.run.adapters.junit_adapter import (
     _detects_jupiter_in_manifest,
     _detects_testng_in_manifest,
 )
-from novetest.run.engine_selector import list_supported_engine_pairs
+from novetest.run.engine_selector import (
+    detect_engine_candidates,
+    list_supported_engine_pairs,
+)
+from novetest.run.errors import EngineNotSupportedError
 from novetest.run.types import (
     EngineCandidate,
     EngineReadinessResult,
     NativeEngineContext,
 )
 from novetest.utils.asyncio_subprocess import run_subprocess
-
-
-_PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "pytest.ini")
-_JS_MARKERS = ("package.json",)
-_JAVA_MARKERS = ("pom.xml", "build.gradle", "build.gradle.kts")
-_GO_MARKERS = ("go.mod",)
-_RUST_MARKERS = ("Cargo.toml",)
-
-
-def detect_engine_candidates(project_workspace: Path) -> tuple[EngineCandidate, ...]:
-    """Infer candidate (ecosystem, engine) pairs from workspace markers.
-
-    Marker-based only; no filesystem walks, no subprocess. Multiple
-    candidates may be returned for polyglot workspaces — the caller decides
-    how to disambiguate.
-    """
-
-    candidates: list[EngineCandidate] = []
-
-    python_evidence = _existing_markers(project_workspace, _PYTHON_MARKERS)
-    if python_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="python",
-                engine_name="pytest",
-                evidence=python_evidence,
-            )
-        )
-
-    js_evidence = _existing_markers(project_workspace, _JS_MARKERS)
-    if js_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="javascript-typescript",
-                engine_name="jest",
-                evidence=js_evidence,
-            )
-        )
-
-    java_evidence = _existing_markers(project_workspace, _JAVA_MARKERS)
-    if java_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="java",
-                engine_name="junit",
-                evidence=java_evidence,
-            )
-        )
-
-    go_evidence = _existing_markers(project_workspace, _GO_MARKERS)
-    if go_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="go",
-                engine_name="go-test",
-                evidence=go_evidence,
-            )
-        )
-
-    rust_evidence = _existing_markers(project_workspace, _RUST_MARKERS)
-    if rust_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="rust",
-                engine_name="cargo-test",
-                evidence=rust_evidence,
-            )
-        )
-
-    # .NET marker detection walks one level deep too because the
-    # canonical .NET pattern places csprojs in subdirectories
-    # (``MyLib/MyLib.csproj`` + ``MyLib.Tests/MyLib.Tests.csproj``).
-    # ``.sln`` files live at workspace root by convention so we only
-    # walk those at depth 0.
-    dotnet_evidence = _glob_dotnet_markers(project_workspace)
-    if dotnet_evidence:
-        candidates.append(
-            EngineCandidate(
-                ecosystem="dotnet",
-                engine_name="xunit",
-                evidence=dotnet_evidence,
-            )
-        )
-
-    return tuple(candidates)
 
 
 async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessResult:
@@ -144,98 +70,79 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
     - ``engine-misconfigured``: a supported engine applies but its required
       tooling is unavailable (e.g. pytest not importable from the resolved
       interpreter, ``pytest-json-report`` plugin missing).
+
+    Polyglot disambiguation: the first candidate in canonical table order
+    wins — derived from, not parallel to, `select_native_engine`'s
+    selection, so readiness and dispatch cannot disagree.
     """
 
     candidates = detect_engine_candidates(project_workspace)
-    supported = {pair for pair in list_supported_engine_pairs()}
-
-    relevant = [c for c in candidates if (c.ecosystem, c.engine_name) in supported]
-    if not relevant:
+    if not candidates:
         return EngineReadinessResult(
             state="engine-missing",
             engine_context=None,
-            evidence=tuple(sorted({m for c in candidates for m in c.evidence})),
+            evidence=(),
             issues=("no supported (ecosystem, native engine) pair detected in workspace",),
         )
+    return await _probe_candidate(project_workspace, candidates[0])
 
-    # Prefer the python+pytest candidate when both python and js workspaces
-    # are present (a hybrid repo) — Phase 1 / 2 invariant. If only jest is
-    # present, route to the jest probe.
-    pytest_candidate = next(
-        (c for c in relevant if c.ecosystem == "python" and c.engine_name == "pytest"),
-        None,
-    )
-    if pytest_candidate is not None:
-        return await _assess_pytest_readiness(project_workspace, pytest_candidate)
 
-    jest_candidate = next(
+async def probe_engine(
+    project_workspace: Path, ecosystem: str, engine_name: str
+) -> EngineReadinessResult:
+    """Readiness of ONE specific engine for ``project_workspace``.
+
+    Serves the anchored-pin flows (decision
+    `2026-07-03-engine-selection-policy.md`): `novetest init` probes each
+    detected candidate to compute D1's ambiguity over READY candidates,
+    and pinned / ``--engine``-overridden executions gate on exactly the
+    named engine instead of scan-until-first-success. Marker evidence for
+    the pair is re-resolved here (may legitimately be empty — the
+    per-engine probes carry their own TOCTOU re-checks).
+
+    Raises `EngineNotSupportedError` for pairs outside the supported
+    matrix — the CLI validates ``--engine`` upstream (D7 ``invalid-flag``),
+    so reaching the raise is a programming error, not a user-input path.
+    """
+
+    if (ecosystem, engine_name) not in list_supported_engine_pairs():
+        raise EngineNotSupportedError(
+            f"({ecosystem!r}, {engine_name!r}) is not a supported "
+            "(ecosystem, engine) pair"
+        )
+    candidates = detect_engine_candidates(project_workspace)
+    candidate = next(
         (
             c
-            for c in relevant
-            if c.ecosystem == "javascript-typescript" and c.engine_name == "jest"
+            for c in candidates
+            if c.ecosystem == ecosystem and c.engine_name == engine_name
         ),
-        None,
+        EngineCandidate(ecosystem=ecosystem, engine_name=engine_name, evidence=()),
     )
-    if jest_candidate is not None:
-        return await _assess_jest_readiness(project_workspace, jest_candidate)
+    return await _probe_candidate(project_workspace, candidate)
 
-    gotest_candidate = next(
-        (
-            c
-            for c in relevant
-            if c.ecosystem == "go" and c.engine_name == "go-test"
-        ),
-        None,
-    )
-    if gotest_candidate is not None:
-        return await _assess_gotest_readiness(project_workspace, gotest_candidate)
 
-    cargo_candidate = next(
-        (
-            c
-            for c in relevant
-            if c.ecosystem == "rust" and c.engine_name == "cargo-test"
-        ),
-        None,
-    )
-    if cargo_candidate is not None:
-        return await _assess_cargo_readiness(project_workspace, cargo_candidate)
+async def _probe_candidate(
+    project_workspace: Path, candidate: EngineCandidate
+) -> EngineReadinessResult:
+    """Dispatch ``candidate`` to its per-engine readiness probe."""
 
-    junit_candidate = next(
-        (
-            c
-            for c in relevant
-            if c.ecosystem == "java" and c.engine_name == "junit"
-        ),
-        None,
-    )
-    if junit_candidate is not None:
-        return await _assess_junit_readiness(project_workspace, junit_candidate)
-
-    xunit_candidate = next(
-        (
-            c
-            for c in relevant
-            if c.ecosystem == "dotnet" and c.engine_name == "xunit"
-        ),
-        None,
-    )
-    if xunit_candidate is not None:
-        return await _assess_xunit_readiness(project_workspace, xunit_candidate)
-
-    # Every shipping ecosystem above has a dedicated branch — if the
-    # iteration reaches here, the supported list grew without a matching
-    # readiness probe being wired up. Surface as misconfigured so the CLI
-    # can name the ecosystem without pretending it is ready.
-    chosen = relevant[0]
-    return EngineReadinessResult(
-        state="engine-misconfigured",
-        engine_context=NativeEngineContext(
-            ecosystem=chosen.ecosystem, engine_name=chosen.engine_name
-        ),
-        evidence=chosen.evidence,
-        issues=(f"adapter for {chosen.engine_name!r} not implemented yet",),
-    )
+    probe = _READINESS_PROBES.get((candidate.ecosystem, candidate.engine_name))
+    if probe is None:
+        # The supported table grew without a matching readiness probe
+        # being wired up. Surface as misconfigured so the CLI can name
+        # the ecosystem without pretending it is ready. The divergence
+        # guard in tests/unit/run/test_engine_selector.py keeps this
+        # branch unreachable for shipping engines.
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem=candidate.ecosystem, engine_name=candidate.engine_name
+            ),
+            evidence=candidate.evidence,
+            issues=(f"adapter for {candidate.engine_name!r} not implemented yet",),
+        )
+    return await probe(project_workspace, candidate)
 
 
 async def _assess_pytest_readiness(
@@ -284,44 +191,6 @@ async def _assess_pytest_readiness(
         evidence=candidate.evidence,
         issues=(),
     )
-
-
-def _existing_markers(root: Path, names: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(name for name in names if (root / name).exists())
-
-
-def _glob_markers(root: Path, patterns: tuple[str, ...]) -> tuple[str, ...]:
-    hits: list[str] = []
-    for pattern in patterns:
-        for match in root.glob(pattern):
-            hits.append(match.name)
-    return tuple(sorted(set(hits)))
-
-
-def _glob_dotnet_markers(root: Path) -> tuple[str, ...]:
-    """Glob ``*.csproj`` and ``*.sln`` markers for a .NET workspace.
-
-    Walks one level deep for ``*.csproj`` because the canonical .NET
-    pattern places csprojs in subdirectories (``MyLib/MyLib.csproj`` +
-    ``MyLib.Tests/MyLib.Tests.csproj``). ``*.sln`` lives at workspace
-    root by convention; we only walk depth 0 for it.
-
-    Returns relative-from-root names (e.g. ``"MyLib.Tests/MyLib.Tests.csproj"``)
-    so the evidence is identifiable downstream when multiple csprojs at
-    different depths produce the same basename.
-    """
-
-    hits: list[str] = []
-    for sln in root.glob("*.sln"):
-        hits.append(sln.name)
-    for csproj in root.glob("*.csproj"):
-        hits.append(csproj.name)
-    for csproj in root.glob("*/*.csproj"):
-        try:
-            hits.append(str(csproj.relative_to(root)))
-        except ValueError:
-            hits.append(csproj.name)
-    return tuple(sorted(set(hits)))
 
 
 def _pytest_configured(workspace: Path) -> bool:
@@ -1148,3 +1017,27 @@ async def _probe_dotnet_sdk_version(workspace: Path) -> str | None:
         return None
     text = result.stdout.decode("utf-8", errors="replace").strip()
     return text or None
+
+
+# ---------------------------------------------------------------------------
+# Probe registry
+# ---------------------------------------------------------------------------
+
+# Per-engine readiness probes, keyed by the supported (ecosystem,
+# engine_name) pairs. Deliberately UNORDERED (a dict, not a list):
+# disambiguation order lives solely in `engine_selector._ENGINE_MARKER_TABLE`
+# — `assess_engine_readiness` takes the first detected candidate and this
+# registry only answers "which probe implements that pair". The divergence
+# guard in `tests/unit/run/test_engine_selector.py` pins registry keys ==
+# `list_supported_engine_pairs()`.
+_READINESS_PROBES: dict[
+    tuple[str, str],
+    Callable[[Path, EngineCandidate], Awaitable[EngineReadinessResult]],
+] = {
+    ("python", "pytest"): _assess_pytest_readiness,
+    ("javascript-typescript", "jest"): _assess_jest_readiness,
+    ("java", "junit"): _assess_junit_readiness,
+    ("go", "go-test"): _assess_gotest_readiness,
+    ("rust", "cargo-test"): _assess_cargo_readiness,
+    ("dotnet", "xunit"): _assess_xunit_readiness,
+}

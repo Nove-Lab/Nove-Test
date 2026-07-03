@@ -42,14 +42,15 @@ The following shorthand identifiers are used in workflow sequences to keep the c
 | Interface | Workflow Sequence |
 | --- | --- |
 | `novetest run [target]` | `run/execute` -> `memory/store_run_evidence` |
-| `execute(test_target)` | `run/resolve_test_target` -> `run/assess_engine_readiness` -> `run/select_native_engine` -> `[optional discovery: { run/pytest:collect \| run/jest:list \| run/go-test:list \| run/cargo-test:list \| run/dotnet-test:list }]` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov }]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
+| `execute(test_target, engine?)` | `run/resolve_test_target` -> `{ pinned engine supplied: run/probe_engine \| auto-detect (legacy, until Orchestration wires pins): run/assess_engine_readiness -> run/select_native_engine }` -> `[optional discovery: { run/pytest:collect \| run/jest:list \| run/go-test:list \| run/cargo-test:list \| run/dotnet-test:list }]` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov }]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
 | `execute_with_engine_context(test_target, native_engine_context)` | `run/resolve_test_target` -> `run/assess_engine_readiness` -> `[test invocation: { run/pytest:json-report \| run/pytest:junit-xml \| run/pytest:cov \| run/jest:json \| run/jest:cov \| run/junit:mvn \| run/junit:gradle \| run/go-test:json \| run/go-test:cov \| run/cargo-test:json \| run/cargo-test:cov \| run/dotnet-test:trx \| run/dotnet-test:cov } selected per supplied native_engine_context]` -> `[optional separate coverage emission: run/junit:jacoco]` -> `run/normalize_native_result` -> `run/assign_run_reference` |
 | `resolve_test_target(target_expression, workspace_context)` | - |
-| `select_native_engine(test_target)` | `run/list_supported_engine_pairs` |
+| `select_native_engine(test_target)` | `run/detect_engine_candidates` |
 | `normalize_native_result(native_result, native_engine_context)` | - |
 | `assign_run_reference(run_record)` | - |
 | `list_supported_engine_pairs()` | - |
-| `assess_engine_readiness(project_workspace)` | `run/detect_engine_candidates` -> `run/list_supported_engine_pairs` |
+| `assess_engine_readiness(project_workspace)` | `run/detect_engine_candidates` (first candidate in canonical order is probed) |
+| `probe_engine(project_workspace, ecosystem, engine_name)` | `run/detect_engine_candidates` (evidence for the named pair only; no priority fallback) |
 | `detect_engine_candidates(project_workspace)` | - |
 
 ---

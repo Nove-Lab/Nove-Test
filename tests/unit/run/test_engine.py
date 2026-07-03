@@ -17,7 +17,11 @@ from novetest.run import engine as engine_module
 from novetest.run.engine import execute, execute_with_engine_context
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.target_resolver import resolve_test_target
-from novetest.run.types import NativeEngineContext, NativeResult
+from novetest.run.types import (
+    EngineReadinessResult,
+    NativeEngineContext,
+    NativeResult,
+)
 
 
 async def test_execute_pytest_basic_returns_all_passed(
@@ -319,3 +323,162 @@ async def test_execute_with_engine_context_dispatches_cargo(
     assert record.engine_name == "cargo-test"
     assert record.ecosystem == "rust"
     assert record.engine_version == "1.74.0"
+
+
+# ---------------------------------------------------------------------------
+# execute(engine=...) — pin-driven dispatch
+# (2026-07-03 pin-driven-dispatch slice, decision engine-selection-policy D3)
+# ---------------------------------------------------------------------------
+
+
+def _bomb(name: str) -> Any:
+    """A stand-in that fails the test if the patched seam is reached."""
+
+    def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError(f"{name} must not run on the pinned path")
+
+    return _explode
+
+
+async def test_execute_with_explicit_engine_skips_detection(
+    basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`execute(engine=(eco, name))` must not detect: neither the readiness
+    marker scan (`assess_engine_readiness`) nor `select_native_engine` may
+    run. Readiness is probed for exactly the supplied pair and its ready
+    context (version included) feeds dispatch.
+    """
+
+    monkeypatch.setattr(
+        engine_module, "assess_engine_readiness", _bomb("assess_engine_readiness")
+    )
+    monkeypatch.setattr(
+        engine_module, "select_native_engine", _bomb("select_native_engine")
+    )
+
+    probed_with: dict[str, Any] = {}
+
+    async def fake_probe_engine(
+        workspace: Path, ecosystem: str, engine_name: str
+    ) -> EngineReadinessResult:
+        probed_with["pair"] = (ecosystem, engine_name)
+        return EngineReadinessResult(
+            state="ready",
+            engine_context=NativeEngineContext(
+                ecosystem=ecosystem, engine_name=engine_name, engine_version="8.0.0"
+            ),
+            evidence=("pyproject.toml",),
+            issues=(),
+        )
+
+    async def fake_run_pytest(test_target: Any, **kwargs: Any) -> NativeResult:
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        report_path = native_dir / "pytest-report.json"
+        report_path.write_text("{}", encoding="utf-8")
+        return NativeResult(
+            engine_name="pytest",
+            payload={
+                "exitcode": 0,
+                "summary": {"passed": 0, "total": 0},
+                "tests": [],
+                "duration": 0.0,
+            },
+            artifact_paths={"pytest_json_report": report_path},
+            returncode=0,
+            started_at_ms=0,
+            completed_at_ms=0,
+        )
+
+    monkeypatch.setattr(engine_module, "probe_engine", fake_probe_engine)
+    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+
+    target = resolve_test_target("", basic_workspace)
+    record, warnings = await execute(
+        target, artifact_dir=tmp_path, engine=("python", "pytest"), timeout=10.0
+    )
+    assert probed_with["pair"] == ("python", "pytest")
+    assert warnings == ()
+    assert record.engine_name == "pytest"
+    assert record.ecosystem == "python"
+    # Record version stays adapter-observed (the normalizer's existing
+    # contract); the probe's "8.0.0" only rides the context handoff.
+    assert record.engine_version is None
+
+
+async def test_execute_with_explicit_engine_not_ready_raises(
+    basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-ready pin short-circuits with EngineNotReadyError before any
+    subprocess — same exit-code-4 contract as the auto-detect path."""
+
+    async def fake_probe_engine(
+        workspace: Path, ecosystem: str, engine_name: str
+    ) -> EngineReadinessResult:
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem=ecosystem, engine_name=engine_name
+            ),
+            evidence=(),
+            issues=("jest is declared in package.json but not installed; run: npm install",),
+        )
+
+    monkeypatch.setattr(engine_module, "probe_engine", fake_probe_engine)
+    target = resolve_test_target("", basic_workspace)
+    artifact_dir = tmp_path / "should-not-be-created"
+    with pytest.raises(EngineNotReadyError) as exc_info:
+        await execute(
+            target,
+            artifact_dir=artifact_dir,
+            engine=("javascript-typescript", "jest"),
+            timeout=10.0,
+        )
+    assert exc_info.value.readiness.state == "engine-misconfigured"
+    assert not artifact_dir.exists()
+
+
+async def test_execute_with_explicit_engine_runs_pytest_end_to_end(
+    basic_workspace: Path, tmp_path: Path
+) -> None:
+    """The pinned path against a real workspace: probe → dispatch → run.
+
+    No stubs — the real `probe_engine` gates and the real pytest adapter
+    executes, proving the pin threads through the whole workflow exactly
+    like the auto-detect path does.
+    """
+
+    target = resolve_test_target("", basic_workspace)
+    record, warnings = await execute(
+        target,
+        artifact_dir=tmp_path,
+        engine=("python", "pytest"),
+        timeout=60.0,
+    )
+    assert warnings == ()
+    assert record.status == "passed"
+    assert record.engine_name == "pytest"
+    assert record.ecosystem == "python"
+    assert record.summary_counts["passed"] == 3
+
+
+async def test_execute_with_unsupported_explicit_engine_raises(
+    basic_workspace: Path, tmp_path: Path
+) -> None:
+    """Pins outside the six-engine matrix raise EngineNotSupportedError
+    (the CLI's `--engine` validation is the user-facing gate; this is the
+    programming-error surface behind it)."""
+
+    target = resolve_test_target("", basic_workspace)
+    with pytest.raises(EngineNotSupportedError):
+        await execute(
+            target,
+            artifact_dir=tmp_path,
+            engine=("php", "phpunit"),
+            timeout=10.0,
+        )
