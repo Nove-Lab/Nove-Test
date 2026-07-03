@@ -176,8 +176,10 @@ green**) is the only ranking.
 | 2 | `investigate_location` | A localization finding, confidence ∈ {high, medium}, rank ≤ 3. |
 | 3 | `investigate_regression` | A `regressed` (newly-failing vs baseline) transition. |
 | 4 | `coverage_gap` | Uncovered lines overlap a suspicious location's span. |
-| 5 | `flaky_suspected` | A replay classified the suite `inconsistent`. **Never fires from `test`** (replay isn't wired into `test`). |
+| 5 | `flaky_suspected` | A replay classified the run `inconsistent`. Fires from `novetest test --reruns N` (N ≥ 1): a failed run is replayed whole N times; divergence produces this recommendation (empty `test_id` when several tests diverge). Default 0 = never replays. |
 | 6 | `unavailable_analysis` | Tests failed AND some downstream stage was `unavailable`. Informational. |
+
+(Category names are pinned to the code constants; the authoritative list lives with the engineering docs.)
 | 7 | `all_green` | Zero failures AND zero regressed. Mutually exclusive — never coexists with another category. |
 
 Behavioural notes:

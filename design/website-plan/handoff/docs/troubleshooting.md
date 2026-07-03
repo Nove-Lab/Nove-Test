@@ -377,7 +377,7 @@ Recommendations carry a `category` and an int `priority` (1–7,
 lower = higher) — there is **no** `severity` field. Categories:
 `regression_with_localization` (1), `investigate_location` (2),
 `investigate_regression` (3), `coverage_gap` (4), `flaky_suspected` (5,
-**never fires today** — replay isn't wired into `test`),
+fires only with `novetest test --reruns N`, N ≥ 1),
 `unavailable_analysis` (6), `all_green` (7, exclusive).
 
 :::

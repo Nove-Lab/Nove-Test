@@ -44,9 +44,12 @@ What happened:
 - A `.novetest/` directory was created. It holds every Run Record,
   Coverage Facts set, Regression Facts set, Localization Findings set,
   and Replay Result for this project — as plain JSON files.
-- Nove Test auto-detected your engine (`pytest`) from `pyproject.toml`.
-  `engine readiness: ready` means the native engine resolved and is
-  ready to run. The version shown (`9.0.3` here) is **your own
+- Nove Test detected your engine (`pytest`) from `pyproject.toml` and
+  **pinned** it into the store — every later verb runs this engine;
+  nothing is re-detected at run time. (One-off exception: `novetest
+  test --engine <name>` runs another engine once without changing the
+  pin.) `engine readiness: ready` means the native engine resolved and
+  is ready to run. The version shown (`9.0.3` here) is **your own
   installed pytest**, not a Nove Test version.
 
 If you see `engine readiness: engine-missing` or `engine-misconfigured`

@@ -115,8 +115,10 @@ priority** (1 is the most urgent). There is no "severity" field;
 | 2 | `investigate_location` | SBFL ranked a code location suspicious (high/medium confidence, rank ≤ 3). |
 | 3 | `investigate_regression` | A test newly failed versus the baseline (a regression transition). |
 | 4 | `coverage_gap` | Uncovered lines overlap a suspicious location. |
-| 5 | `flaky_suspected` | A replay classified the suite inconsistent. **Never fires today** — `test` does not run replay. |
+| 5 | `flaky_suspected` | A replay classified the run inconsistent. Fires from `novetest test --reruns N` (N ≥ 1): when the run has failures, the whole run is replayed N times and divergence produces this recommendation. Default (`--reruns 0`) never replays. |
 | 6 | `unavailable_analysis` | Tests failed but a downstream stage couldn't run (e.g. no baseline). Informational. |
+
+(Category names are pinned verbatim to the code — see "Closed taxonomy v1" in `design/implementation-plan/recommendation-synthesis.md` §8.)
 | 7 | `all_green` | Zero failures, zero regressions. Exclusive — never appears alongside another category. |
 
 Notes worth internalising:
@@ -358,6 +360,13 @@ novetest replay 01KVYRRRN9FWVNQWVHNE1QHAQ4
 The classification is one of `reproducible`, `inconsistent`, or
 `unable_to_replay`. To hunt flakiness, point replay at a suspect run
 with `--reruns 5`.
+
+You can also opt into replay directly from `test`: `novetest test
+--reruns 5` replays a **failed** run five times as part of the same
+invocation, and an `inconsistent` classification surfaces as a
+`! [flaky_suspected]` recommendation with a `replay_result` citation
+(summary like ``Test `…` flaky: 1/5 reruns failed.``). The default
+`--reruns 0` keeps today's behavior — no replay.
 
 ---
 

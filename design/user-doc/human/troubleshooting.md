@@ -127,6 +127,27 @@ novetest init
 That wipes all stored runs for this project. Your source code and
 tests are untouched.
 
+### `✗ init  no-engine-detected: …` (exit 4)
+
+No workspace marker at the directory you ran `init` in. Nothing was
+created. The message lists candidate sub-projects found by a bounded
+scan (depth ≤ 2) — `cd` into the one you meant and run `init` there.
+At `/` or `$HOME` the scan itself is refused.
+
+### `✗ init  engine-ambiguous: …` (exit 2)
+
+Two or more viable engines at this directory (e.g. `pyproject.toml` +
+`Cargo.toml`, both toolchains installed). Nothing was created — choose
+explicitly:
+
+```bash
+novetest init --engine pytest    # or cargo-test, jest, go-test, junit, xunit
+```
+
+The same error from a non-`init` verb means a pre-pin store at an
+ambiguous root: re-run `init --engine <name>` (re-pins in place; run
+history kept).
+
 ### `✓ Initialized .novetest/ …` but `engine readiness: engine-missing`
 
 `init` always succeeds and always leads with `✓` — it never fails on a
@@ -221,6 +242,14 @@ Fix it and re-run.
 > not found". The first non-verb token is treated as a test selector
 > (`novetest test frobnicate`), so the engine tries to run it as a test
 > path and fails with an adapter error.
+
+### An explicit target that matches nothing reports `passed` with 0 tests
+
+`novetest run path/that/matches/nothing.py` currently yields
+`collected: 0, total: 0, status: passed`, exit 0. If you pass an
+explicit target, check the collected count before trusting a green
+result — a typo'd or non-anchor-relative path "passes" without running
+anything.
 
 ### Exit code 3 (tests failed) — NOT an error
 

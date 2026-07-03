@@ -7,8 +7,12 @@ toolchain you need on PATH, the detection marker, the external command
 the adapter invokes (shown simplified — coverage runs add a few extra
 flags), and whether coverage is available.
 
-`novetest` auto-detects which engine your project uses from workspace
-markers. You **do not** pass an `--engine` flag.
+`novetest init` detects which engine your project uses from workspace
+markers and **pins** it into `.novetest/store.json`. From then on every
+verb runs the pinned engine — nothing is re-detected at run time. In
+the common single-engine project you never pass an `--engine` flag;
+it exists for two specific situations (ambiguous roots and one-off
+overrides — see below).
 
 ## The six supported engines
 
@@ -33,21 +37,45 @@ Jupiter only** — JUnit 4 and TestNG are explicitly rejected. .NET is
 fallback. **`go test` runs, but its coverage is not consumed** — see
 the gotest section.
 
-## One `novetest test` call = exactly one engine
+## One `novetest test` call = exactly one engine — the pin
 
-`novetest test` (and every other non-`init` verb) runs **one engine
-at a time**. When a polyglot repo matches several ecosystems at the
-same root, readiness disambiguates with a fixed priority:
+`novetest test` (and every other verb) runs **one engine at a time**:
+the one pinned at `init`. How the pin is chosen:
 
-```
-pytest > jest > go-test > cargo-test > junit > xunit
-```
+- **Exactly one viable engine** at the init directory → pinned
+  silently. This is the common case; nothing changes in your flow.
+- **Two or more viable engines** (e.g. `pyproject.toml` AND
+  `Cargo.toml` at the same root, both toolchains installed) → `init`
+  **refuses** (exit 2, error `engine-ambiguous`), creates nothing, and
+  asks you to choose explicitly:
 
-So a workspace root with both `pyproject.toml` AND `package.json`
-routes to **pytest** — the JavaScript suite is silently ignored at
-that invocation. This is by design at MVP (the single-engine
-assumption is baked into the Run Record schema and every downstream
-engine).
+  ```bash
+  novetest init --engine pytest      # or cargo-test, jest, …
+  ```
+
+  There is no silent priority-win: novetest never guesses which suite
+  you meant.
+- **"Viable" = marker present AND the toolchain is actually ready.**
+  A root with `pyproject.toml` + a tooling-only `package.json` (no
+  jest installed) pins pytest without asking. Consequence: the same
+  repo can init silently on one machine and demand `--engine` on
+  another, depending on which toolchains are installed there.
+
+Three more things the pin gives you:
+
+- **Verbs work from any subdirectory.** Every verb walks **up** from
+  where you run it to the nearest `.novetest/` (like git). Running
+  `novetest test` from `src/deep/nested/` behaves exactly as from the
+  project root — a bare invocation is always workspace-scoped; your
+  cwd never silently narrows what runs.
+- **One-off override without re-pinning**: `novetest test --engine
+  cargo-test` runs that engine once; the pin is untouched. To change
+  the pin permanently, re-run `novetest init --engine <name>` — same
+  store, run history retained.
+- **Old stores upgrade themselves.** A `.novetest/` created before
+  pinning existed gets its pin backfilled silently on the next verb
+  (or, if the root is ambiguous, you're asked to re-init with
+  `--engine`).
 
 ### Working with a polyglot repository
 
@@ -76,6 +104,16 @@ Then:
 
 Each subdirectory's `.novetest/` carries its own run history, coverage
 facts, regression baselines, and SBFL findings — completely isolated.
+And because verbs walk up to the nearest `.novetest/`, you can run
+`novetest test` from anywhere **inside** `backend/` and it resolves to
+`backend/.novetest` automatically.
+
+Running `novetest init` at a markerless root (e.g. the repo root of
+the polyglot layout above) creates **nothing**: it exits with
+`no-engine-detected` and lists the sub-projects it can see (bounded
+scan, depth ≤ 2, refused outright at `/` and `$HOME`) so you know
+where to `cd` and init. novetest never initializes a directory you
+are not standing in.
 
 ## Quick prerequisites overview
 
@@ -410,8 +448,11 @@ exactly one of three:
   config is missing (plugin missing, nextest missing, wrong test
   framework, JDK missing, etc.).
 
-`novetest init` never fails on a bad engine — it records the state and
-moves on. But the next `novetest run`/`novetest test` exits **4** with
+Once an engine is pinned, `novetest init` never fails on a *bad*
+engine — it records the readiness state and moves on. (The two cases
+where `init` does refuse — no marker at all, or several viable
+engines — are about *which* engine, not its health; see "the pin"
+above.) But the next `novetest run`/`novetest test` exits **4** with
 error code `engine-engine-missing` (the literal string — note the
 doubled "engine") or `engine-engine-misconfigured`. Real run against a
 Python workspace that has no pytest config:

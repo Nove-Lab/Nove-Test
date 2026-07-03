@@ -44,10 +44,12 @@ novetest init
   engine readiness: ready — python/pytest 9.0.3
 ```
 
-Nove Test auto-detected `pytest` from `pyproject.toml`. `ready` means the
-engine resolved; the `9.0.3` is **your** pytest version. If you see
-`engine-missing` / `engine-misconfigured`, the next `issue:` line says
-what to fix ([Troubleshooting](./troubleshooting.md)).
+Nove Test detected `pytest` from `pyproject.toml` and **pinned** it —
+every later verb runs the pinned engine; nothing is re-detected at run
+time. `ready` means the engine resolved; the `9.0.3` is **your**
+pytest version. If you see `engine-missing` / `engine-misconfigured`,
+the next `issue:` line says what to fix
+([Troubleshooting](./troubleshooting.md)).
 
 @tab For agent
 
@@ -64,6 +66,7 @@ NOVETEST_OUTPUT=json novetest init
       "evidence": ["pyproject.toml"], "issues": [], "state": "ready"
     },
     "initialized_at": 1782370092699,
+    "pinned_engine": {"ecosystem": "python", "engine_name": "pytest"},
     "store_path": "/home/you/calc-demo/.novetest",
     "store_state": "ready"
   },

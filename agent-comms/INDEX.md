@@ -9,7 +9,6 @@ _(none)_
 
 ## Pending
 - [orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md](./tasks/orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md) — `novetest-pm-team → novetest-orchestration-team` (windows-dotdotdot-normalization-fastfollow)
-- [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 
 ## Blocked
 _(none)_

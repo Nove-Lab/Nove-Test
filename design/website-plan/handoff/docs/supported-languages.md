@@ -7,8 +7,12 @@ pair, the toolchain you need on PATH, the external command the adapter
 invokes (shown simplified — coverage runs add a few extra flags), and
 whether coverage is available.
 
-`novetest` auto-detects which engine your project uses from workspace
-markers. **You do not pass an `--engine` flag.**
+`novetest init` detects which engine your project uses from workspace
+markers and **pins** it into `.novetest/store.json`; every later verb
+runs the pinned engine — nothing is re-detected at run time. In the
+common single-engine project you never pass an `--engine` flag; it
+exists for ambiguous roots (`init --engine <name>`) and one-off
+overrides (`test|run --engine <name>`, pin untouched).
 
 ---
 
@@ -36,33 +40,48 @@ consumed** (see the gotest section).
 
 ---
 
-## Detection priority — one engine at a time
+## Engine selection — the pin, one engine at a time
 
-`novetest test` (and every other non-`init` verb) runs **one engine at
-a time**. When a polyglot repo matches several ecosystems at the same
-root, readiness disambiguates with a fixed priority:
-
-```
-pytest > jest > go-test > cargo-test > junit > xunit
-```
+`novetest test` (and every other verb) runs **one engine at a time**:
+the one **pinned** by `init`. Exactly one viable engine at the init
+directory → pinned silently (the common case). Two or more viable
+engines at the same root → `init` **refuses**, creates nothing, and
+requires an explicit choice — there is no silent priority-win;
+novetest never guesses which suite you meant. "Viable" means the
+marker is present AND that engine's toolchain is actually installed,
+so a tooling-only `package.json` next to `pyproject.toml` does not
+count as ambiguity.
 
 ::: tabs
 @tab For human
 
-If your workspace root has both `pyproject.toml` AND `package.json`,
-`novetest test` from that root will only run **pytest** — the
-JavaScript suite is silently ignored. This is by design at MVP (the
-single-engine assumption is baked into the Run Record schema and
-every downstream engine).
+If your workspace root has both `pyproject.toml` AND `Cargo.toml`
+(both toolchains installed), `novetest init` exits with
+`engine-ambiguous` and asks you to pick:
+
+```bash
+novetest init --engine pytest      # or cargo-test, jest, …
+```
+
+Need the other engine occasionally? `novetest test --engine
+cargo-test` runs it once without changing the pin. Verbs also work
+from any subdirectory — they walk up to the nearest `.novetest/`
+(like git), and a bare `novetest test` is always workspace-scoped no
+matter where you stand.
 
 @tab For agent
 
-A repo with both `pyproject.toml` and `package.json` always routes to
-**pytest**; the other matches are ignored at that invocation. There is
-no single-envelope polyglot orchestration at MVP. The detected pair is
-exposed on the `init` envelope as
-`data.engine_readiness.ecosystem` + `data.engine_readiness.engine`
-(and on each run as `…run_record.engine_name` + `…ecosystem`).
+Route on the `init` outcome: exit 0 + `data.pinned_engine`
+(`{"ecosystem": …, "engine_name": …}`) → proceed; exit 4 +
+`errors[0].code = "no-engine-detected"` → `data.candidates[]` lists
+`{ecosystem, engine_name, path}` sub-projects (bounded scan, depth
+≤ 2; `data.scan_refused: true` at `/` and `$HOME`) — `cd` into each
+and init there; exit 2 + `errors[0].code = "engine-ambiguous"` →
+re-run `init --engine <name>`. Both refusals create nothing. Viability
+is host-dependent (marker + toolchain-READY) — never cache init
+outcomes across machines. Legacy pin-less stores backfill silently on
+the first verb when unambiguous. Each run still carries
+`…run_record.engine_name` + `…ecosystem`.
 
 :::
 

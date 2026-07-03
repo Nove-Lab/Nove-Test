@@ -248,3 +248,43 @@ Flagged for Phase 6 implementation; see [`delivery-phasing.md`](./delivery-phasi
 2. **Compound category scope.** Phase 6 ships only `regression_with_localization` as a compound. Other compounds (`flaky_with_localization`, `coverage_gap_with_regression`) are explicit deferrals.
 3. **`--narrative` prose mode.** Out of scope for Phase 6 unless an early adopter explicitly asks. If it ships, it is an additive presentation layer over the deterministic JSON, never a replacement.
 4. **Recommendation persistence and history.** Whether to persist recommendation lists per run for fast `inspect` is an optimization to revisit after Phase 6 measures the cost of re-derivation.
+
+---
+
+## 8. Closed taxonomy v1 — authoritative list
+
+**The single source of truth for category names is the code:**
+[`src/novetest/orchestration/recommendation/categories.py`](../../src/novetest/orchestration/recommendation/categories.py)
+(`CATEGORIES` frozenset + `CATEGORIES_BY_PRIORITY`). The v1 list, highest
+priority first:
+
+1. `regression_with_localization`
+2. `investigate_location`
+3. `investigate_regression`
+4. `coverage_gap`
+5. `flaky_suspected`
+6. `unavailable_analysis`
+7. `all_green`
+
+**Paraphrasing these names anywhere downstream is forbidden.** Agents pin
+routing to the exact `recommendations[].category` strings; a doc that
+invents a nicer-sounding name (this happened — `tests_failed`,
+`coverage_regressed`, `flaky_suspect` et al. shipped in user docs on
+2026-06-25 and never matched the code) produces routing that silently
+never fires. Any doc that lists categories must cross-reference this
+section, and this section must never be edited except in lockstep with
+`categories.py`.
+
+### Checklist for every future taxonomy change
+
+1. Land the category constant (and matcher) in `categories.py` first —
+   the code change IS the taxonomy change.
+2. Update this section and every category table in
+   `design/user-doc/{human,agent}/` and
+   `design/website-plan/handoff/docs/` in the same commit (or the
+   immediately following one).
+3. Confirm the renderer mapping (`src/novetest/cli/renderers/test.py`
+   `_category_glyph` / `_citation_line`) — glyphs and citation kinds are
+   part of the same frozen surface.
+4. Bump `recommendation_schema_version` if slot keys changed; regen
+   `agent-comms/INDEX.md` if the change was routed via a task.
