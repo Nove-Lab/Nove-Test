@@ -14,6 +14,7 @@ _(none)_
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
 - [regression-team-2026-07-03-engine-scoped-baseline.md](./tasks/regression-team-2026-07-03-engine-scoped-baseline.md) — `novetest-pm-team → novetest-regression-team` (engine-scoped-baseline)
 - [run-team-2026-07-03-pin-driven-dispatch-and-detection-api.md](./tasks/run-team-2026-07-03-pin-driven-dispatch-and-detection-api.md) — `novetest-pm-team → novetest-run-team` (pin-driven-dispatch-and-detection-api)
+- [run-team-2026-07-03-windows-path-separator-fastfollow.md](./tasks/run-team-2026-07-03-windows-path-separator-fastfollow.md) — `novetest-pm-team → novetest-run-team` (windows-path-separator-fastfollow)
 - [regression-team-2026-07-03-d5-cross-run-audit.md](./questions/regression-team-2026-07-03-d5-cross-run-audit.md) — `novetest-regression-team → novetest-pm-team` (d5-cross-run-audit)
 
 ## Blocked
