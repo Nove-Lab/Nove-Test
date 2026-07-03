@@ -4,7 +4,7 @@ Composes the already-persisted evidence for ONE stored run into a single
 view: the Run Record summary plus per-engine fact sections. This file
 populates the Coverage section (cache-read via ``get_coverage_facts``) AND
 the Regression section (composed at the orchestration layer using
-``find_runs_for_target`` + ``compare_runs`` — see
+Regression's ``resolve_baseline_for_run`` + ``compare_runs`` — see
 ``_resolve_inspect_regression`` for the composition rationale).
 Localization / Replay remain present-but-``unavailable`` markers, mirroring
 ``StatusView``'s ``sub_reports`` convention; Phase 4/5 slices flip each
@@ -28,7 +28,6 @@ from novetest.localization import (
 from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,
-    find_runs_for_target,
     list_run_history,
     retrieve_run_evidence,
 )
@@ -39,6 +38,7 @@ from novetest.regression import (
     RegressionFactSet,
     RegressionUnavailable,
     compare_runs,
+    resolve_baseline_for_run,
 )
 from novetest.replay import ReplayUnavailable, get_replay_result
 
@@ -151,39 +151,36 @@ def _resolve_inspect_regression(
     The Regression engine's ``resolve_latest_baseline`` returns the GLOBAL
     latest two runs on a target — wrong fit for ``inspect <some_old_run>``,
     which wants "the most recent live run that is strictly OLDER than this
-    one on the same target". Composed here at the orchestration layer using
-    Memory's ``find_runs_for_target`` + Regression's ``compare_runs`` —
-    no new engine surface introduced (decision: keep engine surface frozen,
-    the composition is a small orchestration concern).
+    one on the same target and the same engine". That selection is
+    Regression's shared ``resolve_baseline_for_run`` selector — engine-
+    scoped per D5 of ``decisions/2026-07-03-engine-selection-policy.md`` —
+    composed here with ``compare_runs`` at the orchestration layer.
 
-    Tombstone handling: ``find_runs_for_target(..., include_tombstoned=False)``
-    drops tombstoned siblings on the read side, so a live ``inspected`` run
-    with only tombstoned priors surfaces ``REASON_NO_COMPARABLE_BASELINE``.
-    A tombstoned ``inspected`` run with live priors reaches ``compare_runs``,
-    which fails-hard with ``REASON_RUN_TOMBSTONED`` per decision §C.1 — no
-    special-case needed here.
+    Engine scoping (D5): a same-target prior produced by a DIFFERENT engine
+    (legitimate mixed history under a transient ``--engine`` override) is
+    never selected, so this path surfaces
+    ``REASON_NO_COMPARABLE_BASELINE`` — not ``REASON_ENGINE_MISMATCH`` —
+    when only cross-engine priors exist. The mismatch guard remains
+    reachable via explicitly user-picked pairs (``regression compare``).
+
+    Tombstone handling: the selector excludes tombstoned siblings
+    (Memory's ``include_tombstoned=False`` convention), so a live
+    ``inspected`` run with only tombstoned priors surfaces
+    ``REASON_NO_COMPARABLE_BASELINE``. A tombstoned ``inspected`` run with
+    live priors reaches ``compare_runs``, which fails-hard with
+    ``REASON_RUN_TOMBSTONED`` per decision §C.1 — no special-case needed
+    here.
     """
 
     inspected_ref = inspected.run_record.run_reference
-    siblings = find_runs_for_target(
-        store,
-        inspected.run_record.target_expression,
-        include_tombstoned=False,
-    )
-    prior = [
-        s
-        for s in siblings
-        if s.run_record.run_reference.created_at < inspected_ref.created_at
-    ]
-    if not prior:
+    baseline_ref = resolve_baseline_for_run(store, inspected)
+    if baseline_ref is None:
         return RegressionUnavailable(
             reason=REASON_NO_COMPARABLE_BASELINE,
             detail=inspected.run_record.target_expression,
             baseline_run_reference=None,
             target_run_reference=inspected_ref,
         )
-    prior.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
-    baseline_ref = prior[0].run_record.run_reference
     return compare_runs(store, baseline_ref, inspected_ref)
 
 
@@ -194,7 +191,7 @@ def _resolve_inspect_localization(
     """Cache-only read of the Localization findings for the inspected run.
 
     Unlike Regression (which has no per-run cache, so ``inspect`` must
-    compose ``find_runs_for_target`` + ``compare_runs``), Localization HAS a
+    compose ``resolve_baseline_for_run`` + ``compare_runs``), Localization HAS a
     per-run cache at
     ``<store>/localization/findings/run_<id>/localization_findings.json``.
     So ``inspect`` reads it cache-only via ``get_localization_findings`` — it

@@ -190,7 +190,7 @@ def _patch_seams(
     monkeypatch: pytest.MonkeyPatch,
     *,
     history: list[MemoryEntry],
-    siblings: list[MemoryEntry] | None = None,
+    baseline_ref: RunReference | None = None,
     coverage_result: CoverageFactSet | CoverageUnavailable | None = None,
     localization_result: LocalizationFinding | LocalizationUnavailable | None = None,
     regression_result: RegressionFactSet | RegressionUnavailable | None = None,
@@ -199,9 +199,20 @@ def _patch_seams(
     """Stub every Memory + engine seam at the ``status`` module.
 
     Returns a dict of call-log lists (keys: ``coverage_calls``,
-    ``localization_calls``, ``regression_calls``) so the caller can pin
-    which retrieval calls actually happened — load-bearing for the
-    "cache-only, no side-effect derive" invariant.
+    ``localization_calls``, ``regression_calls``, ``replay_calls``,
+    ``baseline_selector_calls``) so the caller can pin which retrieval
+    calls actually happened — load-bearing for the "cache-only, no
+    side-effect derive" invariant.
+
+    ``baseline_ref`` is what the stubbed ``resolve_baseline_for_run``
+    answers for the latest run — the Regression engine's shared
+    engine-aware selector (D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md``); its own
+    semantics (strictly-older, same target, same engine, tombstones
+    excluded) are pinned against a real store in
+    ``tests/unit/regression/test_baseline_resolution.py``. The default
+    ``None`` = "no comparable baseline", which matches the real answer for
+    every single-run history these tests seed.
 
     Default behaviours when ``*_result`` is None:
     - coverage: returns ``CoverageUnavailable(missing-derived-facts)``
@@ -214,11 +225,14 @@ def _patch_seams(
 
     monkeypatch.setattr(status_module, "list_run_history", lambda _store: history)
 
-    resolved_siblings = history if siblings is None else siblings
+    baseline_selector_calls: list[MemoryEntry] = []
+
+    def fake_resolve_baseline(_store: Any, entry: MemoryEntry) -> RunReference | None:
+        baseline_selector_calls.append(entry)
+        return baseline_ref
+
     monkeypatch.setattr(
-        status_module,
-        "find_runs_for_target",
-        lambda _store, _target, *, include_tombstoned=False: resolved_siblings,
+        status_module, "resolve_baseline_for_run", fake_resolve_baseline
     )
 
     coverage_calls: list[RunReference] = []
@@ -293,6 +307,7 @@ def _patch_seams(
         "localization_calls": localization_calls,
         "regression_calls": regression_calls,
         "replay_calls": replay_calls,
+        "baseline_selector_calls": baseline_selector_calls,
     }
 
 
@@ -541,16 +556,16 @@ def test_regression_pair_cached_marks_regression_available(
 
     prior = _make_entry("01PRIOR000000000000000A", created_at=600)
     latest = _make_entry("01LATEST00000000000000A", created_at=700)
-    # list_run_history is newest-first; pair-selection mirrors inspect.
+    # list_run_history is newest-first; pair-selection is the shared
+    # selector — stubbed to answer the prior (mirrors inspect).
     history = [latest, prior]
-    siblings = [latest, prior]
     fact_set = _make_regression_fact_set(
         prior.run_record.run_reference, latest.run_record.run_reference
     )
     call_log = _patch_seams(
         monkeypatch,
         history=history,
-        siblings=siblings,
+        baseline_ref=prior.run_record.run_reference,
         regression_result=fact_set,
     )
 
@@ -565,6 +580,38 @@ def test_regression_pair_cached_marks_regression_available(
     baseline_arg, target_arg = call_log["regression_calls"][0]
     assert baseline_arg.run_id == "01PRIOR000000000000000A"
     assert target_arg.run_id == "01LATEST00000000000000A"
+
+
+# ---------------------------------------------------------------------------
+# Regression pair selection routes through the shared engine-aware selector
+# (D5, 2026-07-03) — the same seam `inspect` composes, so the two verbs
+# agree by construction.
+# ---------------------------------------------------------------------------
+
+
+def test_regression_flag_consults_shared_selector_with_latest_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_latest_regression_available`` asks ``resolve_baseline_for_run``
+    for the LATEST entry's baseline (exactly once) and probes the cache
+    with the selector's answer. The selector's engine filter itself is
+    pinned against a real store in ``tests/unit/regression/``."""
+
+    prior = _make_entry("01PRIORSEL0000000000000A", created_at=2_000)
+    latest = _make_entry("01LATESTSEL000000000000A", created_at=2_100)
+    call_log = _patch_seams(
+        monkeypatch,
+        history=[latest, prior],
+        baseline_ref=prior.run_record.run_reference,
+    )
+
+    build_status_view(object())  # type: ignore[arg-type]
+    assert call_log["baseline_selector_calls"] == [latest]
+    # The cache probe used the selector's answer as the baseline side.
+    assert len(call_log["regression_calls"]) == 1
+    baseline_arg, target_arg = call_log["regression_calls"][0]
+    assert baseline_arg.run_id == "01PRIORSEL0000000000000A"
+    assert target_arg.run_id == "01LATESTSEL000000000000A"
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +636,7 @@ def test_regression_pair_not_cached_keeps_regression_unavailable(
     call_log = _patch_seams(
         monkeypatch,
         history=[latest, prior],
-        siblings=[latest, prior],
+        baseline_ref=prior.run_record.run_reference,
         # No regression_result → fake_get_regression returns Unavailable.
     )
 
@@ -608,14 +655,15 @@ def test_regression_pair_not_cached_keeps_regression_unavailable(
 def test_regression_single_run_returns_unavailable_without_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Single run on target → no priors → no regression cache lookup fires."""
+    """Single run on target → selector answers None → no regression cache
+    lookup fires."""
 
     only = _make_entry("01ONLY000000000000000A", created_at=1_000)
-    call_log = _patch_seams(monkeypatch, history=[only], siblings=[only])
+    call_log = _patch_seams(monkeypatch, history=[only], baseline_ref=None)
 
     view = build_status_view(object())  # type: ignore[arg-type]
     assert view.regression_available is False
-    # No prior sibling → short-circuit before the cache read.
+    # No comparable baseline → short-circuit before the cache read.
     assert call_log["regression_calls"] == []
 
 
@@ -628,31 +676,27 @@ def test_regression_single_run_returns_unavailable_without_lookup(
 def test_regression_only_tombstoned_priors_returns_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """find_runs_for_target(..., include_tombstoned=False) already drops
-    tombstones at the Memory seam → ``_latest_regression_available`` sees
-    only the latest run in ``siblings`` → no priors → False.
+    """Tombstone exclusion lives inside the real selector (Memory's
+    ``include_tombstoned=False`` convention — pinned in
+    ``tests/unit/regression/``): a latest run whose only prior is
+    tombstoned gets a ``None`` answer → no cache lookup fires → False.
 
-    Pins that ``status``'s tombstone handling delegates to Memory's
-    ``include_tombstoned=False`` flag rather than re-implementing the
-    check locally.
+    Pins that ``status`` delegates tombstone handling to the shared
+    selector rather than re-implementing the check locally.
     """
 
     tombstoned_prior = _make_entry(
         "01TOMB0000000000000000A", created_at=1_100, tombstoned_at=1_150
     )
     latest = _make_entry("01LATEST00000000000000C", created_at=1_200)
-    # `siblings` here represents what find_runs_for_target returns AFTER
-    # filtering tombstones — only the live latest. The tombstoned prior
-    # is in `history` for the size count but not in `siblings`.
+    # The tombstoned prior is in `history` for the size count; the selector
+    # (stubbed to its real answer, None) never surfaces it.
     history = [latest, tombstoned_prior]
-    siblings = [latest]
-    call_log = _patch_seams(
-        monkeypatch, history=history, siblings=siblings
-    )
+    call_log = _patch_seams(monkeypatch, history=history, baseline_ref=None)
 
     view = build_status_view(object())  # type: ignore[arg-type]
     assert view.regression_available is False
-    # Memory filter took the prior out → no cache lookup attempted.
+    # Selector answered None → no cache lookup attempted.
     assert call_log["regression_calls"] == []
     # run_history_size still reflects all entries (matches list_run_history).
     assert view.run_history_size == 2
@@ -699,7 +743,7 @@ def test_replay_no_cached_result_keeps_replay_unavailable(
     call_log = _patch_seams(
         monkeypatch,
         history=[latest, prior],
-        siblings=[latest, prior],
+        baseline_ref=prior.run_record.run_reference,
         coverage_result=coverage_fact_set,
         localization_result=localization_finding,
         regression_result=regression_fact_set,

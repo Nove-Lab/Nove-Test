@@ -5,6 +5,14 @@ the container shape; this file pins the Regression-section composition
 (`_resolve_inspect_regression`). Memory + Regression seams are
 monkeypatched at the `inspect` module so the tests never touch the
 filesystem.
+
+Baseline selection is stubbed at the ``resolve_baseline_for_run`` seam —
+the Regression engine's shared engine-aware selector (D5 of
+``decisions/2026-07-03-engine-selection-policy.md``). The selector's OWN
+semantics (strictly-older, same target, same engine, tombstones excluded)
+are pinned against a real store in
+``tests/unit/regression/test_baseline_resolution.py``; these tests pin the
+composer: what inspect does with the selector's answer.
 """
 
 from __future__ import annotations
@@ -26,7 +34,6 @@ from novetest.models.regression_fact_set import RegressionFactSet, RegressionSum
 from novetest.orchestration.workflows import inspect as inspect_module
 from novetest.orchestration.workflows.inspect import build_inspect_view
 from novetest.regression import (
-    REASON_ENGINE_MISMATCH,
     REASON_NO_COMPARABLE_BASELINE,
     REASON_RUN_TOMBSTONED,
     RegressionUnavailable,
@@ -100,12 +107,18 @@ def _patch_seams(
     *,
     history: list[MemoryEntry],
     retrieved: MemoryEntry,
-    siblings: list[MemoryEntry],
+    baseline_ref: RunReference | None,
     compare_result: RegressionFactSet | RegressionUnavailable | None,
 ) -> list[tuple[RunReference, RunReference]]:
     """Wire all four inspect seams. Returns a list captured `compare_runs`
     is called with — empty when `_resolve_inspect_regression` short-
-    circuits at the "no prior" branch."""
+    circuits at the "no comparable baseline" branch.
+
+    ``baseline_ref`` is what the stubbed ``resolve_baseline_for_run``
+    returns: the selector's answer for the inspected run (``None`` = no
+    comparable baseline — single run, only tombstoned priors, only
+    cross-engine priors, or only other-target runs; the discrimination
+    lives in the real selector, pinned in ``tests/unit/regression/``)."""
 
     monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: history)
     monkeypatch.setattr(
@@ -113,8 +126,8 @@ def _patch_seams(
     )
     monkeypatch.setattr(
         inspect_module,
-        "find_runs_for_target",
-        lambda _store, _target, *, include_tombstoned=False: siblings,
+        "resolve_baseline_for_run",
+        lambda _store, _entry: baseline_ref,
     )
     # Coverage is the other engine in the inspect surface — keep it
     # unavailable here so the Regression-section tests stay focused.
@@ -187,7 +200,7 @@ def test_latest_of_two_runs_resolves_prior_as_baseline(
         monkeypatch,
         history=[inspected, prior],
         retrieved=inspected,
-        siblings=[inspected, prior],
+        baseline_ref=prior.run_record.run_reference,
         compare_result=expected_fact_set,
     )
 
@@ -212,8 +225,11 @@ def test_inspecting_an_old_run_uses_immediate_prior_not_global_latest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Inspecting a middle run in a 3-run history: the baseline is the run
-    immediately BEFORE it (older), NOT the global latest. This is the
-    composition decision documented in `_resolve_inspect_regression`."""
+    the selector answered for THIS run (its immediate comparable prior),
+    NOT the global latest pair. The immediate-prior selection itself lives
+    in the real ``resolve_baseline_for_run`` (pinned in
+    ``tests/unit/regression/``); here we pin that the composer threads the
+    selector's answer — not some other pair — into ``compare_runs``."""
 
     oldest = _make_entry("01OLDESTOLDESTOLDESTOLDEST", created_at=1)
     middle = _make_entry("01MIDDLEMIDDLEMIDDLEMIDDLE", created_at=2)
@@ -226,7 +242,7 @@ def test_inspecting_an_old_run_uses_immediate_prior_not_global_latest(
         monkeypatch,
         history=[newest, middle, oldest],  # newest-first per list_run_history
         retrieved=middle,                    # the inspected run
-        siblings=[newest, middle, oldest],   # same target → all three
+        baseline_ref=oldest.run_record.run_reference,  # selector's answer
         compare_result=expected_fact_set,
     )
 
@@ -250,7 +266,7 @@ def test_only_run_on_target_surfaces_no_comparable_baseline(
         monkeypatch,
         history=[inspected],
         retrieved=inspected,
-        siblings=[inspected],     # only itself
+        baseline_ref=None,        # selector: no comparable baseline
         compare_result=None,      # compare_runs must NOT be called
     )
 
@@ -286,9 +302,9 @@ def test_tombstoned_inspected_run_propagates_compare_run_tombstoned(
         monkeypatch,
         history=[inspected, prior],
         retrieved=inspected,
-        # find_runs_for_target(include_tombstoned=False) — Memory drops the
-        # tombstoned inspected run, so the prior is alone in siblings.
-        siblings=[prior],
+        # The selector ignores the input's own tombstone — the live prior
+        # is still the answer; compare_runs is what fails hard (§C.1).
+        baseline_ref=prior.run_record.run_reference,
         compare_result=RegressionUnavailable(
             reason=REASON_RUN_TOMBSTONED,
             detail="target",
@@ -311,18 +327,17 @@ def test_tombstoned_inspected_run_propagates_compare_run_tombstoned(
 def test_live_inspected_with_only_tombstoned_priors_surfaces_no_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`find_runs_for_target(include_tombstoned=False)` filters tombstoned
-    priors upstream. The composer never sees them, so the live inspected
-    run reports no comparable baseline."""
+    """Tombstoned priors are excluded inside the real selector (Memory's
+    ``include_tombstoned=False`` convention — pinned in
+    ``tests/unit/regression/``). At this seam that is a ``None`` answer,
+    so the live inspected run reports no comparable baseline."""
 
     inspected = _make_entry("01LIVEINSPECTLIVEINSPECTIN", created_at=5)
-    # Note: `siblings=` is what `find_runs_for_target` returns — with
-    # `include_tombstoned=False`, only the live inspected itself appears.
     seen = _patch_seams(
         monkeypatch,
         history=[inspected],  # the tombstoned priors are elided from history too — irrelevant
         retrieved=inspected,
-        siblings=[inspected],
+        baseline_ref=None,
         compare_result=None,
     )
 
@@ -335,11 +350,12 @@ def test_live_inspected_with_only_tombstoned_priors_surfaces_no_baseline(
     assert outcome["reason"] == REASON_NO_COMPARABLE_BASELINE
 
 
-def test_other_target_siblings_are_excluded_by_find_runs_for_target(
+def test_other_target_siblings_are_excluded_by_the_selector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`find_runs_for_target` filters by `target_expression`; a run on a
-    different target never reaches the composer's filter step."""
+    """Target-expression partitioning lives inside the real selector
+    (``find_runs_for_target``'s rule — pinned in ``tests/unit/regression/``);
+    a run on a different target is a ``None`` answer at this seam."""
 
     other_target = _make_entry(
         "01OTHEROTHEROTHEROTHEROTHE", created_at=1, target_expression="other/"
@@ -347,13 +363,11 @@ def test_other_target_siblings_are_excluded_by_find_runs_for_target(
     inspected = _make_entry(
         "01SAMETARGETSAMETARGETSAME", created_at=2, target_expression="tests/"
     )
-    # The siblings list IS what `find_runs_for_target("tests/", ...)` would
-    # return — only the inspected itself (other_target's expression mismatches).
     seen = _patch_seams(
         monkeypatch,
         history=[inspected, other_target],
         retrieved=inspected,
-        siblings=[inspected],
+        baseline_ref=None,
         compare_result=None,
     )
 
@@ -365,11 +379,19 @@ def test_other_target_siblings_are_excluded_by_find_runs_for_target(
     assert outcome["reason"] == REASON_NO_COMPARABLE_BASELINE
 
 
-def test_engine_mismatch_between_inspected_and_prior_propagated(
+def test_cross_engine_prior_surfaces_no_comparable_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`compare_runs` surfaces `REASON_ENGINE_MISMATCH` when the prior was
-    pytest and the inspected is jest on the same `target_expression`."""
+    """D5 behavior change (2026-07-03): a same-target prior produced by a
+    DIFFERENT engine (pytest prior, jest inspected) is never selected — the
+    real selector answers ``None`` — so inspect surfaces
+    ``REASON_NO_COMPARABLE_BASELINE`` and ``compare_runs`` is NOT called.
+
+    Pre-D5, the composer hand-picked the cross-engine prior and
+    ``compare_runs`` refused it with ``REASON_ENGINE_MISMATCH``; that
+    reason now remains reachable only via explicitly user-picked pairs
+    (``regression compare <id1> <id2>`` — defense-in-depth guard, pinned
+    in ``tests/unit/regression/test_compare.py``)."""
 
     prior = _make_entry(
         "01PRIORPYTESTPRIORPYTESTPR", created_at=1, engine_name="pytest"
@@ -381,23 +403,57 @@ def test_engine_mismatch_between_inspected_and_prior_propagated(
         monkeypatch,
         history=[inspected, prior],
         retrieved=inspected,
-        siblings=[inspected, prior],
-        compare_result=RegressionUnavailable(
-            reason=REASON_ENGINE_MISMATCH,
-            detail="baseline engine_name='pytest' != target engine_name='jest'",
-            baseline_run_reference=prior.run_record.run_reference,
-            target_run_reference=inspected.run_record.run_reference,
-        ),
+        baseline_ref=None,        # the engine-scoped selector's real answer
+        compare_result=None,      # compare_runs must NOT be called
     )
 
     view = build_inspect_view(object(), inspected.run_record.run_reference.run_id)  # type: ignore[arg-type]
     assert view is not None
-    # compare_runs IS called — the engine, not the composer, classifies it.
-    assert len(seen) == 1
+    assert seen == []
     outcome = view.to_dict()["regression_outcome"]
     assert isinstance(outcome, dict)
     assert outcome["kind"] == "unavailable"
-    assert outcome["reason"] == REASON_ENGINE_MISMATCH
+    assert outcome["reason"] == REASON_NO_COMPARABLE_BASELINE
+    assert outcome["target_run_reference"]["run_id"] == inspected.run_record.run_reference.run_id
+    assert outcome["baseline_run_reference"] is None
+
+
+def test_composer_passes_inspected_entry_to_shared_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composer consults ``resolve_baseline_for_run`` with the
+    INSPECTED run's Memory Entry (not the global latest) and threads its
+    answer into ``compare_runs`` as the baseline — the structural pin that
+    inspect routes baseline selection through the shared D5 selector."""
+
+    prior = _make_entry("01PRIORSELECTORPRIORSELECT", created_at=1)
+    inspected = _make_entry("01INSPECTSELECTORINSPECTSE", created_at=2)
+    expected_fact_set = _make_regression_fact_set(
+        prior.run_record.run_reference, inspected.run_record.run_reference
+    )
+    seen = _patch_seams(
+        monkeypatch,
+        history=[inspected, prior],
+        retrieved=inspected,
+        baseline_ref=prior.run_record.run_reference,
+        compare_result=expected_fact_set,
+    )
+
+    # Override the selector stub with a logging fake (last setattr wins).
+    selector_seen: list[MemoryEntry] = []
+
+    def logging_selector(_store: Any, entry: MemoryEntry) -> RunReference:
+        selector_seen.append(entry)
+        return prior.run_record.run_reference
+
+    monkeypatch.setattr(
+        inspect_module, "resolve_baseline_for_run", logging_selector
+    )
+
+    view = build_inspect_view(object(), inspected.run_record.run_reference.run_id)  # type: ignore[arg-type]
+    assert view is not None
+    assert selector_seen == [inspected]
+    assert seen == [(prior.run_record.run_reference, inspected.run_record.run_reference)]
 
 
 def test_sub_reports_regression_flips_across_available_and_unavailable(
@@ -416,7 +472,7 @@ def test_sub_reports_regression_flips_across_available_and_unavailable(
         monkeypatch,
         history=[inspected, prior],
         retrieved=inspected,
-        siblings=[inspected, prior],
+        baseline_ref=prior.run_record.run_reference,
         compare_result=expected_fact_set,
     )
     view = build_inspect_view(object(), inspected.run_record.run_reference.run_id)  # type: ignore[arg-type]
@@ -431,7 +487,7 @@ def test_sub_reports_regression_flips_across_available_and_unavailable(
         monkeypatch,
         history=[only],
         retrieved=only,
-        siblings=[only],
+        baseline_ref=None,
         compare_result=None,
     )
     view = build_inspect_view(object(), only.run_record.run_reference.run_id)  # type: ignore[arg-type]

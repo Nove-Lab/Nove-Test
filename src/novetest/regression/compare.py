@@ -597,28 +597,81 @@ def _engine_version_drift(baseline: RunRecord, target: RunRecord) -> bool:
 # --- baseline resolution -----------------------------------------------------
 
 
+def resolve_baseline_for_run(
+    store: ProjectStore,
+    target_entry: MemoryEntry,
+) -> RunReference | None:
+    """Return the newest comparable baseline for ``target_entry``, or ``None``.
+
+    "Comparable" = live (non-tombstoned), strictly older by ``created_at``,
+    same ``target_expression``, AND same ``engine_name``. The engine filter
+    is D5 of ``decisions/2026-07-03-engine-selection-policy.md``: cross-run
+    analyses never cross an engine boundary, so a mixed-engine series
+    (legitimate under D3's transient ``--engine`` override, e.g. a
+    Rust+PyO3 root alternating cargo-test and pytest) resolves to the
+    nearest same-engine prior instead of a guaranteed-mismatch neighbor.
+
+    This is the single shared selector behind ``resolve_latest_baseline``
+    and the Orchestration compositions (``inspect`` / ``status``) — the D5
+    filter lives here and nowhere else. ``compare_runs``'s
+    ``REASON_ENGINE_MISMATCH`` guard stays as defense-in-depth for
+    explicitly user-picked pairs.
+
+    ``None`` means no such run exists (fresh target, single run, or no
+    same-engine prior). Callers decide how to surface that — an
+    ``Unavailable`` for resolvers, ``False`` for availability probes. The
+    input entry's own tombstone state is deliberately ignored: a tombstoned
+    target still resolves a baseline, and ``compare_runs`` fails hard with
+    ``REASON_RUN_TOMBSTONED`` per decision §C.1.
+    """
+    record = target_entry.run_record
+    siblings = find_runs_for_target(
+        store, record.target_expression, include_tombstoned=False
+    )
+    # Newest-first per Memory's ordering guarantee — the first survivor of
+    # both filters is the newest comparable baseline.
+    for sibling in siblings:
+        sibling_record = sibling.run_record
+        if (
+            sibling_record.run_reference.created_at
+            >= record.run_reference.created_at
+        ):
+            continue
+        if sibling_record.engine_name != record.engine_name:
+            continue
+        return sibling_record.run_reference
+    return None
+
+
 def resolve_latest_baseline(
     store: ProjectStore,
     target_expression: str,
 ) -> tuple[RunReference, RunReference] | RegressionUnavailable:
-    """Resolve the ``(baseline, target)`` pair for the two most recent comparable runs.
+    """Resolve the ``(baseline, target)`` pair for the most recent comparable runs.
 
-    Tombstoned runs are excluded by default (Memory's ``find_runs_for_target``
-    convention). When fewer than two comparable runs exist for the given
-    ``target_expression``, returns
-    ``RegressionUnavailable(reason=REASON_NO_COMPARABLE_BASELINE,
-    detail=target_expression)``.
+    The target is the newest non-tombstoned entry for ``target_expression``
+    — engine-agnostic, because the latest run defines the series head
+    regardless of which engine produced it. The baseline is the newest
+    strictly-older entry with the SAME ``engine_name`` as that target, per
+    D5 of ``decisions/2026-07-03-engine-selection-policy.md``; selection is
+    delegated to ``resolve_baseline_for_run`` (the one place the D5 filter
+    lives). Target-*type* drift remains ``compare_runs``' concern (warning,
+    not a selection barrier).
 
-    Memory guarantees newest-first ordering by ``created_at`` descending
-    (``src/novetest/memory/store.py:152``). The result is therefore
-    ``(entries[1], entries[0]) = (baseline, target) = (older, newer)``,
-    which threads directly into ``compare_runs(store, baseline, target)``.
+    Tombstoned runs are excluded by default (Memory's
+    ``find_runs_for_target`` convention); Memory guarantees newest-first
+    ordering by ``created_at`` descending
+    (``src/novetest/memory/store.py:152``). The returned pair threads
+    directly into ``compare_runs(store, baseline, target)``.
 
-    Comparability is **not** narrowed here by ``engine_name`` or
-    ``target_type``: ``compare_runs`` owns those checks (engine-name mismatch
-    → ``REASON_ENGINE_MISMATCH``, target-type drift → warning). This helper
-    trusts Memory's ``target_expression`` filter and stays a pure pair
-    selector.
+    Unavailable cases (both ``REASON_NO_COMPARABLE_BASELINE``):
+
+    - fewer than two live runs on the target →
+      ``detail=target_expression`` (pre-D5 wording, preserved);
+    - older live runs exist but none share the target's engine →
+      ``detail="<target_expression> (engine=<engine_name>)"``, so the
+      operator can see the D5 filter — not run scarcity — eliminated the
+      candidates.
     """
     entries = find_runs_for_target(
         store, target_expression, include_tombstoned=False
@@ -628,9 +681,17 @@ def resolve_latest_baseline(
             reason=REASON_NO_COMPARABLE_BASELINE,
             detail=target_expression,
         )
-    target_ref = entries[0].run_record.run_reference
-    baseline_ref = entries[1].run_record.run_reference
-    return baseline_ref, target_ref
+    target_entry = entries[0]
+    baseline_ref = resolve_baseline_for_run(store, target_entry)
+    if baseline_ref is None:
+        return RegressionUnavailable(
+            reason=REASON_NO_COMPARABLE_BASELINE,
+            detail=(
+                f"{target_expression} "
+                f"(engine={target_entry.run_record.engine_name})"
+            ),
+        )
+    return baseline_ref, target_entry.run_record.run_reference
 
 
 def derive_latest_regression(
@@ -646,8 +707,10 @@ def derive_latest_regression(
 
     Any ``RegressionUnavailable`` surfaced by ``resolve_latest_baseline``
     (typically a single-run target) is propagated as-is — its ``detail``
-    carries the active ``target_expression``, which is the more useful
-    operator hint than re-wrapping it to ``"no-runs"``.
+    carries the active ``target_expression`` (suffixed with
+    ``(engine=<name>)`` when the D5 same-engine filter is what eliminated
+    the candidates), which is the more useful operator hint than
+    re-wrapping it to ``"no-runs"``.
     """
     history = list_run_history(store)
     live = [entry for entry in history if entry.tombstoned_at is None]

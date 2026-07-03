@@ -101,11 +101,14 @@ def check_regression_availability(
 ) -> bool:
     """Return True iff a comparable prior (non-tombstoned) run exists.
 
-    "Comparable" here = "shares the same resolved ``target_expression``" —
-    the same partition rule ``find_runs_for_target`` uses. Engine /
-    target-type compatibility checks are deliberately deferred to
-    ``compare_runs``; this helper only answers the eligibility question
-    ("is there *any* prior the caller could compare against?").
+    "Comparable" = "shares the same resolved ``target_expression`` AND the
+    same ``engine_name``". The target partition is ``find_runs_for_target``'s
+    rule; the engine filter is D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md`` (cross-run analyses
+    never cross an engine boundary) — an eligibility probe that counted a
+    cross-engine sibling would say "available" for a comparison the engine
+    is guaranteed to refuse. Target-*type* compatibility stays deferred to
+    ``compare_runs`` (drift = warning, not a comparability barrier).
 
     Behaviour:
     - Unknown ``run_reference`` (no live or tombstoned record) → ``False``.
@@ -128,8 +131,10 @@ def check_regression_availability(
         include_tombstoned=False,
     )
     comparable = [
-        e for e in siblings
+        e
+        for e in siblings
         if e.run_record.run_reference.run_id != run_reference.run_id
+        and e.run_record.engine_name == entry.run_record.engine_name
     ]
     return len(comparable) >= 1
 
