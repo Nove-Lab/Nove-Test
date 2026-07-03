@@ -15,7 +15,7 @@
 | --- | --- |
 | `novetest localization <run_id>` | `localization/derive_localization_findings` |
 | `novetest localization latest` | `localization/derive_latest_localization` |
-| `derive_localization_findings(run_reference)` | `memory/retrieve_run_evidence` -> `coverage/get_coverage_facts` -> `regression/get_regression_facts` |
+| `derive_localization_findings(run_reference)` | `memory/retrieve_run_evidence` -> `coverage/get_coverage_facts` -> `regression/resolve_baseline_for_run` -> `regression/get_regression_facts` |
 | `resolve_latest_analyzable_run()` | `memory/find_latest_analyzable_run` |
 | `derive_latest_localization()` | `localization/resolve_latest_analyzable_run` -> `localization/derive_localization_findings` |
 | `get_localization_findings(run_reference)` | - |

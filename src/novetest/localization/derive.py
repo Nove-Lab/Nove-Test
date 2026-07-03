@@ -63,7 +63,6 @@ from novetest.localization.symbol_resolver import resolve_python_symbol
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import (
     RunEvidenceNotFoundError,
-    find_runs_for_target,
     list_run_history,
     retrieve_run_evidence,
 )
@@ -74,9 +73,11 @@ from novetest.models.localization_finding import (
     LocalizationEntry,
     LocalizationFinding,
 )
+from novetest.models.memory_entry import MemoryEntry
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
+from novetest.regression.compare import resolve_baseline_for_run
 from novetest.regression.results import RegressionUnavailable
 from novetest.regression.retrieval import get_regression_facts
 
@@ -181,7 +182,7 @@ def derive_localization_findings(
     #      when Regression Facts exist; failure-only Ochiai floor otherwise)
     #    - Path C (no coverage at all)      → ``failure_proximity``
     coverage = get_coverage_facts(store, record.run_reference)
-    regression_facts = try_get_latest_regression_facts(store, record)
+    regression_facts = try_get_latest_regression_facts(store, entry)
 
     finding: LocalizationFinding
     if isinstance(coverage, CoverageUnavailable):
@@ -669,16 +670,17 @@ def _changed_files_from_regression(
 
 def try_get_latest_regression_facts(
     store: ProjectStore,
-    record: RunRecord,
+    entry: MemoryEntry,
 ) -> RegressionFactSet | None:
-    """Best-effort lookup of cached Regression Facts for ``record``.
+    """Best-effort lookup of cached Regression Facts for ``entry``'s run.
 
     Returns the ``RegressionFactSet`` whose ``target_run_reference``
-    matches this record AND whose ``baseline_run_reference`` is the
-    most-recent comparable prior run (same ``target_expression``).
-    Returns ``None`` when:
+    matches this run AND whose ``baseline_run_reference`` is the
+    most-recent comparable prior run (same ``target_expression`` AND
+    same ``engine_name``). Returns ``None`` when:
 
-    - No prior comparable run exists in the store (typical first run).
+    - No prior comparable run exists in the store (typical first run,
+      or a mixed-engine store with only cross-engine priors).
     - The prior pair has no cached ``regression_facts.json`` (Regression
       hasn't been derived yet for the pair).
     - Any lookup operation raises — Localization should never abort due
@@ -690,38 +692,27 @@ def try_get_latest_regression_facts(
     the floor (failure-only Ochiai) is used instead, both at
     ``confidence: "medium"``.
 
-    Sibling resolution follows Regression's ``resolve_latest_baseline``
-    pattern: ``find_runs_for_target`` returns newest-first, and we pick
-    the most recent entry STRICTLY older than ``record``. This matches
-    the Regression engine's pair semantics so any cached
+    Sibling resolution delegates to Regression's shared
+    ``resolve_baseline_for_run`` selector — the single home of the D5
+    engine filter (``decisions/2026-07-03-engine-selection-policy.md``:
+    cross-run analyses never cross an engine boundary). This matches the
+    Regression engine's pair semantics exactly, so any cached
     ``regression_facts.json`` was derived from the same baseline pair we
-    just resolved.
+    just resolved; a pre-D5 local scan here could ask for a cross-engine
+    pair (whose cache can never exist) and silently miss the same-engine
+    pair one step back.
     """
     try:
-        siblings = find_runs_for_target(
-            store, record.target_expression, include_tombstoned=False
-        )
+        baseline_ref = resolve_baseline_for_run(store, entry)
     except Exception:  # noqa: BLE001 - best-effort: never abort the caller.
         return None
-
-    target_run_id = record.run_reference.run_id
-    target_created = record.run_reference.created_at
-    # ``find_runs_for_target`` is newest-first; iterate in that order
-    # and pick the first STRICTLY older non-self sibling.
-    baseline_ref: RunReference | None = None
-    for sibling in siblings:
-        sibling_ref = sibling.run_record.run_reference
-        if sibling_ref.run_id == target_run_id:
-            continue
-        if sibling_ref.created_at >= target_created:
-            continue
-        baseline_ref = sibling_ref
-        break
     if baseline_ref is None:
         return None
 
     try:
-        result = get_regression_facts(store, baseline_ref, record.run_reference)
+        result = get_regression_facts(
+            store, baseline_ref, entry.run_record.run_reference
+        )
     except Exception:  # noqa: BLE001 - same posture as above.
         return None
     if isinstance(result, RegressionUnavailable):
