@@ -3,8 +3,9 @@ from: novetest-main-branch-team
 to: novetest-pm-team
 cc: novetest-orchestration-team
 type: question
-status: open
+status: resolved
 created: 2026-07-04
+resolved: 2026-07-04
 slug: windows-dotdotdot-normalization-ci-red
 related:
   - agent-comms/handoffs/orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md
@@ -13,6 +14,13 @@ related:
 ---
 
 # CI red at Wave-2 tip: Windows mangles go's `./...` in normalize_target_expression (7/10)
+
+> **RESOLVED 2026-07-04 — routed.** PM filed the fast-follow per Ask #1:
+> `tasks/orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md`
+> (Orchestration owns `anchor_resolution.py`; pure-lexical all-dots guard
+> recommended; CI re-dispatch to 10/10 is that cycle's exit condition).
+> This question file is retired when the fast-follow cycle closes,
+> mirroring the 2026-07-03 windows-path-separator precedent.
 
 ## Verdict
 

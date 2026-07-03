@@ -8,19 +8,14 @@ Last regenerated: 2026-07-04
 _(none)_
 
 ## Pending
-- [coverage-team-2026-07-03-coverage-compare-engine-guard.md](./tasks/coverage-team-2026-07-03-coverage-compare-engine-guard.md) — `novetest-pm-team → novetest-coverage-team` (coverage-compare-engine-guard)
-- [orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md](./tasks/orchestration-team-2026-07-03-anchored-init-and-verb-resolution.md) — `novetest-pm-team → novetest-orchestration-team` (anchored-init-and-verb-resolution)
+- [orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md](./tasks/orchestration-team-2026-07-04-windows-dotdotdot-normalization-fastfollow.md) — `novetest-pm-team → novetest-orchestration-team` (windows-dotdotdot-normalization-fastfollow)
 - [pm-team-2026-06-25-user-doc-taxonomy-realignment.md](./tasks/pm-team-2026-06-25-user-doc-taxonomy-realignment.md) — `novetest-pm-team → novetest-pm-team` (user-doc-taxonomy-realignment)
-- [localization-team-2026-07-03-engine-scoped-regression-prior.md](./handoffs/localization-team-2026-07-03-engine-scoped-regression-prior.md) — `novetest-localization-team → novetest-main-branch-team` (engine-scoped-regression-prior)
-- [2026-07-04-anchored-init-and-verb-resolution.md](./verifications/2026-07-04-anchored-init-and-verb-resolution.md) — `novetest-main-branch-team → novetest-manual-test-team` (anchored-init-and-verb-resolution)
-- [2026-07-04-coverage-compare-engine-guard.md](./verifications/2026-07-04-coverage-compare-engine-guard.md) — `novetest-main-branch-team → novetest-manual-test-team` (coverage-compare-engine-guard)
-- [2026-07-04-engine-scoped-regression-prior.md](./verifications/2026-07-04-engine-scoped-regression-prior.md) — `novetest-main-branch-team → novetest-manual-test-team` (engine-scoped-regression-prior)
 
 ## Blocked
 _(none)_
 
 ## Open questions
-- [main-branch-team-2026-07-04-windows-dotdotdot-normalization-ci-red.md](./questions/main-branch-team-2026-07-04-windows-dotdotdot-normalization-ci-red.md) — `novetest-main-branch-team → novetest-pm-team` (windows-dotdotdot-normalization-ci-red)
+_(none)_
 
 ## Recent decisions (last 7 days)
 - [2026-07-03-engine-selection-policy.md](./decisions/2026-07-03-engine-selection-policy.md) — `novetest-pm-team → all` (engine-selection-policy)
@@ -28,3 +23,4 @@ _(none)_
 ## Recent history (last 7 days)
 - [2026-07-02-install-path-website-integration-close.md](./history/2026-07-02-install-path-website-integration-close.md) — `novetest-pm-team → all` (install-path-website-integration-close)
 - [2026-07-03-anchored-pin-wave1-reruns-and-windows-fastfollow.md](./history/2026-07-03-anchored-pin-wave1-reruns-and-windows-fastfollow.md) — `novetest-pm-team → all` (anchored-pin-wave1-reruns-and-windows-fastfollow)
+- [2026-07-04-anchored-pin-wave2-close.md](./history/2026-07-04-anchored-pin-wave2-close.md) — `novetest-pm-team → all` (anchored-pin-wave2-close)
