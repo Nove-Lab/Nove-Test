@@ -43,6 +43,6 @@ MEM-05 + Top-10 M)를 18개 적대 에이전트가 원 소스 대비 재검증 �
 
 ## 현재 상태 / 다음 액션
 
-- 계획은 **draft PR #2**(브랜치 `worktree-refactor-plan`)에 있음. **PR #2 merge 시 리뷰+계획+이 결정이
-  함께 `main`에 안착**하고 그때부터 어느 환경이든 fresh clone으로 바로 파악 가능.
-- 실행 착수(W0)는 CEO 최종 go 후. 착수 시 이 결정을 참조해 `agent-comms/tasks/`로 S0을 배정.
+- **CEO 승인 완료 (2026-07-05).** 계획은 **PR #2**(브랜치 `worktree-refactor-plan`)에 있음.
+  **PR #2 merge 시 리뷰+계획+이 결정이 함께 `main`에 안착**하고 그때부터 어느 환경이든 fresh clone으로 바로 파악 가능.
+- **다음 액션 = PR #2 merge → W0(v0.1.3 릴리스) 착수.** 착수 시 이 결정을 참조해 `agent-comms/tasks/`로 S0을 배정.

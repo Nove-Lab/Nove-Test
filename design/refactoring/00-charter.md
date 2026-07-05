@@ -1,6 +1,6 @@
 # Nove Test — 코드베이스 리팩터링 프로그램 헌장 (Charter)
 
-작성일: 2026-07-05 · 소유: PM(+CEO 승인) · 상태: **초안(verification 반영 전)**
+작성일: 2026-07-05 · 소유: PM(+CEO 승인) · 상태: **CEO 승인 완료 (2026-07-05)**
 입력 리뷰: [`design/reviews/2026-07-04-codebase-review/`](../reviews/2026-07-04-codebase-review/) (v0.1.2 이후 `main` HEAD 대상, 확정 103건)
 
 ---
