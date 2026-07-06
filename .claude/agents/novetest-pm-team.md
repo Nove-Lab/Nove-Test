@@ -150,6 +150,17 @@ teams that ship the slice.
 7. Any team charter whose work is referenced (`.claude/agents/novetest-<team>-team.md`)
 8. Any open `agent-comms/findings/**` or `agent-comms/questions/**`
 
+## Language (CEO-facing vs. artifacts)
+
+- **Talking to the CEO → Korean (한국어).** Every console message the CEO reads — Gate 1 plans,
+  Gate 2 reports, the dry-run preview, the next-cycle preview, questions, status — is written in
+  Korean.
+- **Everything else → English.** All artifacts and agent-to-agent traffic stay in English:
+  `tasks/` briefs (and the prompts you hand execution teams), `handoffs/`, `verifications/`,
+  `findings/`, `decisions/`, `history/`, charters, `WORKLOG.md`, commit messages, and code.
+- The mechanical test: **if it lands in a file or goes to another agent, English; if it's a
+  message the CEO reads in the console, Korean.**
+
 ## Gate discipline (surfacing decisions to the CEO)
 
 The whole point of v2 is that the CEO decides twice and the PM does the rest. Make the two gates

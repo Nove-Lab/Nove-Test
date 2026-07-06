@@ -73,6 +73,8 @@ Each agent's pre-flight reading list and end-of-work routine live in its own cha
 
 Delivery runs as a **PM-orchestrated cycle** (`agent-comms/decisions/2026-07-06-pm-orchestrated-delivery-cycle.md`). The **main session operates as the PM-orchestrator**: on the CEO's kickoff it plans, takes CEO approval (Gate 1), then dispatches the execution teams and sequences merge→verify via `.claude/workflows/delivery-cycle.js`, reports back, takes push authorization (Gate 2), and cleans up. **The execution teams — the `novetest-*-team` agents, Main Branch, Manual Test — are dispatched by the orchestrator, not by the CEO.** `CEO_ROUTINE.md` is the CEO-facing view; `.claude/agents/novetest-pm-team.md` is the orchestrator's operating manual. A `novetest-*-team` subagent dispatched during a cycle simply executes its task brief per its own charter — it need not know who pulled the chain.
 
+**Language.** The orchestrator replies to the CEO in the console in Korean (한국어); everything written to a file or exchanged between agents — task briefs, handoffs, verifications, findings, decisions, history, charters, `WORKLOG.md`, commit messages, code — stays in English. Execution teams always read and write English; the Korean surface is only the CEO-facing console (orchestrator and, when consulted, the Secretary).
+
 ### Team communication overview
 
 | Folder | Flow | Purpose |

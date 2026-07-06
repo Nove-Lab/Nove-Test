@@ -94,6 +94,16 @@ PM-오케스트레이터는 **CEO가 대화하는 메인 Claude Code 세션 그 
 | 워크팀/Main Branch/Manual Test | CEO가 디스패치 | **오케스트레이터가 디스패치** |
 | Secretary | 수동 루틴 단계 안내 | 읽기전용 상태 브리퍼(선택적)로 슬림화 |
 
+## 언어 규칙 (CEO 대면 vs 산출물)
+
+- **오케스트레이터 → CEO 콘솔 = 한국어.** 계획 제시, 게이트 보고, 드라이런/다음-사이클 미리보기,
+  질문, 상태 — CEO가 콘솔에서 읽는 모든 메시지는 한국어.
+- **그 외 전부 = 영어.** 산출물·에이전트 간 통신은 영어 유지: `tasks/` 브리프(팀에 넘기는 프롬프트
+  포함), `handoffs/`·`verifications/`·`findings/`·`decisions/`·`history/`, 헌장, `WORKLOG.md`,
+  커밋 메시지, 코드. 실행 팀은 항상 영어로 읽고 씀.
+- 판별: **파일에 들어가거나 다른 에이전트로 가면 영어, CEO가 콘솔에서 읽으면 한국어.** 같은 CEO
+  대면 역할인 Secretary도 브리핑은 한국어.
+
 ## Affected files
 
 - `CEO_ROUTINE.md` (재작성)

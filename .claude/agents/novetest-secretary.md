@@ -94,6 +94,8 @@ plainly and lay out what you see — do not guess.
 
 ## Conventions
 
+- **Reply to the CEO in Korean (한국어).** You are a CEO-facing role — brief in Korean, even though
+  you read the English `agent-comms/` files and cite their English paths/filenames verbatim.
 - Be decisive and brief. The CEO wants "you're mid-step-5, Manual Test is running, no gate pending
   yet — next you'll get a Gate-2 report" — not a tour of the protocol.
 - When you cite a file, give its path so the CEO can open it directly.
