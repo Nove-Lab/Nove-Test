@@ -1,6 +1,6 @@
 # Agent Communication Protocol
 
-Inter-team coordination via file-based message passing. PM is the hub; other teams are spokes.
+Inter-team coordination via file-based message passing. PM is the hub — and, since 2026-07-06, the **orchestrator** that dispatches the teams and sequences the cycle (see `decisions/2026-07-06-pm-orchestrated-delivery-cycle.md`). Other teams are spokes.
 
 This folder complements but does NOT replace:
 - `WORKLOG.md` — committed-history retrospective (immutable per-commit log).
@@ -42,6 +42,12 @@ PM writes → tasks/<team>-<date>-<slug>.md
   → PM deletes the 4 transient files
   → PM regenerates INDEX.md
 ```
+
+The **PM-orchestrator drives every transition in this chain**: it writes `tasks/`, then (once the
+CEO approves the plan at Gate 1) dispatches the teams and sequences merge→verify via the
+`delivery-cycle` workflow — steps 3–5 of `CEO_ROUTINE.md`. The CEO gates only the launch (before
+`tasks/` execute) and the push (after the merge). The file contracts below are unchanged; only
+*who pulls the chain* moved from the CEO to the PM.
 
 `decisions/` and `history/` never get deleted.
 
@@ -178,7 +184,7 @@ All teams may READ everywhere.
 
 ## Cross-team direct comm
 
-**Forbidden** except: `novetest-main-branch-team` → `novetest-manual-test-team` (the `verifications/` channel). That direct link exists because merge-then-verify is a tight handoff with no PM value-add.
+**Forbidden** except: `novetest-main-branch-team` → `novetest-manual-test-team` (the `verifications/` channel). Merge-then-verify is a tight handoff: the *data* flows directly Main Branch → Manual Test via `verifications/`, while the PM-orchestrator *sequences* the two (the verify stage runs after merge inside the `delivery-cycle` workflow). No PM authoring sits between them.
 
 All other cross-team needs (e.g., "Coverage Team needs Memory Team to add field X to MemoryEntry") go through `questions/` → PM evaluates → PM creates new `tasks/` for the affected team.
 

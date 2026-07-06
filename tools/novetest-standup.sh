@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # novetest-standup.sh — one-command morning briefing for the CEO.
 #
-# Automates Step 0 of CEO_ROUTINE.md: refreshes agent-comms/INDEX.md, then
-# prints a prioritized, read-only snapshot of the project's coordination state.
+# Refreshes agent-comms/INDEX.md, then prints a prioritized, read-only snapshot of
+# the coordination state — the status-check that opens a cycle (PM-orchestrator step 1,
+# per CEO_ROUTINE.md) and the CEO's quick-glance.
 # Changes nothing except INDEX.md (regenerated). Safe to run any time.
 #
 # Usage (from repo root or anywhere inside the repo):
@@ -105,14 +106,17 @@ F=$(count_md "$COMMS/findings")
 H=$(count_md "$COMMS/handoffs")
 V=$(count_md "$COMMS/verifications")
 T=$(count_md "$COMMS/tasks")
+# v2 (PM-orchestrated): the CEO does not hand-dispatch teams — the PM-orchestrator does,
+# inside a cycle. These states tell you WHERE a cycle stands (or that none runs); the
+# CEO's lever is always '/cycle'. See decisions/2026-07-06-pm-orchestrated-delivery-cycle.md.
 if [ "$Q" -gt 0 ] || [ "$F" -gt 0 ]; then
-  echo "-> Today: open blockers/findings exist. Convene PM (CEO_ROUTINE step 1) to triage first."
+  echo "-> Open blockers/findings exist. Start a cycle ('/cycle'): the PM triages these and brings the decisions to you at Gate 1."
 elif [ "$V" -gt 0 ]; then
-  echo "-> Today: verifications waiting. Dispatch Manual Test (CEO_ROUTINE step 4)."
+  echo "-> Mid-cycle: a merge is awaiting E2E. Manual Test runs inside the delivery workflow — resume via '/cycle' if the cycle was interrupted."
 elif [ "$H" -gt 0 ]; then
-  echo "-> Today: handoffs waiting. Dispatch Main Branch (CEO_ROUTINE step 3)."
+  echo "-> Mid-cycle: handoffs await merge. Main Branch merges inside the delivery workflow — resume via '/cycle' if the cycle was interrupted."
 elif [ "$T" -gt 0 ]; then
-  echo "-> Today: tasks assigned, not yet picked up. Dispatch the work teams (CEO_ROUTINE step 2)."
+  echo "-> A plan exists (tasks written) but is not launched. Start '/cycle' and approve at Gate 1 to dispatch the work teams."
 else
-  echo "-> Today: no in-flight work. Convene PM (CEO_ROUTINE step 1) to plan."
+  echo "-> No in-flight work. Start a fresh cycle with '/cycle' (the PM plans and stops at Gate 1 for you)."
 fi

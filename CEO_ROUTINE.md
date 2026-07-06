@@ -1,122 +1,128 @@
-# CEO Daily Operating Routine
+# CEO Operating Routine
 
-How the CEO leads communication across the Nove Test multi-agent teams, in order.
+How the CEO runs a delivery cycle now that the **PM orchestrates** it. Your only job in a
+cycle is two decisions; the PM-orchestrator does the dispatching, sequencing, and reporting
+in between.
 
-This is the human-facing companion to `agent-comms/README.md` (the protocol) and
-`.claude/agents/novetest-*-team.md` (the team charters). Read those for mechanics;
-read this for the daily sequence.
+This is the human-facing companion to `agent-comms/README.md` (the protocol),
+`.claude/agents/novetest-pm-team.md` (the orchestrator's operating manual), and
+`agent-comms/decisions/2026-07-06-pm-orchestrated-delivery-cycle.md` (why it works this way).
+
+---
+
+## The model in one paragraph
+
+You talk to **one** thing: the **PM-orchestrator**, which is your main Claude Code session
+itself (not a spawned `@novetest-pm-team` subagent — see "How to start a cycle" for why).
+It plans the day, shows you the plan, and — once you approve — dispatches every team,
+merges, verifies, and reports back. You step in exactly twice: to **approve the plan** and to
+**confirm the report + authorize the push**. Everything else is automated beneath the PM.
 
 ---
 
 ## The cycle at a glance
 
 ```
-0. CEO checks directly     INDEX + findings + questions
+1. PM plans          orchestrator: status-check → triage → draft tasks/ + plan
         ↓
-1. Convene PM              resolve questions (CEO decides → decisions/) + write tasks/
+2. YOU approve       ── GATE 1 ── approve the plan (+ answer any questions/)
         ↓
-2. CEO → work teams        dispatch teams per tasks/ (parallel where independent) → handoffs/
+3. Work teams        orchestrator dispatches teams in parallel → handoffs/
         ↓
-3. CEO → Main Branch       merge + test gate → verifications/
+4. Main Branch       merge + test gate (pytest+mypy) + commit → verifications/
         ↓
-4. CEO → Manual Test       E2E verification → findings/
+5. Manual Test       E2E verification → findings/           (doc-only cycles skip this)
         ↓
-5. CEO → PM again          cycle cleanup: DoD tick + history + delete transient files
+6. PM reviews        orchestrator: DoD check + reads findings → reports to YOU
         ↓
-   (next day → step 0)
+7. YOU confirm       ── GATE 2 ── confirm report + authorize push
+        ↓
+8. PM finalizes      DoD tick + history/ + delete transients → push (delivery+cleanup) → preview next
 ```
+
+Steps 3–5 run as one background **`delivery-cycle` workflow** (fan-out → merge → verify).
+You are not in the loop for any of it — the PM is.
 
 ---
 
-## Step 0 — Status check (≈5 min, CEO does this directly)
+## How to start a cycle (invocation)
 
-No PM, no teams. Run the standup script for a one-command briefing:
+Talk to your **main session directly**. Do **not** address `@novetest-pm-team` — that spawns
+a planning-only subagent that *cannot pause for your approval*, so it can't run the full cycle
+with its two gates. The orchestrator has to be the main session so it can hand control back to
+you at each gate.
 
-```bash
-./tools/novetest-standup.sh
-```
+Two equivalent ways to kick off:
 
-It refreshes `agent-comms/INDEX.md`, then prints — in priority order — open
-blockers (`questions/`), findings awaiting review, in-flight work per channel,
-recent decisions, recent commits, and stale worktrees, ending with a suggested
-entry point into this routine. Read-only except for the index refresh.
+- **Slash command (preferred):** `/cycle`
+  Expands to the orchestrator kickoff (includes the workflow authorization). Optionally pass a
+  focus, e.g. `/cycle W0 릴리스 착수`.
+- **Plain phrase with the workflow opt-in:** include the word **`ultracode`** so the session is
+  authorized to run the delivery workflow, e.g.
+  `ultracode 오늘의 사이클 시작하자` / `ultracode, start today's cycle`.
 
-If you prefer to read the raw files, the three that matter are:
+Either way the session will: run `git fetch && git status` + the standup, triage
+`findings/`+`questions/`, draft the plan, and **stop at Gate 1 for you.**
 
-- `agent-comms/INDEX.md` — what was in progress yesterday, open questions, blockers.
-- `agent-comms/findings/` — Manual Test verification results. Failures or regressions here are top priority.
-- `agent-comms/questions/` — anything a team is blocked on.
-
-Do not skip this step. Going straight to step 1 means PM plans on stale assumptions.
-
-## Step 1 — Convene PM (plan the day + clear blockers)
-
-Dispatch `novetest-pm-team`. Ask it to:
-
-- Triage the `findings/` and `questions/` from step 0.
-- Propose the task breakdown for today's phase work.
-
-PM produces:
-
-- For each open `questions/` item: options for the CEO. **The CEO decides.** PM records the decision in `agent-comms/decisions/`.
-- `agent-comms/tasks/<team>-<date>-<slug>.md` files — the work briefs for today.
-- Parallelizability and dependency notes.
-
-PM does **not** dispatch anyone. It only writes the prompts (the `tasks/` files).
-
-## Step 2 — Dispatch the work teams (parallel)
-
-Read the `tasks/` files PM wrote. Dispatch the named team for each.
-
-- Independent tasks → dispatch teams concurrently (e.g. `novetest-coverage-team` + `novetest-run-team` in parallel).
-- Dependent tasks → dispatch in the order PM specified.
-
-Each team works per its charter: isolated worktree → `WORKLOG.md` entry → `agent-comms/handoffs/<team>-...md`, then stops. If a team gets blocked, it writes to `agent-comms/questions/` and stops — that loops back to step 1.
-
-## Step 3 — Dispatch Main Branch (merge)
-
-Once teams have written `handoffs/`, dispatch `novetest-main-branch-team`.
-
-- It reads the handoffs, merges the worktrees, runs the test gate (`pytest` + `mypy`), and commits.
-- Gate fails → Main Branch bounces the slice back via `questions/`; the originating team fixes it (back to step 2).
-- Gate passes → Main Branch writes `agent-comms/verifications/<date>-<slug>.md` telling Manual Test what to verify.
-- **Push happens only when the CEO explicitly authorizes it.**
-
-## Step 4 — Dispatch Manual Test (E2E verification)
-
-Once `verifications/` is posted, dispatch `novetest-manual-test-team`.
-
-- It runs real CLI end-to-end per the verification guide, plus its own edge-case probing.
-- It writes `agent-comms/findings/<date>-<slug>.md` — verdict (`passed` / `failed` / `partial`) plus a CEO-readable narrative.
-- Regression found → Manual Test does not fix it; it writes a detailed report in `findings/`. The CEO picks it up at the next step 0.
-
-## Step 5 — Convene PM again (cycle cleanup)
-
-When a `findings/` closes as `passed`, dispatch `novetest-pm-team` again for cleanup:
-
-- Read the four transient files for the cycle (task + handoff + verification + findings).
-- Verify the handoff's "DoD bullets believed closed" list; **PM ticks** the satisfied bullets in `design/implementation-plan/delivery-phasing.md`.
-- Distill anything load-bearing into `agent-comms/history/<date>-<topic>.md`.
-- Delete the four transient files, regenerate `INDEX.md`, commit the cleanup.
-
-Then the next day starts again at step 0.
+> Quick status without starting a cycle? Just ask the session "지금 상태 어때? / where are we?"
+> (or consult `novetest-secretary` for a read-only briefing). No `ultracode` needed for a
+> read-only glance.
 
 ---
 
-## Decisions the CEO must keep (never delegated)
+## Your two decisions (the only manual steps)
 
-1. **Answering `questions/`** — cross-team contract or direction calls (step 1).
-2. **Dispatching teams** — who runs, when, in what parallelism (step 2).
-3. **Authorizing `push`** — when Main Branch asks (step 3).
-4. **Acting on `findings/`** — whether a regression goes into the next cycle or gets a hotfix (step 4 → step 0).
+### Gate 1 — Approve the plan (after step 1)
 
-Everything else — planning, merge mechanics, verification execution, cleanup — is handled by the team charters.
+The orchestrator shows you:
+- The task breakdown (which teams, what each builds, parallel vs. sequential).
+- Any `questions/` needing a **CEO call**, each with concrete options + a recommendation.
+- Scope/risk notes and whether Manual Test E2E is needed (doc-only cycles skip it).
+
+You: approve as-is, adjust, or decide the open questions. On your word the orchestrator writes
+any `decisions/` and launches the workflow. **Nothing is dispatched until you approve.**
+
+### Gate 2 — Confirm the report + authorize push (after step 6)
+
+The orchestrator reports:
+- What each team shipped + the merged commit(s) (still local — **not pushed**).
+- The test-gate result and the Manual Test verdict (`passed`/`failed`/`partial`).
+- DoD bullets it intends to tick, and any risks/regressions.
+
+You: confirm and say **push** (or hold). Push happens **only** on your explicit word. On your yes
+the orchestrator finalizes — runs the cleanup bookkeeping, then a **single push** covering the
+delivery commit(s) *and* the cleanup commit — and closes with a one-line summary + a preview of the
+next cycle.
+
+### Escalations (mid-cycle, only if something breaks)
+
+If the test gate fails at step 4, or Manual Test returns `failed`/`partial`, or a team hits a
+blocker, the workflow surfaces it and the orchestrator brings it to you **at the next gate or
+immediately** with options — it does not silently retry forever or push broken code. A blocked
+slice loops back through `questions/` → re-plan, exactly as before, but the PM drives the loop.
+
+---
+
+## Decisions the CEO keeps (never delegated)
+
+1. **Approving the plan** — Gate 1.
+2. **Answering `questions/`** — cross-team contract or direction calls (surfaced at Gate 1 or as an escalation).
+3. **Authorizing `push`** — Gate 2. Per-push, never standing.
+4. **Acting on failed `findings/`** — whether a regression rides the next cycle or gets a hotfix.
+
+Everything else — planning, team dispatch, merge mechanics, verification sequencing, cleanup —
+is the PM-orchestrator's job.
 
 ---
 
 ## Operating tips
 
-- **Parallelism ceiling.** ~3 concurrent teams per day is the practical limit for the CEO to hold context. If PM splits work finer than that, ask it to phase the rest to "tomorrow."
-- **Never skip step 0.** Planning without reading `findings/` and `questions/` first means PM works from stale premises.
-- **Not every cycle runs all six steps.** Charter / design-doc-only changes can skip the Manual Test E2E pass (steps 3–4 still merge, but no end-to-end verification needed). Only work touching `src/` or `tests/` runs the full cycle.
-- **When blocked, always route back through `questions/` → step 1.** At any step, a blocked team comes back via PM. The only sanctioned team-to-team direct channel is Main Branch → Manual Test (the `verifications/` handoff).
+- **Parallelism ceiling.** ~3 concurrent work teams per cycle keeps merges clean and the plan
+  reviewable. If the PM proposes more, it will phase the rest; you can ask it to at Gate 1.
+- **Not every cycle runs all 8 steps.** Charter / design-doc-only changes skip Manual Test
+  (steps 4/8 still merge + clean up, but no E2E). The PM tells you which shape a cycle is at
+  Gate 1. Only work touching `src/` or `tests/` runs the full cycle.
+- **You never dispatch a team by hand anymore.** If you find yourself typing
+  `@novetest-run-team`, stop — that's the PM's job now. Give direction at Gate 1 instead.
+- **The PM stops at gates, not for everything.** Between Gate 1 and Gate 2 it runs autonomously.
+  If you want a peek, `/workflows` shows live progress of the delivery workflow.

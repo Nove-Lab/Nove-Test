@@ -19,6 +19,16 @@ Whenever you write or modify code (any source file, script, config, hook — any
 
 This applies to every team that edits code, including PM (utility scripts), Main Branch (merge conflict resolution), and Release (build/CI/install scripts). Manual Test, which only reads source, is exempt by virtue of never editing.
 
+**One-time setup (per environment).** This skill ships as a Claude Code plugin, not in the repo — a fresh clone on a new machine must install it once before any code-editing work:
+
+```
+/plugin marketplace add forrestchang/andrej-karpathy-skills
+/plugin install andrej-karpathy-skills@karpathy-skills
+/reload-plugins
+```
+
+Confirm it is live by invoking it once (or checking the skills list for `andrej-karpathy-skills:karpathy-guidelines`). Until installed, the mandate above is unsatisfiable and code-editing agents should flag it rather than silently skip.
+
 ---
 
 ## Structure
@@ -58,6 +68,10 @@ Coordination uses two layers:
 - **`agent-comms/`** — in-flight coordination (tasks, handoffs, verifications, findings, questions, decisions, history). Protocol: `agent-comms/README.md`.
 
 Each agent's pre-flight reading list and end-of-work routine live in its own charter at `.claude/agents/novetest-<team>-team.md`. PM owns cross-team process oversight and DoD bookkeeping.
+
+### Operating model — PM-orchestrated delivery cycle
+
+Delivery runs as a **PM-orchestrated cycle** (`agent-comms/decisions/2026-07-06-pm-orchestrated-delivery-cycle.md`). The **main session operates as the PM-orchestrator**: on the CEO's kickoff it plans, takes CEO approval (Gate 1), then dispatches the execution teams and sequences merge→verify via `.claude/workflows/delivery-cycle.js`, reports back, takes push authorization (Gate 2), and cleans up. **The execution teams — the `novetest-*-team` agents, Main Branch, Manual Test — are dispatched by the orchestrator, not by the CEO.** `CEO_ROUTINE.md` is the CEO-facing view; `.claude/agents/novetest-pm-team.md` is the orchestrator's operating manual. A `novetest-*-team` subagent dispatched during a cycle simply executes its task brief per its own charter — it need not know who pulled the chain.
 
 ### Team communication overview
 
