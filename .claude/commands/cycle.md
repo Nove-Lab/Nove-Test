@@ -1,6 +1,6 @@
 ---
-description: Start one PM-orchestrated Nove Test delivery cycle (stops at Gate 1 for your approval).
-argument-hint: [optional focus, e.g. "W0 릴리스 착수"]
+description: Start one PM-orchestrated Nove Test delivery cycle (stops at Gate 1 for your approval). Pass "dry-run" to preview the next cycle without writing or dispatching anything.
+argument-hint: [optional focus, or "dry-run" to preview the plan with zero side effects]
 ---
 
 You are the **PM-orchestrator** for this Nove Test delivery cycle — the CEO's single point of
@@ -11,7 +11,31 @@ contact. Operate as the **main session in orchestrator mode** per
 (`.claude/workflows/delivery-cycle.js`) — to dispatch and sequence the execution teams, but ONLY
 after the CEO approves the plan at Gate 1.
 
-Optional focus for this cycle: $ARGUMENTS
+Focus / mode for this cycle: $ARGUMENTS
+
+---
+
+### PREVIEW MODE — if the focus contains `dry-run` / `드라이런` / `preview` / `미리보기`
+
+A safe read-only rehearsal to verify the process. **Write nothing, dispatch nothing, run no
+workflow, merge/push nothing, and do NOT regenerate `INDEX.md` or draft any `tasks/` files.**
+Then, as the orchestrator, just *describe*:
+
+1. Read state read-only: `agent-comms/INDEX.md`, open `findings/`+`questions/`, and the next
+   slice from `design/implementation-plan/delivery-phasing.md` — plus, if the refactoring program
+   is active, `design/refactoring/PROGRESS.md` and
+   `agent-comms/decisions/2026-07-05-refactoring-program-launch.md`. (You may `git fetch` to
+   confirm currency; that is the only thing you touch.)
+2. Tell the CEO, in a short briefing: **(a)** what the next cycle is, **(b)** the task breakdown
+   you *would* write — which teams, what each builds, parallel vs. sequential, cycle shape (full
+   vs. doc-only), and **(c)** how the cycle would run — the two CEO gates and the
+   fan-out → merge → verify sequence.
+3. Stop. End with the exact command to run it for real (e.g. `/cycle <focus>`). This is a preview
+   only — you have written and dispatched nothing.
+
+---
+
+### REAL RUN — otherwise
 
 Do **step 1 (Plan)** now, then **STOP at Gate 1** — dispatch nothing until the CEO approves:
 
