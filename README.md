@@ -16,7 +16,7 @@ Add testing intelligence layers on top of your native test engines: structured g
 
 Nove Test ships with native test runner wrappers, test result memory, a coverage analyzer, a regression engine, fault localization, and test replay — all under one CLI, all under one JSON contract.
 
-[**Install**](#install) · [**Quick start**](#quick-start) · [**Why**](#why-nove-test) · [**For AI agents**](#for-ai-coding-agents) · [**Docs**](./design/user-doc/) · [**License**](#license)
+[**Install**](#install) · [**Quick start**](#quick-start) · [**Why**](#why-nove-test) · [**For AI agents**](#for-ai-coding-agents) · [**Docs**](./docs/) · [**License**](#license)
 
 </div>
 
@@ -139,7 +139,7 @@ If you're an AI agent invoking Nove Test on a user's project, here's the contrac
 - **Determinism is a first-class goal.** A given input project + engine + version produces the same `summary` block. Differences across runs are user-visible flake, not framework noise.
 - **`warnings[]` is your degradation signal.** Adapter quirks, partial coverage, missing tooling — all surface here as structured `{ code, message, ... }` entries. Match on `code` for programmatic handling.
 
-See [`design/user-doc/`](./design/user-doc/) for the full envelope reference and integration patterns.
+See [`docs/`](./docs/) for the full envelope reference and integration patterns.
 
 ## Status
 
@@ -160,10 +160,10 @@ Roadmap:
 
 User documentation ships in two parallel sets — same flow, same verbs, tuned to two audiences:
 
-- **[For humans](./design/user-doc/human/)** — install, quick start, per-language notes, deeper verbs, troubleshooting. Examples are scannable terminal text with glyph summaries (`✓ ✗ — ⚠ ! ? · ↳`).
-- **[For AI agents](./design/user-doc/agent/)** — same flow, same verbs, but every example is a full `novetest/v1` JSON envelope with deterministic routing on `recommendations[].category`.
+- **[For humans](./docs/human/)** — install, quick start, per-language notes, deeper verbs, troubleshooting. Examples are scannable terminal text with glyph summaries (`✓ ✗ — ⚠ ! ? · ↳`).
+- **[For AI agents](./docs/agent/)** — same flow, same verbs, but every example is a full `novetest/v1` JSON envelope with deterministic routing on `recommendations[].category`.
 
-Start at [`design/user-doc/`](./design/user-doc/) for the audience picker.
+Start at [`docs/`](./docs/) for the audience picker.
 
 ## License
 

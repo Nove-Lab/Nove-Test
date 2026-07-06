@@ -2,10 +2,9 @@
 
 Canonical record of how to equip a developer host so that **every
 `tests/integration/run/test_<engine>_*.py` case runs rather than skips**.
-This is the operational counterpart of
-`agent-comms/decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md`
-("polyglot host parity"): when a host is set up per this file, the
-host qualifies as a Manual Test E2E box for all six adapters.
+This is the operational counterpart of the internal "polyglot host
+parity" decision (2026-05-29): when a host is set up per this file,
+the host qualifies as a full E2E verification box for all six adapters.
 
 **Why this file exists.** The project's dev environment moves between
 multiple desktops (per CEO's 2026-05-29 closing note). Without a single
@@ -22,11 +21,10 @@ and print a sensible version string. If any fails, the toolchain is
 not yet operational and the adjacent integration tests will still
 skip.
 
-**Maintenance protocol.** PM owns this file. Each new Native engine
-adapter task brief MUST add a section here at handoff time. Each
-floor-version bump in
-`agent-comms/decisions/2026-05-25-supported-engine-matrix.md`
-MUST be mirrored here in the same commit.
+**Maintenance protocol.** The maintainers own this file. Each new
+Native engine adapter MUST add a section here when it lands. Each
+floor-version bump in the supported-engine matrix (internal decision
+record, 2026-05-25) MUST be mirrored here in the same commit.
 
 ---
 
@@ -472,9 +470,8 @@ aggregate `coverage.cobertura.xml` is emitted, never per-test
 `coverage.<slug>.cobertura.xml` files. The adapter's runsettings still
 pins the `<PerTestCoverage>` element for forward-compat with a future
 Coverlet release that honors the gate; the coverage glob prefers
-per-test first then falls back to aggregate. See
-`agent-comms/questions/run-team-2026-06-05-coverlet-pertestcoverage-empirically-inert.md`
-for the diag-log capture and PM's pending disposition. The smoke probe
+per-test first then falls back to aggregate. (Internal diag-log
+capture, 2026-06-05: Coverlet `PerTestCoverage` empirically inert.) The smoke probe
 above is therefore checking for the aggregate file (not the per-test
 glob the brief's earlier wording referenced).
 
@@ -549,13 +546,8 @@ binary (common on WSL when Windows-side `node` leaks into Linux PATH).
 
 ## Cross-references
 
-- `decisions/2026-05-25-supported-engine-matrix.md` — version floors
-  + ceilings for each row.
-- `decisions/2026-05-29-cargo-adapter-nextest-primary.md` — cargo /
-  nextest / llvm-cov stack rationale.
-- `decisions/2026-05-29-cargo-adapter-v1-without-rust-e2e.md` —
-  polyglot host parity contract; this file is the operational
-  fulfillment.
-- `agent-comms/history/2026-05-29-cargo-adapter-and-localization-cli-parallel-cycle.md`
-  — origin of this file's commitment.
+- Version floors + ceilings per engine, the cargo / nextest / llvm-cov
+  stack rationale, and the polyglot host-parity contract are maintained
+  in Nove Lab's internal engineering decision records (2026-05-25,
+  2026-05-29).
 - `CLAUDE.md` — project structure, including `tests/integration/`.

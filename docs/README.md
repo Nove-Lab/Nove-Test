@@ -70,7 +70,7 @@ and can ignore the JSON path entirely.
   | dotnet | `xunit` | xUnit v2 only — NUnit / MSTest rejected | yes |
 
 Nove Test does **not** replace your test runner — it shells out to the
-native engine you already use. See the project [README](../../README.md) for
+native engine you already use. See the project [README](../README.md) for
 the highest-level pitch and roadmap. This documentation focuses on **using**
 the CLI; design internals (recommendation taxonomy, SBFL math, replay
-classification) live under [`design/`](..).
+classification) are maintained in Nove Lab's internal design records.

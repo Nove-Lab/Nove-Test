@@ -1,15 +1,7 @@
-# AI agent tooling — commit shared assets (agents/, skills/), ignore per-user state
-.claude/settings.local.json
-.claude/projects/
-.claude/todos/
-.claude/shell-snapshots/
-.claude/statsig/
-.claude/history.jsonl
-.claude/__store.db*
-.claude/.credentials*
-.claude/worktrees/
-.codex/.credentials*
-.codex/history.jsonl
+# AI agent tooling — local per-user state only; nothing under these is committed
+.claude/
+.codex/
+.agents/
 
 # Python
 .venv/
