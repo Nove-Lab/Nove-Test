@@ -177,14 +177,23 @@ def parse_cobertura_xml(
 ) -> CoverageFactSet:
     """Build a ``CoverageFactSet`` from one or more Cobertura XML files.
 
-    Multi-file inputs (e.g. a future Coverlet per-test mode emitting
-    one Cobertura XML per test method) are concatenated into a single
-    ``CoverageFactSet`` — same-file entries from later XMLs OVERWRITE
-    earlier ones in walk order rather than merging, matching the
-    JaCoCo parser's "first wins" posture. This is the cleanest
-    behavior for the v1 aggregate-only path where multi-file inputs
-    are practically unreachable; per-test merging is a future-slice
-    concern that gets its own design pass.
+    WITHIN one XML document, multiple ``<class>`` elements that resolve
+    to the same ``file_path`` MERGE: ``executed_lines`` union,
+    ``missing_lines`` union, then executed-wins dedup (a line present in
+    both sets is executed), with the per-file summary recomputed from
+    the merged sets. This is the idiomatic C# shape — Coverlet emits one
+    ``<class name="NS.Type" filename="Same.cs">`` per type, so a
+    multi-type ``.cs`` file yields several sibling ``<class>`` elements
+    sharing one ``filename`` (verified empirically against Coverlet
+    6.0.2 output, 2026-07-07; pre-merge the last type silently erased
+    every earlier type's lines — finding ANA-01).
+
+    ACROSS multiple XML input files (e.g. a future Coverlet per-test
+    mode emitting one Cobertura XML per test method), same-file entries
+    from later XMLs OVERWRITE earlier ones in walk order rather than
+    merging. This is the cleanest behavior for the v1 aggregate-only
+    path where multi-file inputs are practically unreachable; per-test
+    merging is a future-slice concern that gets its own design pass.
 
     ``workspace_root`` is the directory the Run executed in (the parent
     of ``store.path``). All emitted ``FileCoverage.file_path`` strings
@@ -234,6 +243,11 @@ def parse_cobertura_xml(
 
         source_dirs = _read_source_dirs(root)
 
+        # Per-DOCUMENT accumulator: same-file <class> elements within
+        # this XML merge (multi-type C# files — ANA-01); folding the
+        # finished document over ``files_by_path`` afterwards preserves
+        # the cross-document last-wins contract untouched.
+        document_files: dict[str, FileCoverage] = {}
         for package_el in packages_el.findall("package"):
             for class_el in package_el.findall("classes/class"):
                 file_coverage = _build_class_file_coverage(
@@ -243,7 +257,11 @@ def parse_cobertura_xml(
                 )
                 if file_coverage is None:
                     continue
-                files_by_path[file_coverage.file_path] = file_coverage
+                existing = document_files.get(file_coverage.file_path)
+                if existing is not None:
+                    file_coverage = _merge_file_coverage(existing, file_coverage)
+                document_files[file_coverage.file_path] = file_coverage
+        files_by_path.update(document_files)
 
     files = sorted(files_by_path.values(), key=lambda f: f.file_path)
     summary = _aggregate_summary(files)
@@ -353,6 +371,36 @@ def _build_class_file_coverage(
         executed_branches=(),
         missing_branches=(),
         summary=summary,
+        line_contexts={},
+    )
+
+
+def _merge_file_coverage(
+    existing: FileCoverage, new: FileCoverage
+) -> FileCoverage:
+    """Union-merge two same-file entries from ONE XML document (ANA-01).
+
+    Executed-wins rule per wave-1 §S6: union ``executed_lines``, union
+    ``missing_lines``, then remove any line from ``missing_lines`` that
+    is in ``executed_lines``. The per-file summary is recomputed from
+    the merged sets. The remaining fields carry this parser's v1
+    constants (empty exclusions/branches/contexts — see the mapping
+    decisions in the module docstring), so no field-wise merge is
+    needed for them.
+    """
+
+    executed = set(existing.executed_lines) | set(new.executed_lines)
+    missing = (set(existing.missing_lines) | set(new.missing_lines)) - executed
+    executed_sorted = tuple(sorted(executed))
+    missing_sorted = tuple(sorted(missing))
+    return FileCoverage(
+        file_path=existing.file_path,
+        executed_lines=executed_sorted,
+        missing_lines=missing_sorted,
+        excluded_lines=(),
+        executed_branches=(),
+        missing_branches=(),
+        summary=_build_file_summary(executed_sorted, missing_sorted),
         line_contexts={},
     )
 

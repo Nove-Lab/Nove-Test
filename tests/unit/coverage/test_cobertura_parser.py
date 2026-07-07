@@ -336,6 +336,200 @@ class TestParseCoberturaXmlMultiClass:
         assert [f.file_path for f in fact_set.files] == ["src/App/Calc.cs"]
 
 
+class TestParseCoberturaXmlSameFileMultiClass:
+    """ANA-01 regression (W1/S6): multiple ``<class>`` elements in ONE
+    XML document resolving to the same ``file_path`` must union-merge
+    (executed-wins) instead of last-class-wins overwriting.
+
+    This is the idiomatic C# shape — Coverlet emits one
+    ``<class name="NS.Type" filename="Same.cs">`` per type (empirically
+    verified against real Coverlet 6.0.2 collector output, 2026-07-07).
+    Pre-fix, the last type's line set silently erased every earlier
+    type's lines. The multi-XML last-wins contract is pinned separately
+    in ``TestParseCoberturaXmlMultiFile`` and is unchanged.
+    """
+
+    def test_same_file_classes_merge_with_executed_wins(
+        self, tmp_path: Path
+    ) -> None:
+        """Distinct-but-overlapping line sets merge; a line executed in
+        EITHER class is executed (executed-wins over missing); the
+        per-file summary is recomputed from the merged sets and agrees
+        with the document's native line-rate."""
+        # Foo: 3 executed, 5 missing, 7 executed.
+        # Bar: 5 executed, 7 missing, 9 missing.
+        # Merged: executed {3,5,7} (5 and 7 executed-wins), missing {9}.
+        # Native totals: 4 unique lines, 3 covered -> line-rate 0.75.
+        xml_path = _write_xml(
+            tmp_path,
+            f"""<?xml version="1.0"?>
+<coverage line-rate="0.75" branch-rate="0" lines-covered="3" lines-valid="4">
+  <sources><source>{tmp_path}</source></sources>
+  <packages>
+    <package name="App">
+      <classes>
+        <class name="App.Foo" filename="App/Ops.cs" line-rate="0.66" branch-rate="0">
+          <lines>
+            <line number="3" hits="1" branch="false"/>
+            <line number="5" hits="0" branch="false"/>
+            <line number="7" hits="1" branch="false"/>
+          </lines>
+        </class>
+        <class name="App.Bar" filename="App/Ops.cs" line-rate="0.33" branch-rate="0">
+          <lines>
+            <line number="5" hits="1" branch="false"/>
+            <line number="7" hits="0" branch="false"/>
+            <line number="9" hits="0" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>
+""",
+        )
+        fact_set = parse_cobertura_xml(
+            [xml_path],
+            run_reference=_RUN_REF,
+            engine_name="xunit",
+            ecosystem="dotnet",
+            workspace_root=tmp_path,
+        )
+        assert len(fact_set.files) == 1
+        fc = fact_set.files[0]
+        assert fc.file_path == "App/Ops.cs"
+        assert fc.executed_lines == (3, 5, 7)
+        assert fc.missing_lines == (9,)
+        # Per-file summary recomputed from the MERGED sets.
+        assert fc.summary.num_statements == 4
+        assert fc.summary.covered_statements == 3
+        assert fc.summary.missing_statements == 1
+        assert fc.summary.percent_covered == pytest.approx(75.0)
+        # Post-merge invariant: the aggregate agrees with the native
+        # line-rate (0.75) — pre-fix it reported Bar's 33.33%.
+        assert fact_set.summary.num_statements == 4
+        assert fact_set.summary.covered_statements == 3
+        assert fact_set.summary.percent_covered == pytest.approx(75.0)
+
+    def test_real_coverlet_multitype_shape_preserves_all_types_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """Mirror of REAL Coverlet 6.0.2 output for a two-type ``.cs``
+        file (probe run 2026-07-07): per-type ``<class>`` elements with
+        the same ``filename`` and DISJOINT line ranges. Pre-fix the
+        first type's lines (7, 8) vanished entirely."""
+        xml_path = _write_xml(
+            tmp_path,
+            f"""<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.75" branch-rate="1" version="1.9" timestamp="0" lines-covered="3" lines-valid="4">
+  <sources><source>{tmp_path}</source></sources>
+  <packages>
+    <package name="MathLib" line-rate="0.75" branch-rate="1" complexity="4">
+      <classes>
+        <class name="MathLib.MathOps" filename="MathLib/MathOps.cs" line-rate="1" branch-rate="1" complexity="2">
+          <lines>
+            <line number="7" hits="1" branch="False" />
+            <line number="8" hits="1" branch="False" />
+          </lines>
+        </class>
+        <class name="MathLib.StringOps" filename="MathLib/MathOps.cs" line-rate="0.5" branch-rate="1" complexity="2">
+          <lines>
+            <line number="13" hits="1" branch="False" />
+            <line number="14" hits="0" branch="False" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>
+""",
+        )
+        fact_set = parse_cobertura_xml(
+            [xml_path],
+            run_reference=_RUN_REF,
+            engine_name="xunit",
+            ecosystem="dotnet",
+            workspace_root=tmp_path,
+        )
+        assert [f.file_path for f in fact_set.files] == ["MathLib/MathOps.cs"]
+        fc = fact_set.files[0]
+        assert fc.executed_lines == (7, 8, 13)
+        assert fc.missing_lines == (14,)
+        assert fc.summary.num_statements == 4
+        assert fc.summary.covered_statements == 3
+        # Agrees with the document's native line-rate="0.75".
+        assert fc.summary.percent_covered == pytest.approx(75.0)
+
+    def test_merge_is_per_document_cross_document_still_last_wins(
+        self, tmp_path: Path
+    ) -> None:
+        """The merge keys on entries of ONE XML document only: a later
+        document's entry fully REPLACES an earlier document's (merged)
+        entry for the same file rather than merging across documents —
+        the multi-XML forward-compat contract stays intact."""
+        xml_a = _write_xml(
+            tmp_path,
+            f"""<?xml version="1.0"?>
+<coverage line-rate="0.66" branch-rate="0">
+  <sources><source>{tmp_path}</source></sources>
+  <packages>
+    <package name="App">
+      <classes>
+        <class name="App.Foo" filename="App/Ops.cs" line-rate="0.5" branch-rate="0">
+          <lines>
+            <line number="1" hits="1" branch="false"/>
+            <line number="2" hits="0" branch="false"/>
+          </lines>
+        </class>
+        <class name="App.Bar" filename="App/Ops.cs" line-rate="1" branch-rate="0">
+          <lines>
+            <line number="3" hits="1" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>
+""",
+            name="a.cobertura.xml",
+        )
+        xml_b = _write_xml(
+            tmp_path,
+            f"""<?xml version="1.0"?>
+<coverage line-rate="0.5" branch-rate="0">
+  <sources><source>{tmp_path}</source></sources>
+  <packages>
+    <package name="App">
+      <classes>
+        <class name="App.Foo" filename="App/Ops.cs" line-rate="0.5" branch-rate="0">
+          <lines>
+            <line number="10" hits="1" branch="false"/>
+            <line number="11" hits="0" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>
+""",
+            name="b.cobertura.xml",
+        )
+        fact_set = parse_cobertura_xml(
+            [xml_a, xml_b],
+            run_reference=_RUN_REF,
+            engine_name="xunit",
+            ecosystem="dotnet",
+            workspace_root=tmp_path,
+        )
+        # Document B fully replaced document A's merged entry — no
+        # cross-document union (else lines 1/3 would survive).
+        assert len(fact_set.files) == 1
+        fc = fact_set.files[0]
+        assert fc.executed_lines == (10,)
+        assert fc.missing_lines == (11,)
+        assert fc.summary.num_statements == 2
+
+
 class TestParseCoberturaXmlMetadata:
     def test_metadata_pins_coverage_format_and_branch_arc_semantics(
         self, tmp_path: Path
