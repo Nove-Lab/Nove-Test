@@ -159,16 +159,96 @@ _GOTEST_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(rf"^\s+({_PYTHON_FILE_CHARS}\.go):(\d+)\s", re.MULTILINE),
 )
 
+# JDK 9+ stack frames may carry a classloader/module prefix between
+# ``at `` and the fully-qualified class name. Verified empirically
+# (2026-07-07, W1/S7) on the adapter-written failure logs:
+# - Maven Surefire 3.2.5: NO prefix (``at com.example.CalculatorTest...``).
+# - Gradle 8.14.5: ``app//`` on user/framework frames and versioned
+#   module prefixes on JDK frames (``java.base@17.0.19/java.lang...``).
+# The frozen wave-1 §S7 regex prescription (``at pkg.Cls.m(File.java:NN)``
+# with no prefix allowance) would MISS every user frame under Gradle.
+_JVM_FRAME_MODULE_PREFIX = r"(?:[\w.$@]+/+)*"
+
+# JUnit stack frames carry only the file BASENAME (``CalculatorTest.java``),
+# so the pattern captures the fully-qualified class name too (named group
+# ``fqcn``) and ``_extract_location`` reconstructs a package-relative path
+# (``com/example/CalculatorTest.java``) from it. A bare basename would
+# pass through ``_normalize_to_workspace_relative`` unchanged (it is
+# already relative) and collide across packages; the package-relative
+# form is deterministic and disambiguates. It is still NOT the on-disk
+# source-root path (``src/test/java/com/example/...``) — file-level
+# best-effort per the mode's ``confidence: "low"`` contract.
+_JUNIT_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
+    # ``at [prefix/]<pkg>.<Cls>.<method>(<File>.java:<line>)``. The method
+    # atom allows ``<init>``/``<clinit>`` constructor frames; the file
+    # extension set covers the JVM source languages Surefire/Gradle emit.
+    re.compile(
+        rf"\bat {_JVM_FRAME_MODULE_PREFIX}"
+        r"(?P<fqcn>[A-Za-z_$][\w$.]*)\.[\w$<>]+"
+        r"\((?P<file>[\w$\-]+\.(?:java|kt|kts|groovy|scala)):(?P<line>\d+)\)"
+    ),
+)
+
+# JUnit failure logs are UNTRIMMED (verified 2026-07-07 on Surefire 3.2.5
+# AND Gradle 8.14.5): every assertion failure carries ~6 framework frames
+# (``org.junit.jupiter.api.Assert*``, ``org.opentest4j.*``) plus JDK
+# reflection frames around the single user frame. Framework frames appear
+# in EVERY failing test's log, so without filtering they would out-score
+# the real file (score = number of failing tests = the maximum). Same
+# defect shape as cargo's Defect 3 (2026-05-31, stdlib-path pollution);
+# same remedy posture: keep the PARSER's output set tight rather than
+# relying on downstream cleanup (failure_proximity has no covered-files
+# intersection filter). Frames whose FQCN opens with one of these
+# test-infra / JDK / build-tool package roots are dropped. A user who
+# names their own package ``org.junit.*`` loses those frames — an
+# acceptable trade for a best-effort ``confidence: "low"`` mode.
+_JVM_INFRA_PACKAGE_PREFIXES: Final[tuple[str, ...]] = (
+    "java.",
+    "javax.",
+    "jdk.",
+    "sun.",
+    "com.sun.",
+    "org.junit.",
+    "junit.",
+    "org.opentest4j.",
+    "org.apiguardian.",
+    "org.gradle.",
+    "worker.org.gradle.",
+    "org.apache.maven.",
+)
+
+# xUnit / VSTest stack frames: ``at Ns.Cls.Method() in <path>:line <N>``.
+# Verified empirically (2026-07-07, dotnet SDK 8.0 + xunit 2.6): the
+# `` in <path>:line <N>`` clause comes from PDB symbols, so it appears
+# ONLY on frames with debug info — i.e. user code. Framework frames
+# (``at System.RuntimeMethodHandle.InvokeMethod(...)``) carry no ``in``
+# clause and are structurally excluded; no blocklist needed. The path is
+# absolute (as recorded by the compiler), so downstream
+# ``_normalize_to_workspace_relative`` produces the workspace-relative
+# envelope form. Locale caveat: non-English .NET runtimes localize the
+# `` in ``/``:line `` tokens; those logs degrade to no-match (best-effort).
+_XUNIT_REGEXES: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(rf"\bin ({_FILE_PATH_CHARS}\.(?:cs|fs|vb)):line (\d+)"),
+)
+
 # Engine-name keyed regex table. Unknown engines fall back to pytest's
 # pattern (the most permissive — file-path-colon-lineno is a near-universal
 # convention). This is "best-effort" per the task brief: a parser that
 # finds nothing is acceptable; one that crashes is not.
+#
+# Every canonical engine name from ``run.list_supported_engine_pairs()``
+# MUST have a key here — pinned by
+# ``tests/unit/localization/test_engine_support_divergence.py`` so a
+# future 7th engine fails tests instead of silently degrading (ANA-02).
+# ``"gotest"`` is a legacy alias kept on top of the canonical six.
 _ENGINE_REGEX_TABLE: Final[dict[str, tuple[re.Pattern[str], ...]]] = {
     "pytest": _PYTEST_REGEXES,
     "jest": _JEST_REGEXES,
     "cargo-test": _CARGO_REGEXES,
     "gotest": _GOTEST_REGEXES,
     "go-test": _GOTEST_REGEXES,
+    "junit": _JUNIT_REGEXES,
+    "xunit": _XUNIT_REGEXES,
 }
 
 
@@ -201,17 +281,68 @@ def parse_failure_log(
     results: list[tuple[str, int]] = []
     for pattern in regexes:
         for match in pattern.finditer(failure_text):
-            file_path = match.group(1)
-            try:
-                line = int(match.group(2))
-            except (ValueError, IndexError):
-                continue
-            key = (file_path, line)
-            if key in seen:
+            key = _extract_location(match)
+            if key is None or key in seen:
                 continue
             seen.add(key)
             results.append(key)
     return tuple(results)
+
+
+def _extract_location(match: re.Match[str]) -> tuple[str, int] | None:
+    """Turn one regex match into a canonical ``(file, line)`` tuple.
+
+    Two match shapes exist:
+
+    - Positional (every engine except junit): groups 1 and 2 are
+      ``(file_path, line)`` verbatim — the pre-S7 contract, unchanged.
+    - Named (junit): groups ``fqcn`` / ``file`` / ``line``. The JVM
+      stack frame carries only the file basename, so the package half
+      of ``fqcn`` is folded into a package-relative path
+      (``com.example.CalculatorTest`` + ``CalculatorTest.java`` →
+      ``com/example/CalculatorTest.java``). Frames whose FQCN opens
+      with a known test-infra / JDK / build-tool package root return
+      ``None`` (dropped) — see ``_JVM_INFRA_PACKAGE_PREFIXES``.
+    """
+    groups = match.groupdict()
+    if "fqcn" in groups:
+        fqcn = groups["fqcn"]
+        if any(fqcn.startswith(prefix) for prefix in _JVM_INFRA_PACKAGE_PREFIXES):
+            return None
+        package, _, _cls = fqcn.rpartition(".")
+        file_name = groups["file"]
+        file_path = (
+            f"{package.replace('.', '/')}/{file_name}" if package else file_name
+        )
+        return (file_path, int(groups["line"]))
+    file_path = match.group(1)
+    try:
+        line = int(match.group(2))
+    except (ValueError, IndexError):
+        return None
+    return (file_path, line)
+
+
+# ``resolve_failure_text`` routing sets. Module-level (not inline tuples)
+# so the divergence guard in
+# ``tests/unit/localization/test_engine_support_divergence.py`` can pin
+# that their union covers every canonical engine name from
+# ``run.list_supported_engine_pairs()`` — the ANA-02 silent breakage was
+# exactly junit/xunit missing from the (then-inline) tuples.
+#
+# - Inline: ``failure_reference`` IS the failure text (pytest ``crash``
+#   block; jest ``failureMessages``).
+# - Logfile: ``failure_reference`` is an artifact-dir-relative path to a
+#   per-test log; a missing file resolves to ``""``.
+# - Hybrid (junit/xunit): the normalizer fills ``failure_reference`` with
+#   a log path when the adapter wrote one, or an inline ``"type: message"``
+#   join when it did not (e.g. empty TRX ``<ErrorInfo>``). Log-path
+#   resolution first, inline fallback second.
+_INLINE_REFERENCE_ENGINES: Final[frozenset[str]] = frozenset({"pytest", "jest"})
+_LOGFILE_REFERENCE_ENGINES: Final[frozenset[str]] = frozenset(
+    {"cargo-test", "gotest", "go-test"}
+)
+_HYBRID_REFERENCE_ENGINES: Final[frozenset[str]] = frozenset({"junit", "xunit"})
 
 
 def resolve_failure_text(
@@ -226,14 +357,20 @@ def resolve_failure_text(
     inline (the adapter normalizer concatenates ``crash.message`` or
     ``failureMessages``); cargo-test and gotest store a project-store-
     relative path to a per-test log file under
-    ``<artifact_dir>/native/failures/<name>.log``.
+    ``<artifact_dir>/native/failures/<name>.log``; junit and xunit are
+    hybrid — the same path shape when the adapter wrote a per-test log,
+    an inline ``"type: message"`` string otherwise (W1/S7, ANA-02).
 
     Returns the empty string when:
     - ``failure_reference`` is ``None`` or empty.
     - The engine is unrecognized (defensive — we'd rather return empty
       than misroute a path-string into the regex).
     - The expected log file does not exist on disk (artifact pruned or
-      adapter quirk).
+      adapter quirk) — logfile engines only. Hybrid engines fall back
+      to treating the reference as inline failure text instead: a
+      reference that does not name an existing file under the run's
+      artifact dir IS the inline fill, even when it superficially looks
+      path-like (an exception message quoting a path, say).
 
     Disk IO is best-effort: a permission error or invalid encoding
     returns the empty string rather than propagating. The downstream
@@ -241,19 +378,47 @@ def resolve_failure_text(
     """
     if not failure_reference:
         return ""
-    if engine_name in ("pytest", "jest"):
+    if engine_name in _INLINE_REFERENCE_ENGINES:
         return failure_reference
-    if engine_name in ("cargo-test", "gotest", "go-test"):
-        artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
-        log_path = artifact_dir / failure_reference
-        if not log_path.is_file():
-            return ""
-        try:
-            return log_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return ""
+    if engine_name in _LOGFILE_REFERENCE_ENGINES:
+        log_text = _resolve_log_reference(store, run_id, failure_reference)
+        return log_text if log_text is not None else ""
+    if engine_name in _HYBRID_REFERENCE_ENGINES:
+        log_text = _resolve_log_reference(store, run_id, failure_reference)
+        return log_text if log_text is not None else failure_reference
     # Unknown engine — defensively return empty rather than guess.
     return ""
+
+
+def _resolve_log_reference(
+    store: ProjectStore, run_id: str, failure_reference: str
+) -> str | None:
+    """Read ``failure_reference`` as an artifact-dir-relative log path.
+
+    Returns the log text when the reference names an existing file under
+    ``<store>/run/artifacts/run_<run_id>/``; ``None`` when it does not
+    (callers decide the fallback: ``""`` for logfile engines, the inline
+    reference itself for hybrid engines). An existing-but-unreadable
+    file returns ``""`` (NOT ``None``) — the reference was genuinely a
+    path, so falling back to inline text would feed a path string to the
+    parser.
+
+    The ``(OSError, ValueError)`` guard around the existence probe covers
+    inline junit/xunit references whose text embeds characters ``Path``
+    refuses (e.g. NUL) — best-effort contract: never crash on adapter-
+    shaped data.
+    """
+    artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
+    try:
+        log_path = artifact_dir / failure_reference
+        if not log_path.is_file():
+            return None
+    except (OSError, ValueError):
+        return None
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def derive_failure_proximity(
@@ -297,12 +462,24 @@ def derive_failure_proximity(
             # outcome filter would have picked up additional tests
             # (e.g. an "errored" outcome the caller chose to exclude).
             continue
+        # Warning wording split (W1/S7): the pre-fix single message
+        # ("failure_reference empty or unresolvable") conflated three
+        # causes — and for junit/xunit the REAL cause was "engine not
+        # routed by resolve_failure_text", which the message hid. Now
+        # that all six engines are routed, the two remaining causes are
+        # distinguished honestly. Format stays ``"<node_id>: <reason>"``
+        # per the localization interface contract.
+        if not tr.failure_reference:
+            parse_warnings.append(f"{tr.node_id}: failure_reference is empty")
+            continue
         failure_text = resolve_failure_text(
             store, record.run_reference.run_id, record.engine_name, tr.failure_reference
         )
         if not failure_text:
             parse_warnings.append(
-                f"{tr.node_id}: failure_reference empty or unresolvable"
+                f"{tr.node_id}: failure_reference did not resolve to failure"
+                " text (log file missing or unreadable, or engine not"
+                " supported)"
             )
             continue
         tuples = parse_failure_log(record.engine_name, failure_text)

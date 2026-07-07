@@ -45,6 +45,20 @@ from novetest.models.run_reference import RunReference
 from novetest.models.test_result import TestResult
 
 
+# Engine → ecosystem lookup for ``_make_run``. Mirrors the canonical
+# pairs in ``run/engine_selector.py::_ENGINE_MARKER_TABLE``; unknown
+# engines keep the pre-S7 "rust" default the cargo-shaped cases relied on.
+_ENGINE_ECOSYSTEMS = {
+    "pytest": "python",
+    "jest": "javascript-typescript",
+    "junit": "java",
+    "go-test": "go",
+    "gotest": "go",
+    "cargo-test": "rust",
+    "xunit": "dotnet",
+}
+
+
 def _make_run(
     *,
     workspace: Path,
@@ -67,7 +81,7 @@ def _make_run(
         target_type="dir",
         engine_name=engine_name,
         engine_version=None,
-        ecosystem="python" if engine_name == "pytest" else "rust",
+        ecosystem=_ENGINE_ECOSYSTEMS.get(engine_name, "rust"),
         status="failed",
         started_at=ref.created_at,
         completed_at=ref.created_at + 1_000,
@@ -897,3 +911,251 @@ def test_failure_proximity_envelope_shape_deviation_pinned(tmp_path: Path) -> No
     # The `formula` field is still set to "ochiai" so the closed-enum
     # validator passes; consumers gate on `mode` to interpret this.
     assert finding.formula == "ochiai"
+
+
+# ---------------------------------------------------------------------------
+# W1/S7 (ANA-02): junit / xunit end-state — non-empty findings on the
+# default no-coverage path
+# ---------------------------------------------------------------------------
+#
+# Pre-S7, ``resolve_failure_text`` routed neither junit nor xunit, so a
+# junit/xunit failure run ALWAYS produced zero findings here while filing
+# a misleading "failure_reference empty or unresolvable" warning per
+# failing test. These tests pin the wave-1 §S7 exit criterion: a junit
+# and an xunit failure run produce a NON-EMPTY failure_proximity finding.
+
+# The junit per-test failure log, captured VERBATIM from the adapter on
+# the equipped host (2026-07-07, Maven Surefire 3.2.5 + JDK 17.0.19 vs
+# the junit-maven-basic fixture) — same ground truth pinned in
+# ``test_failure_log_parser.py``.
+_REAL_JUNIT_FAILURE_LOG = """\
+[message] expected: <1> but was: <0>
+[type] org.opentest4j.AssertionFailedError
+[stack]
+org.opentest4j.AssertionFailedError: expected: <1> but was: <0>
+\tat org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+\tat org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+\tat org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:531)
+\tat com.example.CalculatorTest.testSubtract(CalculatorTest.java:27)
+\tat java.base/java.lang.reflect.Method.invoke(Method.java:569)
+"""
+
+_RUN_ID = "01HFP000000000000000000001"
+
+
+def _write_failure_log(store: object, relative: str, content: str) -> None:
+    """Write an adapter-shaped per-test failure log into the store's
+    run artifact dir (the surface ``resolve_failure_text`` reads)."""
+    log_path = (
+        store.path / "run" / "artifacts" / f"run_{_RUN_ID}" / relative  # type: ignore[attr-defined]
+    )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(content, encoding="utf-8")
+
+
+def test_junit_failure_run_produces_nonempty_finding(tmp_path: Path) -> None:
+    """Wave-1 §S7 exit criterion, junit half: log-path fill.
+
+    The failing test's ``failure_reference`` is the artifact-dir-relative
+    log path (the normalizer's PRIMARY junit fill); the log is the real
+    adapter-written shape. The finding must be non-empty, pointing at the
+    package-relative reconstruction of the single user frame — with NO
+    parse warnings.
+    """
+    store, record = _make_run(
+        workspace=tmp_path / "ws",
+        engine_name="junit",
+        test_results=(
+            TestResult(
+                node_id="com.example.CalculatorTest#testSubtract",
+                outcome="failed",
+                duration_ms=12,
+                failure_reference=(
+                    "native/failures/com.example.CalculatorTest_testSubtract.log"
+                ),
+            ),
+        ),
+    )
+    _write_failure_log(
+        store,
+        "native/failures/com.example.CalculatorTest_testSubtract.log",
+        _REAL_JUNIT_FAILURE_LOG,
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"com.example.CalculatorTest#testSubtract"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert finding.mode == "failure_proximity"
+    assert finding.engine_name == "junit"
+    assert len(finding.entries) == 1, (
+        f"expected exactly the user frame; got "
+        f"{[e.code_location.file for e in finding.entries]!r}"
+    )
+    top = finding.entries[0]
+    assert top.code_location.file == "com/example/CalculatorTest.java"
+    assert top.code_location.primary_line == 27
+    assert top.related_failed_tests == (
+        "com.example.CalculatorTest#testSubtract",
+    )
+    # Pre-S7 this run produced parse_warnings for EVERY failing test.
+    assert "parse_warnings" not in finding.metadata
+
+
+def test_xunit_failure_run_produces_nonempty_finding(tmp_path: Path) -> None:
+    """Wave-1 §S7 exit criterion, xunit half: log-path fill.
+
+    The xunit stack frame carries the ABSOLUTE source path (PDB debug
+    info); when it lies under the run's workspace root the existing B2-2
+    normalization rewrites it workspace-relative — pinned here on the
+    junit/xunit path end to end.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+    abs_source = workspace / "MathLib.Tests" / "MathTests.cs"
+    # Real adapter-written log shape (dotnet SDK 8.0 + xunit 2.6,
+    # 2026-07-07) with the workspace path parameterized.
+    log_content = (
+        "[message] Assert.Equal() Failure: Values differ\n"
+        "Expected: 5\n"
+        "Actual:   6\n"
+        "[stack]\n"
+        "   at MathLib.Tests.MathTests.TestSubtractIntentionallyFails() "
+        f"in {abs_source}:line 32\n"
+        "   at System.RuntimeMethodHandle.InvokeMethod(Object target, "
+        "Void** arguments, Signature sig, Boolean isConstructor)\n"
+    )
+    store, record = _make_run(
+        workspace=workspace,
+        engine_name="xunit",
+        test_results=(
+            TestResult(
+                node_id="MathLib.Tests.MathTests.TestSubtractIntentionallyFails",
+                outcome="failed",
+                duration_ms=40,
+                failure_reference=(
+                    "native/failures/"
+                    "MathLib.Tests.MathTests.TestSubtractIntentionallyFails.log"
+                ),
+            ),
+        ),
+    )
+    _write_failure_log(
+        store,
+        "native/failures/MathLib.Tests.MathTests.TestSubtractIntentionallyFails.log",
+        log_content,
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset(
+            {"MathLib.Tests.MathTests.TestSubtractIntentionallyFails"}
+        ),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert finding.mode == "failure_proximity"
+    assert finding.engine_name == "xunit"
+    assert len(finding.entries) == 1
+    top = finding.entries[0]
+    # Absolute PDB path inside the workspace → workspace-relative POSIX.
+    assert top.code_location.file == "MathLib.Tests/MathTests.cs"
+    assert top.code_location.primary_line == 32
+    assert "parse_warnings" not in finding.metadata
+
+
+def test_junit_inline_fallback_yields_honest_no_frames_warning(
+    tmp_path: Path,
+) -> None:
+    """junit/xunit FALLBACK fill (inline ``"type: message"`` join, no
+    per-test log on disk): the reference resolves to inline text, the
+    text has no stack frame, and the warning honestly says "no parseable
+    file:line references" — NOT the pre-S7 "empty or unresolvable"
+    conflation (the reference is neither).
+    """
+    store, record = _make_run(
+        workspace=tmp_path / "ws",
+        engine_name="junit",
+        test_results=(
+            TestResult(
+                node_id="com.example.CalculatorTest#testSubtract",
+                outcome="failed",
+                duration_ms=12,
+                failure_reference=(
+                    "org.opentest4j.AssertionFailedError: "
+                    "expected: <1> but was: <0>"
+                ),
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"com.example.CalculatorTest#testSubtract"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    assert finding.entries == ()
+    warnings = finding.metadata.get("parse_warnings")
+    assert isinstance(warnings, list) and len(warnings) == 1
+    assert "no parseable file:line references" in warnings[0]
+    assert "unresolvable" not in warnings[0]
+
+
+def test_parse_warning_wording_distinguishes_empty_from_unresolvable(
+    tmp_path: Path,
+) -> None:
+    """W1/S7 warning-wording split: a truly EMPTY ``failure_reference``
+    and an UNRESOLVABLE log path produce distinct reasons (both keep the
+    contract's ``"<node_id>: <reason>"`` form)."""
+    # Empty reference (any engine).
+    store, record = _make_run(
+        workspace=tmp_path / "ws-empty",
+        engine_name="junit",
+        test_results=(
+            TestResult(
+                node_id="com.example.T#empty",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference=None,
+            ),
+        ),
+    )
+    finding = derive_failure_proximity(
+        store=store,
+        record=record,
+        failed_test_ids=frozenset({"com.example.T#empty"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    warnings = finding.metadata.get("parse_warnings")
+    assert isinstance(warnings, list) and len(warnings) == 1
+    assert warnings[0] == "com.example.T#empty: failure_reference is empty"
+
+    # Unresolvable log path (logfile engine, file never written).
+    store2, record2 = _make_run(
+        workspace=tmp_path / "ws-unres",
+        engine_name="cargo-test",
+        test_results=(
+            TestResult(
+                node_id="tests::t_gone",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="native/failures/gone.log",
+            ),
+        ),
+    )
+    finding2 = derive_failure_proximity(
+        store=store2,
+        record=record2,
+        failed_test_ids=frozenset({"tests::t_gone"}),
+        regression_facts=None,
+        top_n=10,
+    )
+    warnings2 = finding2.metadata.get("parse_warnings")
+    assert isinstance(warnings2, list) and len(warnings2) == 1
+    assert warnings2[0].startswith("tests::t_gone: ")
+    assert "did not resolve" in warnings2[0]
+    assert warnings2[0] != warnings[0]

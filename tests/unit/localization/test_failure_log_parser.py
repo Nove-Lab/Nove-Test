@@ -12,16 +12,37 @@ dispatcher needs explicit per-engine coverage:
           bare ``<path>.rs:<line>:<col>`` catch-all.
 - gotest: ``  add_test.go:14: ...`` (test-failure frame) +
           ``\\t<path>:<line> +<offset>`` (panic-style frame).
+- junit:  ``at [prefix/]<pkg>.<Cls>.<method>(<File>.java:<line>)`` —
+          basename-only frames reconstructed to package-relative paths;
+          test-infra / JDK frames dropped (W1/S7).
+- xunit:  ``at <Ns>.<Cls>.<Method>() in <path>:line <N>`` — the ``in``
+          clause is PDB-only, so framework frames self-exclude (W1/S7).
 
 The parser is **best-effort**: a regex that finds nothing returns the
 empty tuple. The parser MUST NOT crash on malformed input; it MUST
 deduplicate ``(file, line)`` tuples within a single failure log so a
 file mentioned at the same line in multiple stack frames counts once.
+
+This module also covers ``resolve_failure_text``'s engine routing —
+inline (pytest/jest), logfile (cargo/go), and the W1/S7 hybrid branch
+(junit/xunit: log path first, inline fallback second).
 """
 
 from __future__ import annotations
 
-from novetest.localization.failure_proximity import parse_failure_log
+from pathlib import Path
+
+import pytest
+
+from novetest.localization.failure_proximity import (
+    parse_failure_log,
+    resolve_failure_text,
+)
+from novetest.memory.project_store import (
+    ProjectStore,
+    create_project_store,
+    get_project_store_state,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -251,3 +272,313 @@ def test_malformed_input_does_not_crash() -> None:
     parse_failure_log("cargo-test", text)
     parse_failure_log("jest", text)
     parse_failure_log("gotest", text)
+    parse_failure_log("junit", text)
+    parse_failure_log("xunit", text)
+
+
+# ---------------------------------------------------------------------------
+# junit (W1/S7, ANA-02)
+# ---------------------------------------------------------------------------
+#
+# The two multi-line logs below are the adapter-written per-test failure
+# logs captured VERBATIM on the equipped host (2026-07-07): Maven
+# Surefire 3.2.5 and Gradle 8.14.5 against the junit-maven-basic /
+# junit-gradle-basic fixtures (JDK 17.0.19, JUnit Jupiter). They are the
+# empirical ground truth the W1/S7 regexes were designed against — do
+# not "simplify" them; the framework/JDK frame noise IS the test.
+
+_REAL_JUNIT_MAVEN_LOG = """\
+[message] expected: <1> but was: <0>
+[type] org.opentest4j.AssertionFailedError
+[stack]
+org.opentest4j.AssertionFailedError: expected: <1> but was: <0>
+\tat org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+\tat org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+\tat org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+\tat org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+\tat org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:145)
+\tat org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:531)
+\tat com.example.CalculatorTest.testSubtract(CalculatorTest.java:27)
+\tat java.base/java.lang.reflect.Method.invoke(Method.java:569)
+\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1511)
+\tat java.base/java.util.ArrayList.forEach(ArrayList.java:1511)
+"""
+
+_REAL_JUNIT_GRADLE_LOG = """\
+[message] org.opentest4j.AssertionFailedError: expected: <1> but was: <0>
+[type] org.opentest4j.AssertionFailedError
+[stack]
+org.opentest4j.AssertionFailedError: expected: <1> but was: <0>
+\tat app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+\tat app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+\tat app//org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+\tat app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+\tat app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:145)
+\tat app//org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:531)
+\tat app//com.example.CalculatorTest.testSubtract(CalculatorTest.java:26)
+\tat java.base@17.0.19/java.lang.reflect.Method.invoke(Method.java:569)
+\tat java.base@17.0.19/java.util.ArrayList.forEach(ArrayList.java:1511)
+\tat java.base@17.0.19/java.util.ArrayList.forEach(ArrayList.java:1511)
+"""
+
+
+def test_junit_real_maven_log_extracts_only_the_user_frame() -> None:
+    """The verbatim Surefire log yields EXACTLY the user frame, with the
+    basename reconstructed to a package-relative path.
+
+    Exact-tuple assertion is load-bearing: the log carries six
+    ``org.junit.jupiter.*`` framework frames and three JDK
+    module-prefixed frames; any of them leaking into the result is the
+    Defect-3 pollution shape (framework files appear in EVERY failing
+    test's log, so they would out-score the real file).
+    """
+    assert parse_failure_log("junit", _REAL_JUNIT_MAVEN_LOG) == (
+        ("com/example/CalculatorTest.java", 27),
+    )
+
+
+def test_junit_real_gradle_log_handles_app_classloader_prefix() -> None:
+    """Gradle 8.14.5 frames carry an ``app//`` classloader prefix and
+    versioned module prefixes (``java.base@17.0.19/``) — the frozen
+    wave-1 §S7 regex prescription (no prefix allowance) missed every
+    user frame under Gradle. Empirical divergence, recorded in the
+    W1/S7 handoff.
+    """
+    assert parse_failure_log("junit", _REAL_JUNIT_GRADLE_LOG) == (
+        ("com/example/CalculatorTest.java", 26),
+    )
+
+
+def test_junit_default_package_frame_yields_bare_basename() -> None:
+    """A class in the default package has no package half to fold in."""
+    text = "\tat CalculatorTest.testX(CalculatorTest.java:9)"
+    assert parse_failure_log("junit", text) == (("CalculatorTest.java", 9),)
+
+
+def test_junit_nested_class_frame_maps_to_outer_file() -> None:
+    """``Outer$Inner`` frames carry the OUTER file's basename; the ``$``
+    stays inside the class token so the package half is still correct."""
+    text = "\tat com.example.Outer$Inner.testY(Outer.java:5)"
+    assert parse_failure_log("junit", text) == (("com/example/Outer.java", 5),)
+
+
+def test_junit_kotlin_frame_extracts_kt_file() -> None:
+    text = "\tat com.example.UtilsKt.helper(Utils.kt:12)"
+    assert parse_failure_log("junit", text) == (("com/example/Utils.kt", 12),)
+
+
+def test_junit_constructor_frame_matches_angle_bracket_method() -> None:
+    """``<init>`` / ``<clinit>`` constructor frames are legal methods."""
+    text = "\tat com.example.Foo.<init>(Foo.java:3)"
+    assert parse_failure_log("junit", text) == (("com/example/Foo.java", 3),)
+
+
+def test_junit_infra_frames_only_returns_empty() -> None:
+    """A log containing ONLY test-infra / JDK frames yields nothing —
+    the caller records a parse warning instead of ranking JUnit's own
+    source files."""
+    text = (
+        "\tat org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)\n"
+        "\tat org.opentest4j.AssertionFailedError.something(AssertionFailedError.java:10)\n"
+        "\tat java.base/java.lang.reflect.Method.invoke(Method.java:569)\n"
+        "\tat org.gradle.internal.Worker.run(Worker.java:44)\n"
+        "\tat org.apache.maven.surefire.booter.ForkedBooter.main(ForkedBooter.java:495)\n"
+    )
+    assert parse_failure_log("junit", text) == ()
+
+
+def test_junit_inline_type_message_reference_has_no_frames() -> None:
+    """The normalizer's inline ``"type: message"`` fill (no per-test log
+    written) carries no stack frame — parse yields empty, and the caller
+    emits the honest "no parseable file:line references" warning."""
+    text = "org.opentest4j.AssertionFailedError: expected: <1> but was: <0>"
+    assert parse_failure_log("junit", text) == ()
+
+
+# ---------------------------------------------------------------------------
+# xunit (W1/S7, ANA-02)
+# ---------------------------------------------------------------------------
+
+# Adapter-written per-test failure log captured VERBATIM on the equipped
+# host (2026-07-07): dotnet SDK 8.0 + xunit 2.6 against the
+# dotnet-test-basic fixture (workspace path shortened). Note: no
+# ``[type]`` block (TRX ``<ErrorInfo>`` has no type element) and the
+# framework frames carry NO `` in <path>:line`` clause — the clause is
+# emitted only for frames with PDB debug info, i.e. user code.
+_REAL_XUNIT_LOG = """\
+[message] Assert.Equal() Failure: Values differ
+Expected: 5
+Actual:   6
+[stack]
+   at MathLib.Tests.MathTests.TestSubtractIntentionallyFails() in /home/user/ws/MathLib.Tests/MathTests.cs:line 32
+   at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+"""
+
+
+def test_xunit_real_log_extracts_only_the_pdb_frame() -> None:
+    """The verbatim TRX-derived log yields exactly the user frame's
+    absolute path + line; the two ``System.*`` frames self-exclude
+    because they carry no `` in <path>:line`` clause."""
+    assert parse_failure_log("xunit", _REAL_XUNIT_LOG) == (
+        ("/home/user/ws/MathLib.Tests/MathTests.cs", 32),
+    )
+
+
+def test_xunit_windows_drive_path_extracts() -> None:
+    """Windows PDB paths (``C:\\...``) ride the shared drive-prefix
+    group from the 2026-06-09 Windows fix."""
+    text = r"   at Ns.Cls.M() in C:\Users\r\ws\MathLib.Tests\MathTests.cs:line 32"
+    assert parse_failure_log("xunit", text) == (
+        (r"C:\Users\r\ws\MathLib.Tests\MathTests.cs", 32),
+    )
+
+
+def test_xunit_fsharp_and_vb_extensions_extract() -> None:
+    text = (
+        "   at Lib.Tests.T.A() in /ws/Lib.Tests/Tests.fs:line 8\n"
+        "   at Lib.Tests.T.B() in /ws/Lib.Tests/Tests.vb:line 4\n"
+    )
+    assert parse_failure_log("xunit", text) == (
+        ("/ws/Lib.Tests/Tests.fs", 8),
+        ("/ws/Lib.Tests/Tests.vb", 4),
+    )
+
+
+def test_xunit_no_match_returns_empty() -> None:
+    """Inline ``"type: message"`` fills (empty TRX ``<ErrorInfo>``) have
+    no ``in <path>:line`` clause — parse yields empty."""
+    text = "System.InvalidOperationException: Sequence contains no elements"
+    assert parse_failure_log("xunit", text) == ()
+
+
+# ---------------------------------------------------------------------------
+# resolve_failure_text — engine routing (W1/S7 hybrid branch)
+# ---------------------------------------------------------------------------
+
+
+_RUN_ID = "01HFP000000000000000000001"
+
+
+def _make_store(tmp_path: Path) -> ProjectStore:
+    """Materialize an empty Project Store handle (no Run Record needed —
+    ``resolve_failure_text`` only reads ``store.path``)."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+    create_project_store(workspace)
+    return get_project_store_state(workspace / ".novetest")
+
+
+def _write_failure_log(store: ProjectStore, relative: str, content: str) -> Path:
+    """Write ``content`` at ``<store>/run/artifacts/run_<id>/<relative>``."""
+    log_path = store.path / "run" / "artifacts" / f"run_{_RUN_ID}" / relative
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(content, encoding="utf-8")
+    return log_path
+
+
+def test_resolve_inline_engines_return_reference_verbatim(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    for engine in ("pytest", "jest"):
+        assert (
+            resolve_failure_text(store, _RUN_ID, engine, "src/foo.py:5: boom")
+            == "src/foo.py:5: boom"
+        )
+
+
+def test_resolve_logfile_engine_reads_log_file(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    _write_failure_log(store, "native/failures/t.log", "panicked at src/lib.rs:3:1")
+    assert (
+        resolve_failure_text(store, _RUN_ID, "cargo-test", "native/failures/t.log")
+        == "panicked at src/lib.rs:3:1"
+    )
+
+
+def test_resolve_logfile_engine_missing_file_returns_empty(tmp_path: Path) -> None:
+    """cargo/go keep their pre-S7 semantics: a reference that does not
+    resolve to a file yields ``""`` (NOT the reference string) — those
+    normalizers never fill inline text."""
+    store = _make_store(tmp_path)
+    assert (
+        resolve_failure_text(store, _RUN_ID, "go-test", "native/failures/gone.log")
+        == ""
+    )
+
+
+def test_resolve_hybrid_log_path_fill_reads_file(tmp_path: Path) -> None:
+    """junit/xunit PRIMARY fill: an artifact-dir-relative log path."""
+    store = _make_store(tmp_path)
+    _write_failure_log(store, "native/failures/j.log", _REAL_JUNIT_MAVEN_LOG)
+    for engine in ("junit", "xunit"):
+        assert (
+            resolve_failure_text(store, _RUN_ID, engine, "native/failures/j.log")
+            == _REAL_JUNIT_MAVEN_LOG
+        )
+
+
+def test_resolve_hybrid_inline_fill_returns_reference(tmp_path: Path) -> None:
+    """junit/xunit FALLBACK fill: the normalizer's inline
+    ``"type: message"`` join when no per-test log was written."""
+    store = _make_store(tmp_path)
+    inline = "org.opentest4j.AssertionFailedError: expected: <1> but was: <0>"
+    assert resolve_failure_text(store, _RUN_ID, "junit", inline) == inline
+
+
+def test_resolve_hybrid_pathlike_inline_string_returns_inline(tmp_path: Path) -> None:
+    """Contract edge (task brief §Data contracts): an inline string that
+    SUPERFICIALLY looks path-like — e.g. an exception message quoting a
+    file path — must come back as inline text, not degrade to ``""``.
+    This is the deliberate divergence from cargo/go's
+    return-empty-on-missing semantics."""
+    store = _make_store(tmp_path)
+    pathlike = "System.IO.FileNotFoundException: Could not find file 'native/failures/data.json'"
+    assert resolve_failure_text(store, _RUN_ID, "xunit", pathlike) == pathlike
+    # Even a string that IS exactly the artifact-relative log-path shape
+    # resolves inline when no such file exists on disk.
+    ghost = "native/failures/never_written.log"
+    assert resolve_failure_text(store, _RUN_ID, "junit", ghost) == ghost
+
+
+def test_resolve_hybrid_unreadable_existing_file_returns_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An EXISTING but unreadable log file yields ``""`` (same posture as
+    cargo/go) — NOT the inline fallback: the reference was genuinely a
+    path, so feeding the path string to the parser would be wrong."""
+    store = _make_store(tmp_path)
+    _write_failure_log(store, "native/failures/locked.log", "content")
+
+    def raise_oserror(self: Path, *args: object, **kwargs: object) -> str:
+        raise OSError("simulated permission error")
+
+    monkeypatch.setattr(Path, "read_text", raise_oserror)
+    assert (
+        resolve_failure_text(store, _RUN_ID, "junit", "native/failures/locked.log")
+        == ""
+    )
+
+
+def test_resolve_hybrid_nul_byte_reference_does_not_crash(tmp_path: Path) -> None:
+    """A NUL byte in inline text makes ``Path.is_file`` raise
+    ``ValueError`` — the existence probe swallows it and the hybrid
+    branch returns the inline text (best-effort: never crash on
+    adapter-shaped data)."""
+    store = _make_store(tmp_path)
+    inline = "SomeException: weird \x00 payload"
+    assert resolve_failure_text(store, _RUN_ID, "junit", inline) == inline
+
+
+def test_resolve_unknown_engine_returns_empty(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    assert (
+        resolve_failure_text(store, _RUN_ID, "seventh-engine", "anything")
+        == ""
+    )
+
+
+def test_resolve_empty_reference_returns_empty(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    for engine in ("pytest", "jest", "cargo-test", "go-test", "junit", "xunit"):
+        assert resolve_failure_text(store, _RUN_ID, engine, None) == ""
+        assert resolve_failure_text(store, _RUN_ID, engine, "") == ""
