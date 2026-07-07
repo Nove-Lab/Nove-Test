@@ -176,6 +176,107 @@ async def test_coverage_run_emits_jacoco_xml(
 
 
 # ---------------------------------------------------------------------------
+# RUN-02 regression (W1/S2 exit criterion): full → filtered sequence
+# must not ingest stale Surefire XML
+# ---------------------------------------------------------------------------
+
+
+_SECOND_TEST_JAVA = """\
+package com.example;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class SecondTest {
+
+    @Test
+    void alwaysPasses() {
+        assertEquals(4, new Calculator().add(2, 2));
+    }
+}
+"""
+
+
+async def test_filtered_run_does_not_ingest_stale_reports(
+    workspace: Path, tmp_path: Path
+) -> None:
+    """RUN-02 (H) regression. Surefire never cleans
+    ``target/surefire-reports`` and a ``-Dtest=<cls>`` filtered run
+    rewrites ONLY the matching class's XML — before the W1/S2 pre-run
+    clean, the adapter's glob reported every other class's stale XML as
+    CURRENT results (ghost tests → poisoned RunRecord → poisoned
+    Regression/Localization baselines). Sequence: full run over two
+    classes in the SAME workspace, then a filtered run — the filtered
+    run's results must contain exactly the filtered class, nothing else.
+
+    The second test class is written into the tmp fixture copy here so
+    the committed ``junit-maven-basic`` fixture (and every count
+    assertion pinned to it) stays untouched.
+    """
+
+    (
+        workspace / "src" / "test" / "java" / "com" / "example"
+        / "SecondTest.java"
+    ).write_text(_SECOND_TEST_JAVA, encoding="utf-8")
+
+    # 1. FULL run — both classes execute, both XMLs land in the
+    # workspace's persistent target/surefire-reports.
+    full_target = TestTarget(
+        target_expression="",
+        target_type="workspace",
+        workspace_path=workspace,
+    )
+    result_full = await run_junit(
+        full_target,
+        artifact_dir=tmp_path / "art-full",
+        timeout=300.0,
+        collect_coverage=False,
+    )
+    full_tests = result_full.payload["tests"]
+    assert isinstance(full_tests, list)
+    full_identities = {t["identity"] for t in full_tests}
+    assert "com.example.SecondTest#alwaysPasses" in full_identities
+    assert "com.example.CalculatorTest#testAdd" in full_identities
+
+    # 2. FILTERED run in the SAME workspace — only SecondTest matches.
+    filtered_target = TestTarget(
+        target_expression="SecondTest",
+        target_type="nodeid",
+        workspace_path=workspace,
+    )
+    result_filtered = await run_junit(
+        filtered_target,
+        artifact_dir=tmp_path / "art-filtered",
+        timeout=300.0,
+        collect_coverage=False,
+    )
+    assert result_filtered.returncode == 0  # the ghost class held the failure
+
+    filtered_tests = result_filtered.payload["tests"]
+    assert isinstance(filtered_tests, list)
+    filtered_identities = {t["identity"] for t in filtered_tests}
+    assert filtered_identities == {"com.example.SecondTest#alwaysPasses"}, (
+        f"stale-report contamination: the filtered run reported tests "
+        f"that did not execute in it: "
+        f"{sorted(filtered_identities - {'com.example.SecondTest#alwaysPasses'})}"
+    )
+    summary = result_filtered.payload["summary"]
+    assert isinstance(summary, dict)
+    assert summary["total"] == 1
+    assert summary["passed"] == 1
+    assert summary["failed"] == 0
+
+    # 3. The staged per-run reports dir carries ONLY this run's XML —
+    # `_stage_reports_dir` copytrees the whole source directory, so an
+    # un-cleaned source would smuggle CalculatorTest's stale XML into
+    # the run's artifact tree even if the parse were filtered.
+    reports_dir = result_filtered.artifact_paths["reports_dir"]
+    xml_names = sorted(p.name for p in reports_dir.glob("TEST-*.xml"))
+    assert xml_names == ["TEST-com.example.SecondTest.xml"]
+
+
+# ---------------------------------------------------------------------------
 # CLI-level smoke (Defect 4 closure — Manual Test 2026-06-04 findings)
 # ---------------------------------------------------------------------------
 

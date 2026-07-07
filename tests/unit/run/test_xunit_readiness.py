@@ -248,6 +248,96 @@ async def test_neither_xunit_nor_mstest_nor_nunit_diagnostic(
 
 
 # ---------------------------------------------------------------------------
+# RUN-14 (W1/S2): readiness ↔ adapter csproj-selection coherence
+# ---------------------------------------------------------------------------
+#
+# Readiness once re-implemented the test-csproj filter locally with a
+# smaller token set ("test" only vs the adapter's tests/test/specs/spec)
+# and diverged: it could answer `ready` after probing a csproj the
+# adapter never runs, or block a runnable workspace. The fix
+# single-sources the selection through `_detect_test_project`; these
+# tests construct both RUN-14 layouts and assert that the csproj
+# readiness judges IS the csproj the adapter will hand to `dotnet test`.
+
+
+async def test_run14_readiness_probes_the_adapter_chosen_specs_csproj(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_dotnet_version: None,
+) -> None:
+    """Layout: ``Z.Test`` (xunit v2) + ``A.Specs`` (no test framework).
+
+    The adapter matches BOTH names (test + specs tokens) and picks the
+    sort-first ``A.Specs.csproj`` — which has no xunit, so the actual
+    run would collect 0 tests. Readiness must judge that SAME csproj and
+    answer ``engine-misconfigured`` (naming it), not a false ``ready``
+    earned by probing ``Z.Test.csproj`` the adapter never runs."""
+
+    from novetest.run.adapters.dotnet_adapter import _detect_test_project
+
+    z_dir = tmp_path / "Z.Test"
+    z_dir.mkdir()
+    (z_dir / "Z.Test.csproj").write_text(_CSPROJ_V2, encoding="utf-8")
+    a_dir = tmp_path / "A.Specs"
+    a_dir.mkdir()
+    (a_dir / "A.Specs.csproj").write_text(_CSPROJ_NEITHER, encoding="utf-8")
+
+    adapter_chosen, _, _ = _detect_test_project(tmp_path)
+    assert adapter_chosen is not None
+    assert adapter_chosen.name == "A.Specs.csproj"
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    result = await assess_engine_readiness(tmp_path)
+
+    assert result.state == "engine-misconfigured"
+    # The diagnostic names the adapter's choice — proof readiness read
+    # the same file the adapter will execute against.
+    assert any(adapter_chosen.name in issue for issue in result.issues), (
+        f"readiness diverged from the adapter: expected the issues to "
+        f"name {adapter_chosen.name!r}, got {result.issues!r}"
+    )
+
+
+async def test_run14_reverse_specs_only_xunit_workspace_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_dotnet_version: None,
+) -> None:
+    """Reverse layout: ``Zeta.Specs`` (xunit v2) + ``Alpha`` (plain
+    library), no test-token project name anywhere.
+
+    The old local filter matched neither name and fell back to
+    ``all_csprojs[0]`` = ``Alpha.csproj`` (no xunit) → it blocked a
+    perfectly runnable workspace as ``engine-misconfigured``. The
+    adapter matches the ``specs`` token and runs ``Zeta.Specs.csproj``;
+    readiness must reach the same verdict: ``ready``."""
+
+    from novetest.run.adapters.dotnet_adapter import _detect_test_project
+
+    alpha_dir = tmp_path / "Alpha"
+    alpha_dir.mkdir()
+    (alpha_dir / "Alpha.csproj").write_text(_CSPROJ_NEITHER, encoding="utf-8")
+    zeta_dir = tmp_path / "Zeta.Specs"
+    zeta_dir.mkdir()
+    (zeta_dir / "Zeta.Specs.csproj").write_text(_CSPROJ_V2, encoding="utf-8")
+
+    adapter_chosen, _, _ = _detect_test_project(tmp_path)
+    assert adapter_chosen is not None
+    assert adapter_chosen.name == "Zeta.Specs.csproj"
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    result = await assess_engine_readiness(tmp_path)
+
+    assert result.state == "ready", (
+        f"readiness diverged from the adapter: the adapter runs "
+        f"{adapter_chosen.name!r} (xunit v2, runnable) but readiness "
+        f"answered {result.state!r} with issues {result.issues!r}"
+    )
+    assert result.engine_context is not None
+    assert result.engine_context.engine_name == "xunit"
+
+
+# ---------------------------------------------------------------------------
 # SDK version detection — None when probe fails
 # ---------------------------------------------------------------------------
 

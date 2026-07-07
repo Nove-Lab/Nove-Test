@@ -40,6 +40,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from novetest.run.adapters.dotnet_adapter import _detect_test_project
 from novetest.run.adapters.junit_adapter import (
     _detect_build_tool,
     _detects_junit4_in_manifest,
@@ -890,13 +891,17 @@ async def _assess_xunit_readiness(
             ),
         )
 
-    # Project detection (mirrors dotnet_adapter._detect_test_project's
-    # one-level walk so a canonical library + test split is reachable
-    # without redundant top-level nesting).
-    direct = list(project_workspace.glob("*.csproj"))
-    one_deep = list(project_workspace.glob("*/*.csproj"))
-    all_csprojs = sorted(direct + one_deep, key=lambda p: str(p).lower())
-    if not all_csprojs:
+    # Test-project selection is single-sourced from the adapter's
+    # ``_detect_test_project`` (RUN-14, W1/S2): readiness must probe the
+    # exact csproj ``run_xunit`` will hand to ``dotnet test``, so the
+    # token set, sort, and pick rule live in ONE place. A local
+    # re-implementation here diverged once ("test" only vs the adapter's
+    # tests/test/specs/spec) and let readiness answer ``ready`` for a
+    # csproj the adapter never runs — or block a runnable workspace.
+    chosen_csproj, _all_csprojs, _all_slns = _detect_test_project(
+        project_workspace
+    )
+    if chosen_csproj is None:
         return EngineReadinessResult(
             state="engine-misconfigured",
             engine_context=NativeEngineContext(
@@ -911,8 +916,6 @@ async def _assess_xunit_readiness(
             ),
         )
 
-    test_csprojs = [p for p in all_csprojs if "test" in p.name.lower()]
-    chosen_csproj = test_csprojs[0] if test_csprojs else all_csprojs[0]
     try:
         csproj_content = chosen_csproj.read_text(encoding="utf-8")
     except OSError:

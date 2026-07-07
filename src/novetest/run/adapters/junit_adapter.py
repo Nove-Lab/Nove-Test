@@ -277,6 +277,33 @@ async def _run_maven(
     if test_target.target_expression:
         argv.append(f"-Dtest={test_target.target_expression}")
 
+    # Per-run report isolation (RUN-02, W1/S2). Surefire never cleans
+    # ``target/surefire-reports`` and a filtered ``-Dtest=`` run rewrites
+    # only the matching class's XML — so without a pre-run clean, the
+    # post-run glob below would report EVERY stale ``TEST-*.xml`` from a
+    # previous full run as CURRENT results (ghost tests poisoning the
+    # RunRecord and every baseline derived from it). The preferred
+    # redirect shape (dotnet's ``--results-directory`` analog) is
+    # impossible here: Surefire's ``reportsDirectory`` parameter has NO
+    # CLI user property (verified against Surefire 3.2.5 via
+    # ``help:describe``; it is pom-``<configuration>``-only, and we never
+    # modify the user's manifest). Deleting the exact directories the
+    # post-run glob reads is the deterministic fallback — an
+    # ``mtime > started_ms`` filter risks dropping FRESH results on
+    # coarse-mtime filesystems, a worse silent failure. The directories
+    # are Maven build outputs Surefire recreates on every ``mvn test``.
+    report_dir_candidates: list[tuple[Path, str | None]] = (
+        [
+            (module_dir / "target" / "surefire-reports", module_dir.name)
+            for module_dir in multi_module_paths
+        ]
+        if multi_module
+        else [(workspace / "target" / "surefire-reports", None)]
+    )
+    for stale_reports_dir, _module in report_dir_candidates:
+        if stale_reports_dir.is_dir():
+            shutil.rmtree(stale_reports_dir)
+
     env = _build_child_env()
     started_ms = int(time.time() * 1000)
     try:
@@ -307,17 +334,14 @@ async def _run_maven(
 
     # Glob Surefire report directories. For multi-module projects each
     # module has its own `target/surefire-reports/`; for single-module
-    # there's one at the workspace root. Walk both shapes uniformly.
-    report_locations: list[tuple[Path, str | None]] = []  # (dir, module_name)
-    if multi_module:
-        for module_dir in multi_module_paths:
-            module_reports = module_dir / "target" / "surefire-reports"
-            if module_reports.is_dir():
-                report_locations.append((module_reports, module_dir.name))
-    else:
-        single_reports = workspace / "target" / "surefire-reports"
-        if single_reports.is_dir():
-            report_locations.append((single_reports, None))
+    # there's one at the workspace root. The candidate list is the SAME
+    # one the pre-run clean above emptied, so every XML parsed below is
+    # from THIS run by construction.
+    report_locations: list[tuple[Path, str | None]] = [
+        (reports_dir, module_name)
+        for reports_dir, module_name in report_dir_candidates
+        if reports_dir.is_dir()
+    ]
 
     if not report_locations:
         # No reports produced at all is a hard failure unless mvn itself
@@ -618,6 +642,14 @@ async def _run_gradle(
             kind="timed-out",
         )
 
+    # No pre-run stale-report clean here, unlike the Maven branch
+    # (RUN-02, W1/S2 — C3 empirical check, 2026-07-07): Gradle's `Test`
+    # task declares `build/test-results/test` as an `@OutputDirectory`
+    # and deletes stale entries when the task re-executes. Verified on
+    # Gradle 8.14.5 against the `junit-gradle-basic` fixture: full
+    # `test` run (2 classes → 2 XMLs), then `--tests <OneClass>` run —
+    # only the filtered class's XML remains. Gradle self-cleans;
+    # Surefire does not.
     reports_dir = workspace / "build" / "test-results" / "test"
     parsed_tests: list[dict[str, object]] = []
     reports_seen: list[dict[str, object]] = []

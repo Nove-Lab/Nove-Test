@@ -1131,6 +1131,189 @@ class TestMavenCoverageArgv:
         assert "-Dmaven.test.failure.ignore=true" not in argv
 
 
+# ---------------------------------------------------------------------------
+# Maven per-run report isolation (RUN-02, W1/S2)
+# ---------------------------------------------------------------------------
+#
+# Surefire never cleans `target/surefire-reports` and a filtered
+# `-Dtest=` run rewrites only the matching class's XML. Without the
+# adapter's pre-run clean, stale `TEST-*.xml` from a previous run would
+# be globbed as CURRENT results (ghost tests). The redirect shape
+# (`-Dsurefire.reportsDirectory`) is impossible — Surefire 3.x exposes
+# no CLI user property for it — so the adapter deletes the exact
+# directories the post-run glob reads, right before invoking mvn.
+
+
+_STALE_SUREFIRE_XML = (
+    '<?xml version="1.0"?>'
+    '<testsuite name="Stale" tests="1" failures="0" errors="0" skipped="0">'
+    '<testcase classname="com.example.GhostTest" name="neverRanThisTime"'
+    ' time="0.001"/>'
+    "</testsuite>"
+)
+
+
+class TestMavenReportIsolation:
+    async def test_single_module_stale_reports_not_ingested(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stale `TEST-*.xml` (and stale `.txt` console dumps) planted in
+        `target/surefire-reports` before the run must appear NOWHERE in
+        the run's parsed tests or staged reports — only the XML the
+        (stubbed) mvn invocation wrote during THIS run counts."""
+
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_maven_workspace(workspace)
+        stale_dir = workspace / "target" / "surefire-reports"
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "TEST-com.example.GhostTest.xml").write_text(
+            _STALE_SUREFIRE_XML, encoding="utf-8"
+        )
+        (stale_dir / "com.example.GhostTest.txt").write_text(
+            "stale console dump", encoding="utf-8"
+        )
+
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_maven_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        artifact_dir = tmp_path / "art"
+        result = await junit_adapter.run_junit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        # Only the fresh Sentinel report (written by the stub DURING the
+        # run) is parsed — the ghost test never surfaces.
+        tests = result.payload["tests"]
+        assert isinstance(tests, list)
+        identities = [t["identity"] for t in tests]
+        assert identities == ["Sentinel#probe"], (
+            f"stale-report contamination: expected only the fresh "
+            f"Sentinel test, got {identities}"
+        )
+
+        # The staged per-run reports dir carries no stale files either
+        # (`_stage_reports_dir` copytrees the WHOLE source directory, so
+        # an un-cleaned source would smuggle stale .xml AND .txt in).
+        staged = artifact_dir / "native" / "reports"
+        staged_names = sorted(p.name for p in staged.iterdir())
+        assert staged_names == ["TEST-Sentinel.xml"]
+
+    async def test_multi_module_stale_reports_cleaned_per_module(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Multi-module: EVERY module's `target/surefire-reports` is
+        cleaned pre-run. A filtered run that exercises only module-a
+        must not resurrect module-b's previous XML."""
+
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "module-a").mkdir()
+        (workspace / "module-b").mkdir()
+        (workspace / "pom.xml").write_text(
+            """<?xml version="1.0"?>
+            <project>
+                <modelVersion>4.0.0</modelVersion>
+                <groupId>x</groupId><artifactId>y</artifactId><version>1</version>
+                <packaging>pom</packaging>
+                <modules>
+                    <module>module-a</module>
+                    <module>module-b</module>
+                </modules>
+            </project>""",
+            encoding="utf-8",
+        )
+        for module in ("module-a", "module-b"):
+            stale_dir = workspace / module / "target" / "surefire-reports"
+            stale_dir.mkdir(parents=True)
+            (stale_dir / "TEST-com.example.GhostTest.xml").write_text(
+                _STALE_SUREFIRE_XML, encoding="utf-8"
+            )
+
+        async def stub(
+            argv: Any,
+            *,
+            cwd: Any,
+            env: Any | None = None,
+            timeout: float | None = None,
+        ) -> SubprocessResult:
+            if isinstance(argv, (list, tuple)) and argv[-1] in (
+                "-v",
+                "-version",
+            ):
+                return SubprocessResult(
+                    returncode=0,
+                    stdout=b"Apache Maven 3.9.9 (sha) ...\n",
+                    stderr=b'openjdk version "17.0.10"\n',
+                    timed_out=False,
+                )
+            # Main invocation: this "filtered run" produces fresh XML in
+            # module-a ONLY (module-b's class did not match the filter).
+            fresh_dir = (
+                workspace / "module-a" / "target" / "surefire-reports"
+            )
+            fresh_dir.mkdir(parents=True, exist_ok=True)
+            (fresh_dir / "TEST-Sentinel.xml").write_text(
+                _MINIMAL_SUREFIRE_XML, encoding="utf-8"
+            )
+            return SubprocessResult(
+                returncode=0, stdout=b"", stderr=b"", timed_out=False
+            )
+
+        monkeypatch.setattr(junit_adapter, "run_subprocess", stub)
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="Sentinel",
+            target_type="nodeid",
+            workspace_path=workspace,
+        )
+        artifact_dir = tmp_path / "art"
+        result = await junit_adapter.run_junit(
+            target,
+            artifact_dir=artifact_dir,
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        tests = result.payload["tests"]
+        assert isinstance(tests, list)
+        identities = [t["identity"] for t in tests]
+        assert identities == ["Sentinel#probe"]
+        assert all(t.get("module") == "module-a" for t in tests)
+
+        # module-b's stale dir was deleted pre-run and (with no fresh
+        # output) never recreated — neither parsed nor staged.
+        assert not (
+            workspace / "module-b" / "target" / "surefire-reports"
+        ).exists()
+        staged_root = artifact_dir / "native" / "reports"
+        assert not (staged_root / "module-b").exists()
+        assert sorted(
+            p.name for p in (staged_root / "module-a").iterdir()
+        ) == ["TEST-Sentinel.xml"]
+
+
 @pytest.mark.skipif(
     sys.platform.startswith("win"),
     reason=(
