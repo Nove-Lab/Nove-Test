@@ -129,7 +129,16 @@ async def run_jest(
             ]
         )
     if test_target.target_expression:
-        argv.append(test_target.target_expression)
+        # RUN-22: the `--` separator pins the target as a positional test
+        # path pattern. Empirically verified on jest 29.7.0 / Node 22
+        # (2026-07-07): `jest -- <pattern>` selects the same tests as the
+        # bare positional, and a dash-leading value after `--` is treated
+        # as a pattern (loud "No tests found") instead of being consumed
+        # as a jest flag (`jest --listTests` lists files; `jest --
+        # --listTests` does not). jest is the only bare-argv engine where
+        # `--` achieves this — pytest/go/cargo use rejection instead (see
+        # adapters/_target_guard.py).
+        argv.extend(["--", test_target.target_expression])
 
     env = _build_child_env()
     started_ms = int(time.time() * 1000)

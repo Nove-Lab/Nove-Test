@@ -356,7 +356,15 @@ async def test_argv_passes_target_expression_through_verbatim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-empty `target_expression` is appended verbatim (no rewrite)."""
+    """A non-empty `target_expression` is appended verbatim (no rewrite).
+
+    Deliberately NO ``--`` separator (RUN-22, W1/S1): on cargo-nextest,
+    args after ``--`` are TEST-BINARY args, and the libtest emulation set
+    is still consumed as flags (``cargo nextest run -- --ignored``
+    silently flips selection to ignored-only tests; verified on nextest
+    0.9.137, 2026-07-07). Dash-leading targets are rejected at the
+    adapter boundary instead — see ``test_target_argv_hygiene.py``.
+    """
 
     import novetest.run.adapters.cargo_adapter as adapter
 
@@ -398,6 +406,9 @@ async def test_argv_passes_target_expression_through_verbatim(
     await run_cargo(target, artifact_dir=tmp_path, timeout=60.0)
 
     assert captured_argv[-1] == "tests::test_add"
+    # RUN-22: the filter must stay in nextest's [FILTERS] position — a
+    # `--` would reroute it to the test-binary-args position.
+    assert "--" not in captured_argv
 
 
 async def test_argv_omits_directory_target_expression(

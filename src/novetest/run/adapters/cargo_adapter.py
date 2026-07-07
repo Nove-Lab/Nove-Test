@@ -57,6 +57,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -181,6 +182,17 @@ async def run_cargo(
     # filter" — `--workspace` (added below) makes nextest walk every
     # crate in the workspace. Users can pass a nextest filter expression
     # (e.g. `tests::add` or `package(foo)`) for narrower runs.
+    #
+    # RUN-22 guard: a dash-leading value would be consumed by nextest's
+    # own parser (`-p X` becomes a `--package` selector). The frozen
+    # wave-1 `--` prescription is WRONG for nextest — args after `--` are
+    # TEST-BINARY args, and the libtest emulation set is still consumed
+    # as flags (`cargo nextest run -- --ignored` silently flips selection
+    # to ignored-only; verified on nextest 0.9.137, 2026-07-07) — so the
+    # adapter rejects instead.
+    reject_dash_leading_target(
+        test_target.target_expression, engine_label="cargo-nextest"
+    )
     target_expression = test_target.target_expression
 
     # Coverage-mode and execution-mode are MUTUALLY EXCLUSIVE per

@@ -22,6 +22,7 @@ import sys
 import time
 from pathlib import Path
 
+from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -104,6 +105,15 @@ async def run_pytest(
             ]
         )
 
+    # RUN-22 guard: pytest would consume a dash-leading target as a flag.
+    # A `--` separator does NOT help — empirically (pytest 9.0.3,
+    # 2026-07-07): `pytest -q -- --collect-only` still runs collect-only
+    # mode, i.e. pytest's parser keeps matching options after `--`.
+    # Rejection at this boundary is the only mechanism that pins the
+    # target as a non-flag; valid targets keep the exact pre-W1/S1 argv.
+    reject_dash_leading_target(
+        test_target.target_expression, engine_label="pytest"
+    )
     if test_target.target_expression:
         argv.append(test_target.target_expression)
 

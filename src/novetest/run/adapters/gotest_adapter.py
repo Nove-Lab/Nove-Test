@@ -27,6 +27,14 @@ Unlike pytest, ``go test`` has no plugin-autoload concept. The closest
 analogue is the module-cache layer (``GOFLAGS=-mod=readonly`` keeps it
 deterministic — see ``_build_child_env``).
 
+Target conversion (RUN-01, W1/S1): ``go test`` interprets a bare
+positional as a package selector — a plain directory name (``pkg``) is
+read as an IMPORT PATH (pre-compile failure) and ``.`` runs the ROOT
+package only, non-recursively (silent false green on modules whose tests
+live in subpackages). The adapter therefore converts the Test Target by
+``target_type`` instead of appending it verbatim — see
+``_go_target_args`` for the conversion table.
+
 Per-test failure logs are written **here**, not in the normalizer. The
 adapter is the only layer that holds ``artifact_dir``; the normalizer
 just consumes a payload-resident map of ``"<Package>::<Test>" →
@@ -40,11 +48,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
+from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -105,12 +115,12 @@ async def run_gotest(
             install_hint="install Go 1.21+ from https://go.dev/dl/",
         )
 
-    # `./...` runs every package under the module — the natural default
-    # for a Go module. The user can override with a package path
-    # (e.g. `./subpkg`) or, less commonly, a single `-run <regex>` filter
-    # forwarded via `target_expression`; we plumb either through verbatim
-    # and do NOT reinterpret nodeids.
-    target_arg = test_target.target_expression or "./..."
+    # RUN-22 guard: a dash-leading target would be consumed by `go test`
+    # as a flag (e.g. `-count=5` overriding our `-count=1`), never as a
+    # package selector. Rejected before any conversion or spawn.
+    reject_dash_leading_target(
+        test_target.target_expression, engine_label="go test"
+    )
 
     # `-count=1` disables Go's per-test result cache (§4 edge cases) so a
     # re-invocation of the adapter always re-runs the test bodies.
@@ -134,7 +144,7 @@ async def run_gotest(
                 "-coverpkg=./...",
             ]
         )
-    argv.append(target_arg)
+    argv.extend(_go_target_args(test_target))
 
     env = _build_child_env()
     started_ms = int(time.time() * 1000)
@@ -306,6 +316,113 @@ async def run_gotest(
         started_at_ms=started_ms,
         completed_at_ms=completed_ms,
         engine_version=engine_version,
+    )
+
+
+def _go_target_args(test_target: TestTarget) -> list[str]:
+    """Convert a Test Target into the trailing ``go test`` argv elements.
+
+    Conversion table (RUN-01, W1/S1 — see also
+    ``design/implementation-plan/engine-adapters.md §4``):
+
+    - empty expression (``target_type="workspace"``) → ``["./..."]`` —
+      every package under the module, the pre-existing default;
+    - nodeid ``<pkg>::<TestName>`` → ``["-run", "^<TestName>$", <selector>]``
+      — anchored per subtest level, regex metacharacters escaped
+      (``_anchored_run_pattern``), package half converted by
+      ``_package_selector``;
+    - an all-dots component (``./...``, ``pkg/...``) → verbatim: already
+      engine-native pattern syntax. Decided LEXICALLY, before the
+      ``target_type`` dispatch, because Win32 strips trailing dots from
+      path components and can classify ``./...`` as a directory (same
+      trap as ``normalize_target_expression``'s guard, 2026-07-04);
+    - ``target_type="directory"`` → ``./<rel-posix>/...`` (``.`` →
+      ``./...``): recursive, consistent with cargo/dotnet treating a
+      directory target as "run that whole scope". A bare relative
+      directory would otherwise be read as an import path (pre-compile
+      failure) and ``.`` would run the root package only, non-recursively
+      (silent false green);
+    - anything else (``target_type="file"``) → verbatim. ``go test``
+      file mode (``go test foo_test.go``) requires every dependent file
+      to be listed explicitly, so a single-file target usually fails
+      loudly — out of W1/S1 scope, noted in the handoff.
+
+    Inputs arrive anchor-relative canonical-POSIX from
+    ``normalize_target_expression`` (D3); ``PurePosixPath`` keeps the
+    conversion platform-independent for direct workflow-API callers too.
+    """
+
+    expression = test_target.target_expression
+    if not expression:
+        return ["./..."]
+    if test_target.target_type == "nodeid":
+        package_part, _, test_name = expression.partition("::")
+        selector = _package_selector(package_part, test_target.workspace_path)
+        if not test_name:
+            # Degenerate `pkg::` — no test half to filter on; run the
+            # package. (`-run '^$'` would silently select zero tests.)
+            return [selector]
+        return ["-run", _anchored_run_pattern(test_name), selector]
+    if _has_all_dots_component(expression):
+        return [expression]
+    if test_target.target_type == "directory":
+        rel_posix = PurePosixPath(expression).as_posix()
+        if rel_posix == ".":
+            return ["./..."]
+        return [f"./{rel_posix}/..."]
+    return [expression]
+
+
+def _package_selector(package_part: str, workspace: Path) -> str:
+    """Convert the package half of a nodeid into a ``go test`` selector.
+
+    - empty → ``./...`` (filter across the whole module);
+    - ``.`` → ``.`` (root package);
+    - an existing directory under the workspace → ``./<rel-posix>``
+      (relative-directory form — a bare ``pkg`` would be read as an
+      import path and fail to resolve);
+    - anything else → verbatim: full import paths
+      (``example.com/mod/pkg``, the shape RunRecord node ids carry) are
+      valid selectors inside the module as-is.
+    """
+
+    if not package_part:
+        return "./..."
+    rel_posix = PurePosixPath(package_part).as_posix()
+    if rel_posix == ".":
+        return "."
+    if (workspace / rel_posix).is_dir():
+        return f"./{rel_posix}"
+    return package_part
+
+
+def _anchored_run_pattern(test_name: str) -> str:
+    """Build the anchored ``-run`` regex for ``<TestName>`` (incl. subtests).
+
+    ``go test -run`` splits the pattern on unbracketed ``/`` and matches
+    each element against the corresponding subtest level, so each level
+    is anchored and escaped independently: ``TestParent/zero`` →
+    ``^TestParent$/^zero$``. Without anchoring, ``-run TestAdd`` also
+    matches ``TestAddSubtests`` — the nodeid contract is exact selection.
+    ``re.escape`` output is valid RE2 (Go's regexp): escaped ASCII
+    punctuation is read as the literal character.
+    """
+
+    return "/".join(f"^{re.escape(part)}$" for part in test_name.split("/"))
+
+
+def _has_all_dots_component(expression: str) -> bool:
+    """True when any path component of ``expression`` is solely dots.
+
+    Mirrors ``orchestration/anchor_resolution._has_all_dots_component``:
+    ``...`` (and longer dot runs) are go's package-wildcard syntax, never
+    filesystem names. ``.`` never survives path parsing as a component
+    and ``..`` is genuine parent navigation, so neither triggers.
+    """
+
+    return any(
+        part != ".." and set(part) == {"."}
+        for part in PurePosixPath(expression).parts
     )
 
 

@@ -25,6 +25,7 @@ from novetest.run.adapters.pytest_adapter import (
 )
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.target_resolver import resolve_test_target
+from novetest.utils.asyncio_subprocess import SubprocessResult
 
 
 async def test_basic_fixture_produces_report(
@@ -299,3 +300,59 @@ async def test_absolute_artifact_dir_unchanged_after_resolve(
         assert abs_artifact_dir in path.parents, (
             f"{key} → {path} is not under {abs_artifact_dir}"
         )
+
+
+async def test_argv_appends_valid_target_bare_without_separator(
+    basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid target keeps the exact pre-W1/S1 argv: bare final element,
+    NO ``--`` separator.
+
+    The frozen wave-1 text prescribed a ``--`` separator here, but on
+    pytest 9.0.3 ``--`` does not terminate option parsing (empirically,
+    2026-07-07: ``pytest -q -- --collect-only`` still runs collect-only
+    mode), so it would pin nothing while implying safety. Dash-leading
+    targets are rejected at the adapter boundary instead — see
+    ``test_target_argv_hygiene.py``. This test pins the argv shape so a
+    future "add the separator back" change has to confront the evidence.
+    """
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    captured_argv: list[str] = []
+
+    async def capturing_stub(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        assert isinstance(argv, list)
+        captured_argv.extend(argv)
+        report_arg = next(
+            a
+            for a in argv
+            if isinstance(a, str) and a.startswith("--json-report-file=")
+        )
+        report_path = Path(report_arg.split("=", 1)[1])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {"exitcode": 0, "summary": {"total": 1, "passed": 1}, "tests": []}
+            ),
+            encoding="utf-8",
+        )
+        return SubprocessResult(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+    monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
+
+    target = resolve_test_target(
+        "tests/test_math_utils.py::test_add_positive", basic_workspace
+    )
+    await run_pytest(target, artifact_dir=tmp_path, timeout=60.0)
+
+    assert captured_argv[-1] == "tests/test_math_utils.py::test_add_positive"
+    assert "--" not in captured_argv

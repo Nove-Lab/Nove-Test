@@ -303,12 +303,17 @@ async def test_argv_uses_default_target_when_expression_empty(
     assert captured_argv[-1] == "./..."
 
 
-async def test_argv_passes_target_expression_through_verbatim(
-    gotest_basic_workspace: Path,
+async def test_argv_converts_directory_dot_to_recursive_wildcard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-empty `target_expression` is appended verbatim (no rewrite)."""
+    """RUN-01 wiring: a `.` directory target reaches `go test` as `./...`.
+
+    Pre-fix, `.` was appended verbatim → `go test -json … .` ran the ROOT
+    package only, non-recursively — a module whose tests live in
+    subpackages ran zero tests, exited 0, and normalized to
+    ``status="passed"`` (silent false green).
+    """
 
     import novetest.run.adapters.gotest_adapter as adapter
 
@@ -334,10 +339,165 @@ async def test_argv_passes_target_expression_through_verbatim(
 
     monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
 
-    target = resolve_test_target("./subpkg", gotest_basic_workspace)
-    await run_gotest(target, artifact_dir=tmp_path, timeout=60.0)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    artifact_dir = tmp_path / "artifacts"
+    target = resolve_test_target(".", workspace)
+    assert target.target_type == "directory"
+    await run_gotest(target, artifact_dir=artifact_dir, timeout=60.0)
 
-    assert captured_argv[-1] == "./subpkg"
+    assert captured_argv[-1] == "./..."
+
+
+# ---------------------------------------------------------------------------
+# `_go_target_args` conversion table (RUN-01, W1/S1)
+# ---------------------------------------------------------------------------
+#
+# The pure conversion function is tested directly against `TestTarget`s
+# produced by the real `resolve_test_target` classifier, so the table
+# below pins the adapter-visible contract end to end (classification →
+# argv elements) without a subprocess. The wiring into `run_gotest`'s
+# argv is covered by `test_argv_converts_directory_dot_to_recursive_wildcard`
+# above and by `tests/integration/run/test_gotest_subpackages.py` against
+# a real `go` binary.
+
+
+def _workspace_with_pkg(tmp_path: Path) -> Path:
+    workspace = tmp_path / "ws"
+    (workspace / "pkg" / "sub").mkdir(parents=True)
+    return workspace
+
+
+def test_target_args_empty_expression_defaults_to_recursive(tmp_path: Path) -> None:
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("", _workspace_with_pkg(tmp_path))
+    assert _go_target_args(target) == ["./..."]
+
+
+def test_target_args_directory_dot_converts_to_recursive(tmp_path: Path) -> None:
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target(".", _workspace_with_pkg(tmp_path))
+    assert target.target_type == "directory"
+    assert _go_target_args(target) == ["./..."]
+
+
+def test_target_args_directory_converts_to_relative_recursive(tmp_path: Path) -> None:
+    """`pkg` (the normalized form of `./pkg`) → `./pkg/...`.
+
+    Pre-fix the bare `pkg` reached `go test` verbatim, was read as an
+    IMPORT PATH (`package pkg is not in std`), failed before compiling,
+    and surfaced as a fake `unparseable-output` build failure.
+    """
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    workspace = _workspace_with_pkg(tmp_path)
+    target = resolve_test_target("pkg", workspace)
+    assert target.target_type == "directory"
+    assert _go_target_args(target) == ["./pkg/..."]
+
+    nested = resolve_test_target("pkg/sub", workspace)
+    assert nested.target_type == "directory"
+    assert _go_target_args(nested) == ["./pkg/sub/..."]
+
+
+def test_target_args_directory_with_dot_slash_prefix_normalizes(tmp_path: Path) -> None:
+    """Direct workflow-API callers may pass `./pkg` unnormalized."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("./pkg", _workspace_with_pkg(tmp_path))
+    assert target.target_type == "directory"
+    assert _go_target_args(target) == ["./pkg/..."]
+
+
+def test_target_args_nodeid_decomposes_to_run_filter(tmp_path: Path) -> None:
+    """`pkg::TestAdd` → `-run '^TestAdd$' ./pkg` (anchored, dir-form pkg)."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("pkg::TestAdd", _workspace_with_pkg(tmp_path))
+    assert target.target_type == "nodeid"
+    assert _go_target_args(target) == ["-run", "^TestAdd$", "./pkg"]
+
+
+def test_target_args_nodeid_import_path_package_passes_verbatim(
+    tmp_path: Path,
+) -> None:
+    """RunRecord node ids carry full import paths — valid selectors as-is."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target(
+        "example.com/foo::TestAdd", _workspace_with_pkg(tmp_path)
+    )
+    assert _go_target_args(target) == ["-run", "^TestAdd$", "example.com/foo"]
+
+
+def test_target_args_nodeid_subtest_anchors_each_level(tmp_path: Path) -> None:
+    """`go test -run` splits on `/` per subtest level; each level anchored."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target(
+        "pkg::TestParent/zero_left", _workspace_with_pkg(tmp_path)
+    )
+    assert _go_target_args(target) == [
+        "-run",
+        "^TestParent$/^zero_left$",
+        "./pkg",
+    ]
+
+
+def test_target_args_nodeid_escapes_regex_metacharacters(tmp_path: Path) -> None:
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("pkg::TestAdd(x+1)", _workspace_with_pkg(tmp_path))
+    args = _go_target_args(target)
+    assert args[0] == "-run"
+    assert args[1] == r"^TestAdd\(x\+1\)$"
+    assert args[2] == "./pkg"
+
+
+def test_target_args_degenerate_nodeid_without_test_half_runs_package(
+    tmp_path: Path,
+) -> None:
+    """`pkg::` has no test half — run the package (never `-run '^$'`,
+    which would silently select zero tests)."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("pkg::", _workspace_with_pkg(tmp_path))
+    assert _go_target_args(target) == ["./pkg"]
+
+
+def test_target_args_engine_native_patterns_pass_verbatim(tmp_path: Path) -> None:
+    """All-dots components are go wildcard syntax — never converted.
+
+    The check is lexical (before the `target_type` dispatch) because
+    Win32 strips trailing dots from path components, so `./...` can be
+    misclassified as a directory there — same trap as
+    `normalize_target_expression`'s guard (2026-07-04).
+    """
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    workspace = _workspace_with_pkg(tmp_path)
+    for pattern in ("./...", "pkg/...", "..."):
+        target = resolve_test_target(pattern, workspace)
+        assert _go_target_args(target) == [pattern], pattern
+
+
+def test_target_args_file_target_passes_verbatim(tmp_path: Path) -> None:
+    """File targets keep pre-W1/S1 verbatim behavior (out of slice scope)."""
+
+    from novetest.run.adapters.gotest_adapter import _go_target_args
+
+    target = resolve_test_target("math_test.go", _workspace_with_pkg(tmp_path))
+    assert target.target_type == "file"
+    assert _go_target_args(target) == ["math_test.go"]
 
 
 async def test_failing_test_writes_failure_log(

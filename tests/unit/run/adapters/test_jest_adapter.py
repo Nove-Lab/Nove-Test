@@ -218,7 +218,14 @@ async def test_argv_includes_target_expression(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When ``target_expression`` is non-empty, it is appended as a positional."""
+    """A non-empty ``target_expression`` is appended as a positional after ``--``.
+
+    The ``--`` separator (RUN-22, W1/S1) pins the target as a test path
+    pattern: yargs places everything after ``--`` into the positionals, so
+    a dash-leading value can never be consumed as a jest flag. Empirically
+    verified on jest 29.7.0 / Node 22 (2026-07-07): ``jest -- <pattern>``
+    selects the same tests as the bare positional did.
+    """
 
     import novetest.run.adapters.jest_adapter as adapter
 
@@ -258,7 +265,9 @@ async def test_argv_includes_target_expression(
     assert "--json" in captured_argv
     assert "--testLocationInResults" in captured_argv
     assert "--watchman=false" in captured_argv
-    assert captured_argv[-1] == "__tests__/math.test.js"
+    # RUN-22: the target stays the final positional, pinned by a `--`
+    # separator immediately before it.
+    assert captured_argv[-2:] == ["--", "__tests__/math.test.js"]
 
 
 async def test_empty_target_expression_runs_full_suite(
