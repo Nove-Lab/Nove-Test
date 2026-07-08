@@ -59,6 +59,23 @@ def _require_dotnet() -> None:
 
 
 @pytest.fixture
+def zero_collection_workspace(tmp_path: Path) -> Path:
+    """Copy ``dotnet-test-basic`` into ``tmp_path`` for a zero-collection run.
+
+    Running ``novetest run <NoSuchTest>`` injects
+    ``--filter "FullyQualifiedName~<NoSuchTest>"`` (dotnet adapter, non-
+    directory target). The filter matches no test → ``dotnet test`` exits
+    ``0`` with zero results → the normalized record is ``passed`` with an
+    empty ``test_results`` tuple → the engine-level W1/S4 site decorates it.
+    Per-test copy keeps the source fixture's git state clean.
+    """
+
+    dest = tmp_path / "dotnet-test-basic"
+    shutil.copytree(FIXTURE_ROOT / "dotnet-test-basic", dest)
+    return dest
+
+
+@pytest.fixture
 def coverage_absent_workspace(tmp_path: Path) -> Path:
     """Copy ``dotnet-test-basic`` (no ``coverlet.collector``) into ``tmp_path``.
 
@@ -153,6 +170,51 @@ def test_cli_smoke_coverage_absent_emits_envelope_warning(
         f"v1 metadata bridge keys leaked into envelope despite "
         f"2026-06-19 sunset: {bridge_keys_present!r}"
     )
+
+
+def test_cli_smoke_zero_collection_emits_warning(
+    zero_collection_workspace: Path,
+) -> None:
+    """``novetest run <NoSuchTest>`` against an xunit fixture runs to
+    completion, matches zero tests via ``--filter``, exits ``0`` (EXIT_OK),
+    and surfaces ``zero-tests-collected`` on ``envelope.warnings[]`` (W1/S4).
+
+    A passed zero-collection run is EXIT_OK — the warning is a visibility
+    signal, not a status/exit change (C1). Verified on the equipped host
+    (dotnet SDK 8.0.421): a filter matching nothing returns
+    ``native_exit_code == 0``.
+    """
+
+    _require_dotnet()
+
+    init_result = _spawn_novetest(zero_collection_workspace, ["init"], timeout=60.0)
+    assert init_result.returncode == 0, init_result.stderr
+
+    run_result = _spawn_novetest(
+        zero_collection_workspace, ["run", "NoSuchTestZZZ"], timeout=600.0
+    )
+    assert run_result.returncode == 0, (
+        f"expected exit 0 (EXIT_OK) for a passed zero-collection run; "
+        f"got {run_result.returncode}. stdout={run_result.stdout!r} "
+        f"stderr={run_result.stderr!r}"
+    )
+
+    envelope = json.loads(run_result.stdout)
+    run_record = envelope["data"]["memory_entry"]["run_record"]
+    assert run_record["status"] == "passed"
+    assert run_record["test_results"] == []
+
+    warnings_block = envelope.get("warnings", [])
+    assert isinstance(warnings_block, list)
+    matching = [w for w in warnings_block if w.get("code") == "zero-tests-collected"]
+    assert matching, (
+        f"expected envelope warning with code='zero-tests-collected'; "
+        f"got warnings={warnings_block!r}"
+    )
+    warning = matching[0]
+    assert warning.get("message")
+    assert "collected zero tests" in warning["message"]
+    assert warning.get("details", {}).get("engine_name") == "xunit"
 
 
 async def test_xunit_v3_deferral_emits_envelope_warning_via_adapter(

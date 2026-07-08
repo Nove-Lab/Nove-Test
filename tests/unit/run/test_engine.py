@@ -126,14 +126,31 @@ async def test_execute_with_engine_context_dispatches_jest(
         report_path.write_text("{}", encoding="utf-8")
         return NativeResult(
             engine_name="jest",
+            # One passing test so the normalized record is passed-*non-empty*:
+            # this dispatch test is about "engine_name='jest' calls run_jest",
+            # not about the W1/S4 zero-collection site, so keep it off the
+            # passed-empty path that legitimately appends a warning.
             payload={
                 "success": True,
-                "numPassedTests": 0,
+                "numPassedTests": 1,
                 "numFailedTests": 0,
                 "numPendingTests": 0,
                 "numTodoTests": 0,
-                "numTotalTests": 0,
-                "testResults": [],
+                "numTotalTests": 1,
+                "testResults": [
+                    {
+                        "name": "/x.test.js",
+                        "status": "passed",
+                        "testResults": [
+                            {
+                                "ancestorTitles": [],
+                                "title": "adds",
+                                "status": "passed",
+                                "duration": 1,
+                            }
+                        ],
+                    }
+                ],
             },
             artifact_paths={"jest_json_report": report_path},
             returncode=0,
@@ -241,7 +258,21 @@ async def test_execute_with_engine_context_dispatches_gotest(
         events_path.write_text("", encoding="utf-8")
         return NativeResult(
             engine_name="go-test",
-            payload={"events": [], "packages": [], "failure_logs": {}},
+            # One passing test keeps this off the passed-empty path (the
+            # W1/S4 zero-collection site) so the assertion stays about
+            # dispatch, not about the warning.
+            payload={
+                "events": [
+                    {
+                        "Action": "pass",
+                        "Package": "example.com/gotestbasic",
+                        "Test": "TestAdd",
+                        "Elapsed": 0.001,
+                    }
+                ],
+                "packages": ["example.com/gotestbasic"],
+                "failure_logs": {},
+            },
             artifact_paths={
                 "gotest_events_jsonl": events_path,
                 "stdout": native_dir / "stdout.log",
@@ -291,8 +322,17 @@ async def test_execute_with_engine_context_dispatches_cargo(
         events_path.write_text("", encoding="utf-8")
         return NativeResult(
             engine_name="cargo-test",
+            # One passing test keeps this off the passed-empty path (the
+            # W1/S4 zero-collection site) so the assertion stays about
+            # dispatch, not about the warning.
             payload={
-                "events": [],
+                "events": [
+                    {
+                        "type": "test",
+                        "event": "ok",
+                        "name": "cargo_test_basic::tests::it_works",
+                    }
+                ],
                 "binaries": [],
                 "failure_logs": {},
             },
@@ -381,10 +421,19 @@ async def test_execute_with_explicit_engine_skips_detection(
         report_path.write_text("{}", encoding="utf-8")
         return NativeResult(
             engine_name="pytest",
+            # One passing test keeps this off the passed-empty path (the
+            # W1/S4 zero-collection site) so ``warnings == ()`` still asserts
+            # "no adapter/engine warnings on the pinned dispatch path".
             payload={
                 "exitcode": 0,
-                "summary": {"passed": 0, "total": 0},
-                "tests": [],
+                "summary": {"passed": 1, "total": 1},
+                "tests": [
+                    {
+                        "nodeid": "t.py::test_ok",
+                        "outcome": "passed",
+                        "call": {"duration": 0.001},
+                    }
+                ],
                 "duration": 0.0,
             },
             artifact_paths={"pytest_json_report": report_path},
@@ -482,3 +531,125 @@ async def test_execute_with_unsupported_explicit_engine_raises(
             engine=("php", "phpunit"),
             timeout=10.0,
         )
+
+
+# ---------------------------------------------------------------------------
+# W1/S4 — zero-collection warning (silent-green visibility, RUN-12 / C1)
+# The single engine-agnostic emit site in ``execute_with_engine_context``
+# keys purely on the normalized ``RunRecord`` (``status`` + ``test_results``),
+# so pytest is a sufficient unit-level carrier to exercise all three
+# branches; the go / junit / xunit *live* paths are covered by the
+# integration suite (``test_zero_collection_warning.py`` +
+# ``test_junit_warnings.py`` + ``test_dotnet_warnings.py``).
+# ---------------------------------------------------------------------------
+
+
+def _stub_pytest_native_result(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exitcode: int,
+    summary: dict[str, int],
+    tests: list[dict[str, Any]],
+) -> None:
+    """Patch ``run_pytest`` to return a controlled pytest payload.
+
+    ``exitcode`` doubles as the ``NativeResult.returncode`` and rides the
+    payload's ``exitcode`` field so the normalizer derives status from a
+    single source (pytest exit 5 → ``errored`` via
+    ``_aggregate_pytest_status``).
+    """
+
+    async def fake_run_pytest(test_target: Any, **kwargs: Any) -> NativeResult:
+        artifact_dir = kwargs["artifact_dir"]
+        native_dir = Path(artifact_dir) / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        report_path = native_dir / "pytest-report.json"
+        report_path.write_text("{}", encoding="utf-8")
+        return NativeResult(
+            engine_name="pytest",
+            payload={
+                "exitcode": exitcode,
+                "summary": summary,
+                "tests": tests,
+                "duration": 0.0,
+            },
+            artifact_paths={"pytest_json_report": report_path},
+            returncode=exitcode,
+            started_at_ms=0,
+            completed_at_ms=0,
+        )
+
+    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+
+
+async def test_zero_collection_passed_empty_emits_warning(
+    basic_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(1) A ``passed`` run that collected zero tests carries exactly one
+    ``zero-tests-collected`` warning — the silent-green visibility fix."""
+
+    _stub_pytest_native_result(
+        monkeypatch, exitcode=0, summary={"passed": 0, "total": 0}, tests=[]
+    )
+    target = resolve_test_target("", basic_workspace)
+    context = NativeEngineContext(ecosystem="python", engine_name="pytest")
+    record, warnings = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert record.status == "passed"
+    assert record.test_results == ()
+    # Envelope-decoration only — nothing persisted on the record.
+    assert "zero_tests_collected" not in record.metadata
+    assert [w.code for w in warnings] == ["zero-tests-collected"]
+    warning = warnings[0]
+    assert warning.details == {"engine_name": "pytest"}
+    assert "collected zero tests" in warning.message
+
+
+async def test_zero_collection_passed_with_results_no_warning(
+    basic_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(2) A ``passed`` run that DID collect tests emits no zero-collection
+    warning — the condition requires an *empty* results tuple."""
+
+    _stub_pytest_native_result(
+        monkeypatch,
+        exitcode=0,
+        summary={"passed": 1, "total": 1},
+        tests=[
+            {"nodeid": "t.py::test_ok", "outcome": "passed", "call": {"duration": 0.001}}
+        ],
+    )
+    target = resolve_test_target("", basic_workspace)
+    context = NativeEngineContext(ecosystem="python", engine_name="pytest")
+    record, warnings = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert record.status == "passed"
+    assert len(record.test_results) == 1
+    assert warnings == ()
+
+
+async def test_zero_collection_non_passed_empty_no_warning(
+    basic_workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(3) A non-``passed`` empty run emits no zero-collection warning — the
+    site keys on ``status == "passed"``, so an already-loud ``errored`` /
+    ``failed`` empty run is not double-flagged.
+
+    Uses pytest exit code 5 (no-tests-collected), which
+    ``_aggregate_pytest_status`` maps to ``errored`` — the exact pytest
+    branch C1 calls out as a *separate* concern from this warning.
+    """
+
+    _stub_pytest_native_result(
+        monkeypatch, exitcode=5, summary={"total": 0}, tests=[]
+    )
+    target = resolve_test_target("", basic_workspace)
+    context = NativeEngineContext(ecosystem="python", engine_name="pytest")
+    record, warnings = await execute_with_engine_context(
+        target, context, artifact_dir=tmp_path, timeout=10.0
+    )
+    assert record.status == "errored"
+    assert record.test_results == ()
+    assert warnings == ()

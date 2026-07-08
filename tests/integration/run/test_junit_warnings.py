@@ -123,6 +123,27 @@ def missing_jacoco_workspace(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def no_tests_workspace(tmp_path: Path) -> Path:
+    """Copy ``junit-maven-basic`` and delete its only test class.
+
+    With ``src/test/java`` carrying no ``@Test`` methods, a full
+    ``mvn test`` compiles, runs Surefire against zero test classes,
+    exits ``0``, and produces no ``TEST-*.xml`` — the junit adapter's
+    "no tests to run → clean empty run (returncode 0, empty tests
+    list)" path (``junit_adapter.py`` ~:346-352). The normalized record
+    is ``passed`` with an empty ``test_results`` tuple → the engine-level
+    W1/S4 site decorates it. This is the silent-green path S4 makes loud.
+    """
+
+    dest = tmp_path / "junit-maven-no-tests"
+    shutil.copytree(FIXTURE_ROOT / "junit-maven-basic", dest)
+    test_class = dest / "src" / "test" / "java" / "com" / "example" / "CalculatorTest.java"
+    assert test_class.is_file(), "fixture layout changed — test class not found"
+    test_class.unlink()
+    return dest
+
+
+@pytest.fixture
 def ambiguous_build_tool_workspace(tmp_path: Path) -> Path:
     """Copy ``junit-maven-basic`` and add a stub ``build.gradle.kts``.
 
@@ -245,3 +266,44 @@ def test_cli_smoke_ambiguous_build_tool_emits_envelope_warning(
     # Details surface which build tool actually ran — Maven won the
     # tiebreaker so the chosen_build_tool is "maven".
     assert warning.get("details", {}).get("chosen_build_tool") == "maven"
+
+
+def test_cli_smoke_zero_collection_emits_warning(
+    no_tests_workspace: Path,
+) -> None:
+    """``novetest run`` against a Maven module with zero ``@Test`` methods
+    runs to completion, collects zero tests, exits ``0`` (EXIT_OK), and
+    surfaces ``zero-tests-collected`` on ``envelope.warnings[]`` (W1/S4).
+
+    A passed zero-collection run is EXIT_OK — the warning is a visibility
+    signal, not a status/exit change (C1).
+    """
+
+    _require_junit_toolchain()
+
+    init_result = _spawn_novetest(no_tests_workspace, ["init"], timeout=60.0)
+    assert init_result.returncode == 0, init_result.stderr
+
+    run_result = _spawn_novetest(no_tests_workspace, ["run"], timeout=600.0)
+    assert run_result.returncode == 0, (
+        f"expected exit 0 (EXIT_OK) for a passed zero-collection run; "
+        f"got {run_result.returncode}. stdout={run_result.stdout!r} "
+        f"stderr={run_result.stderr!r}"
+    )
+
+    envelope = json.loads(run_result.stdout)
+    run_record = envelope["data"]["memory_entry"]["run_record"]
+    assert run_record["status"] == "passed"
+    assert run_record["test_results"] == []
+
+    warnings_block = envelope.get("warnings", [])
+    assert isinstance(warnings_block, list)
+    matching = [w for w in warnings_block if w.get("code") == "zero-tests-collected"]
+    assert matching, (
+        f"expected envelope warning with code='zero-tests-collected'; "
+        f"got warnings={warnings_block!r}"
+    )
+    warning = matching[0]
+    assert warning.get("message")
+    assert "collected zero tests" in warning["message"]
+    assert warning.get("details", {}).get("engine_name") == "junit"

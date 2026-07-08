@@ -143,7 +143,31 @@ async def execute_with_engine_context(
         target_type=test_target.target_type,
     )
     record = assign_run_reference(record, run_id=run_id)
-    return record, native_result.warnings
+    warnings = native_result.warnings
+    if not record.test_results and record.status == "passed":
+        # Silent-green visibility (W1/S4, RUN-12, correction C1): the engine
+        # ran to completion, exited clean, and collected ZERO tests — a
+        # ``passed`` status here means nothing was executed. Decorate the run
+        # with one loud warning at this single engine-agnostic site. It fires
+        # for exactly the engines that reach it with a passed-empty RunRecord:
+        # go / junit / xunit. jest and cargo raise ``AdapterInvocationError``
+        # before a RunRecord exists (already loud — this site never sees
+        # them), and pytest maps exit-5 to ``errored`` (separate concern), so
+        # no engine branching is needed here. Transient envelope decoration
+        # only — NOT persisted on RunRecord (reuses the warning channel of
+        # ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``).
+        warnings = warnings + (
+            AdapterWarning(
+                code="zero-tests-collected",
+                message=(
+                    f"{resolved_context.engine_name} ran to completion but "
+                    "collected zero tests; a 'passed' result here means "
+                    "nothing was executed"
+                ),
+                details={"engine_name": resolved_context.engine_name},
+            ),
+        )
+    return record, warnings
 
 
 async def _invoke_adapter(
