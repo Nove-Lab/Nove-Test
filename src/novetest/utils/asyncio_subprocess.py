@@ -99,6 +99,11 @@ class _StreamDrainer:
 def _killpg(pid: int, sig: int) -> None:
     """Signal the process group led by ``pid`` (POSIX), ignoring a gone group."""
 
+    # POSIX-only; process-group signals do not exist on Windows (which uses
+    # taskkill /T). The direct sys.platform check — not the _IS_WINDOWS alias —
+    # lets mypy mark the os.killpg call below unreachable under --platform win32.
+    if sys.platform == "win32":
+        return
     try:
         os.killpg(pid, sig)
     except (ProcessLookupError, PermissionError):
@@ -108,8 +113,11 @@ def _killpg(pid: int, sig: int) -> None:
 async def _terminate_tree(proc: asyncio.subprocess.Process, *, kill_grace: float) -> None:
     """Kill the child's whole process tree and reap the direct child."""
 
-    if _IS_WINDOWS:
+    if sys.platform == "win32":
         # Best-effort tree kill; untested on this Linux host (CI matrix covers it).
+        # Direct sys.platform check (not the _IS_WINDOWS alias) so mypy statically
+        # narrows the POSIX tail below — incl. signal.SIGKILL — unreachable under
+        # --platform win32.
         try:
             killer = await asyncio.create_subprocess_exec(
                 "taskkill",
