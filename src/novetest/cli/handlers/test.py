@@ -24,15 +24,17 @@ Envelope shape pinned by the Phase 6 entry brief §5:
       "warnings": []
     }
 
-Exit code mapping (mirrors ``run_cmd``):
+Exit code mapping: the shared ``cli/output.py::run_status_to_ok_exit``
+helper — the SAME single mapping ``run_cmd`` uses (W1/S8, ORC-04):
 
 - Run Record status ``"passed"``  → ``EXIT_OK`` (0)
 - Run Record status ``"failed"``  → ``EXIT_USER_TESTS_FAILED`` (3)
-- anything else                   → ``EXIT_GENERIC`` (1)
+- Run Record status ``"errored"`` → ``EXIT_USER_TESTS_FAILED`` (3)
 
 ``ok`` is ``True`` whenever the transport itself succeeded; the user's
-tests failing is **data**, not a transport error (same convention
-``novetest run`` follows since Phase 1).
+tests failing OR erroring (e.g. a pytest collection error) is **data**,
+not a transport error (same convention ``novetest run`` follows since
+Phase 1).
 """
 
 from __future__ import annotations
@@ -40,11 +42,9 @@ from __future__ import annotations
 from typing import Any
 
 from novetest.cli.output import (
-    EXIT_GENERIC,
-    EXIT_OK,
-    EXIT_USER_TESTS_FAILED,
     Envelope,
     EnvelopeWarning,
+    run_status_to_ok_exit,
 )
 from novetest.orchestration.recommendation import RECOMMENDATION_SCHEMA_VERSION
 from novetest.orchestration.workflows.test import TestOutcome
@@ -73,16 +73,9 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
         "recommendation_schema_version": RECOMMENDATION_SCHEMA_VERSION,
         "recommendations": [r.to_dict() for r in outcome.recommendations],
     }
-    status = outcome.run_record_status
-    if status == "passed":
-        exit_code = EXIT_OK
-        ok = True
-    elif status == "failed":
-        exit_code = EXIT_USER_TESTS_FAILED
-        ok = True  # transport succeeded; user tests failed (data)
-    else:
-        exit_code = EXIT_GENERIC
-        ok = False
+    # Single shared status→(ok, exit) mapping — see run_status_to_ok_exit
+    # (W1/S8, ORC-04): failed AND errored are user results at exit 3.
+    ok, exit_code = run_status_to_ok_exit(outcome.run_record_status)
     envelope_warnings: tuple[EnvelopeWarning, ...] = tuple(
         EnvelopeWarning(code=w.code, message=w.message, details=dict(w.details))
         for w in outcome.warnings

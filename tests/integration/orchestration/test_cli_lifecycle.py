@@ -125,7 +125,10 @@ def test_run_against_empty_workspace_is_engine_missing(
     assert isinstance(errors, list) and errors
     first_error = errors[0]
     assert isinstance(first_error, dict)
-    assert first_error["code"].startswith("engine-")
+    # Exact D7 token — the readiness state IS the complete wire code
+    # (W1/S8, ORC-03; the old `startswith("engine-")` check was satisfied
+    # by the doubled `engine-engine-missing` bug too).
+    assert first_error["code"] == "engine-missing"
 
 
 def test_operating_command_in_uninitialized_dir_returns_structured_envelope(

@@ -109,8 +109,19 @@ class TestBuildTestEnvelope:
         # Transport succeeded; user tests failed is data, not a transport error.
         assert envelope.ok is True
 
-    def test_errored_run_returns_exit_generic_and_ok_false(self) -> None:
+    def test_errored_run_returns_exit_user_tests_failed_and_ok_true(self) -> None:
+        """An errored suite is a persisted USER result, not a Nove Test
+        failure (W1/S8, ORC-04): exit 3, ok=True — same class as failed."""
         outcome = _make_outcome(status="errored")
+        envelope, exit_code = build_test_envelope(outcome)
+        assert exit_code == EXIT_USER_TESTS_FAILED
+        assert envelope.ok is True
+
+    def test_out_of_vocabulary_status_stays_tool_failure(self) -> None:
+        """Defensive else-branch only: the closed status vocabulary is
+        passed/failed/errored; anything else means an upstream bug and
+        surfaces as (ok=False, exit 1)."""
+        outcome = _make_outcome(status="bogus-status")
         envelope, exit_code = build_test_envelope(outcome)
         assert exit_code == EXIT_GENERIC
         assert envelope.ok is False

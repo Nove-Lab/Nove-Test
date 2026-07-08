@@ -17,6 +17,33 @@ EXIT_ENGINE_MISSING = 4
 EXIT_STORAGE = 5
 
 
+def run_status_to_ok_exit(status: str) -> tuple[bool, int]:
+    """Map a normalized Run Record ``status`` onto the ``(ok, exit_code)`` pair.
+
+    Single authority for BOTH execution verbs — ``run`` (``cli/app.py``)
+    and ``test`` (``cli/handlers/test.py``) derive their envelope ``ok``
+    and process exit code from this one mapping so the two verbs cannot
+    drift (W1/S8, ORC-04):
+
+    - ``passed``  → ``(True, EXIT_OK)``
+    - ``failed``  → ``(True, EXIT_USER_TESTS_FAILED)``
+    - ``errored`` → ``(True, EXIT_USER_TESTS_FAILED)`` — an errored suite
+      (e.g. a pytest collection error) is a normally-normalized, persisted
+      USER result, not a Nove Test tool failure; ``ok`` reports transport
+      success and the agent reads the status off the Run Record.
+
+    The final branch is defensive only: the Run Record status vocabulary
+    is closed (``passed`` / ``failed`` / ``errored``), so an
+    out-of-vocabulary value means a bug upstream and surfaces as a tool
+    failure (``(False, EXIT_GENERIC)``).
+    """
+    if status == "passed":
+        return (True, EXIT_OK)
+    if status in ("failed", "errored"):
+        return (True, EXIT_USER_TESTS_FAILED)
+    return (False, EXIT_GENERIC)
+
+
 class OutputMode(StrEnum):
     TEXT = "text"
     JSON = "json"

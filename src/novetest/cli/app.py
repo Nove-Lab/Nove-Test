@@ -15,7 +15,6 @@ from novetest.cli.output import (
     EXIT_OK,
     EXIT_STORAGE,
     EXIT_USAGE,
-    EXIT_USER_TESTS_FAILED,
     Envelope,
     EnvelopeError,
     EnvelopeWarning,
@@ -24,6 +23,7 @@ from novetest.cli.output import (
     emit_envelope,
     not_implemented_envelope,
     resolve_output_mode,
+    run_status_to_ok_exit,
 )
 from novetest.coverage import (
     CoverageUnavailable,
@@ -53,6 +53,7 @@ from novetest.models import ReplayResult, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.anchor_resolution import (
     EngineAmbiguousError,
+    WorkspaceEngineUndetectedError,
     resolve_workspace,
 )
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
@@ -250,6 +251,24 @@ def _readiness_payload(readiness: Any) -> dict[str, Any]:
         "evidence": list(readiness.evidence),
         "issues": list(readiness.issues),
     }
+
+
+def _engine_not_ready_code(exc: EngineNotReadyError) -> str:
+    """D7 error-code token for an ``EngineNotReadyError`` (W1/S8).
+
+    Readiness states are ALREADY complete wire tokens (``engine-missing``
+    / ``engine-misconfigured`` — see ``run/readiness.py``), so the code is
+    the state itself, never a prefixed composite (ORC-03: the old
+    ``f"engine-{state}"`` emitted ``engine-engine-missing``). The
+    markerless branch — orchestration's ``WorkspaceEngineUndetectedError``,
+    raised only when a pin-less store's anchor has no engine marker at
+    all — maps to the D7 standard ``no-engine-detected``, matching
+    ``init`` / ``reset`` (ORC-23). Shared by ``run_cmd`` and ``test_cmd``
+    so the two verbs cannot drift.
+    """
+    if isinstance(exc, WorkspaceEngineUndetectedError):
+        return "no-engine-detected"
+    return exc.readiness.state
 
 
 def _adapter_to_envelope_warnings(
@@ -603,7 +622,7 @@ def run_cmd(
                 data={"engine_readiness": _readiness_payload(exc.readiness)},
                 errors=(
                     EnvelopeError(
-                        code=f"engine-{exc.readiness.state}",
+                        code=_engine_not_ready_code(exc),
                         message=str(exc),
                     ),
                 ),
@@ -632,15 +651,9 @@ def run_cmd(
 
     entry = outcome.memory_entry
     record = entry.run_record
-    if record.status == "passed":
-        exit_code = EXIT_OK
-        ok = True
-    elif record.status == "failed":
-        exit_code = EXIT_USER_TESTS_FAILED
-        ok = True  # the run itself succeeded; the *user's* tests failed
-    else:
-        exit_code = EXIT_GENERIC
-        ok = False
+    # Single shared status→(ok, exit) mapping — see run_status_to_ok_exit
+    # (W1/S8, ORC-04): failed AND errored are user results at exit 3.
+    ok, exit_code = run_status_to_ok_exit(record.status)
 
     data: dict[str, Any] = {"memory_entry": entry.to_dict()}
     if outcome.coverage_outcome is not None:
@@ -1671,7 +1684,7 @@ def test_cmd(
                 data={"engine_readiness": _readiness_payload(exc.readiness)},
                 errors=(
                     EnvelopeError(
-                        code=f"engine-{exc.readiness.state}",
+                        code=_engine_not_ready_code(exc),
                         message=str(exc),
                     ),
                 ),

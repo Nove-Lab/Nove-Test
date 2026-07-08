@@ -28,6 +28,7 @@ from novetest.orchestration.anchor_resolution import (
     AmbiguousEngines,
     ChosenEngine,
     EngineAmbiguousError,
+    WorkspaceEngineUndetectedError,
     choose_workspace_engine,
     normalize_target_expression,
     resolve_execution_engine,
@@ -321,6 +322,10 @@ async def test_execution_engine_raises_engine_missing_without_pin_or_marker(
     _patch_probe(monkeypatch, ready_engines=set())
     with pytest.raises(EngineNotReadyError) as exc_info:
         await resolve_execution_engine(legacy, None)
+    # The markerless branch raises the dedicated subclass so the CLI can
+    # emit the D7 `no-engine-detected` code (W1/S8, ORC-23) while the
+    # carried readiness stays within run's three-state vocabulary.
+    assert isinstance(exc_info.value, WorkspaceEngineUndetectedError)
     assert exc_info.value.readiness.state == "engine-missing"
 
 

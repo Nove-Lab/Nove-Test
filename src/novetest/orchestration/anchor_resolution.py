@@ -81,6 +81,27 @@ class EngineAmbiguousError(RuntimeError):
         self.candidates = candidates
 
 
+class WorkspaceEngineUndetectedError(EngineNotReadyError):
+    """Markerless anchor on an execution verb: nothing to dispatch on.
+
+    Raised ONLY by ``resolve_execution_engine`` when a pin-less (legacy)
+    store's anchor directory has no engine marker at all — the one place
+    on the run/test path that can honestly distinguish "no marker at all"
+    from the run engine's per-engine readiness verdicts ("marker/pin
+    present, engine not operable" → ``engine-missing`` /
+    ``engine-misconfigured``). The CLI maps this subclass to the D7
+    standard error code ``no-engine-detected`` (exit 4), matching what
+    ``init`` and ``reset`` already emit for a markerless directory
+    (W1/S8, ORC-23).
+
+    Subclasses ``EngineNotReadyError`` so direct workflow-API callers that
+    only know the run engine's exception surface keep working unchanged.
+    The carried readiness stays within the run contract's three-state
+    vocabulary (``state="engine-missing"``) — the D7 code is a CLI-layer
+    classification, not a fourth readiness state.
+    """
+
+
 async def choose_workspace_engine(
     workspace: Path,
 ) -> ChosenEngine | AmbiguousEngines | None:
@@ -176,9 +197,10 @@ async def resolve_execution_engine(
     fallback is a no-op.
 
     A store with no pin AND no engine choice (markerless anchor) cannot
-    execute anything: raise ``EngineNotReadyError`` with a synthetic
-    ``engine-missing`` readiness so the CLI surfaces the same exit-4
-    ``engine-engine-missing`` envelope the pre-pin no-engine path produced.
+    execute anything: raise ``WorkspaceEngineUndetectedError`` (an
+    ``EngineNotReadyError`` subclass) with a synthetic ``engine-missing``
+    readiness — the CLI maps the subclass to the D7 ``no-engine-detected``
+    envelope at exit 4 (W1/S8, ORC-23).
     """
 
     if override is not None:
@@ -192,7 +214,7 @@ async def resolve_execution_engine(
         return (choice.ecosystem, choice.engine_name)
     if isinstance(choice, AmbiguousEngines):
         raise EngineAmbiguousError(choice.candidates)
-    raise EngineNotReadyError(
+    raise WorkspaceEngineUndetectedError(
         EngineReadinessResult(
             state="engine-missing",
             engine_context=None,
