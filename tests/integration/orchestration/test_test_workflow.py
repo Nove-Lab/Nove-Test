@@ -208,6 +208,52 @@ async def test_localization_branch_first_run_yields_investigate_location(
 
 
 # ---------------------------------------------------------------------------
+# ORC-26 — the returned memory_entry's derived-fact flags are fresh
+# ---------------------------------------------------------------------------
+
+
+async def test_returned_memory_entry_reflects_all_derived_facts(
+    tmp_path: Path,
+) -> None:
+    """``TestOutcome.memory_entry`` reflects EVERY fact derived in the same
+    invocation — Coverage, Localization, AND Regression — with no second
+    lookup.
+
+    Pre-fix, the entry was refreshed only after Coverage (and after a
+    successful Replay), so ``has_localization_findings`` /
+    ``has_regression_facts`` on the returned entry reported just-derived
+    facts as absent (the flags were read BEFORE Regression/Localization
+    wrote their files). The single post-derivation refresh makes the
+    returned entry strictly fresher.
+
+    Two runs on the same target: run 1 derives Coverage + Localization
+    (per-test SBFL over the deliberate divide bug) but has no prior
+    baseline, so no Regression; run 2 now has run 1 as a comparable prior,
+    so Regression compares and writes a pair — the returned entry must show
+    it immediately.
+    """
+
+    clear_resolver_cache()
+    workspace = _materialize_fixture("localization-branch", tmp_path)
+    init = await initialize_project_workspace(workspace)
+
+    first = await test_target_in_store("tests/", init.store, timeout=120.0)
+    # Localization + Coverage derived on the first run and reflected on the
+    # RETURNED entry (pre-fix: has_localization_findings was stale False).
+    assert first.memory_entry.has_coverage_facts is True
+    assert first.memory_entry.has_localization_findings is True
+    # No comparable prior on the first run → Regression not derived.
+    assert first.memory_entry.has_regression_facts is False
+
+    second = await test_target_in_store("tests/", init.store, timeout=120.0)
+    # Second run has a prior baseline → Regression compares + writes a pair.
+    # All three derived-fact flags are fresh on the returned entry.
+    assert second.memory_entry.has_coverage_facts is True
+    assert second.memory_entry.has_localization_findings is True
+    assert second.memory_entry.has_regression_facts is True
+
+
+# ---------------------------------------------------------------------------
 # Determinism — same store → same recommendations across 3 re-derives
 # ---------------------------------------------------------------------------
 

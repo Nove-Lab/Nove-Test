@@ -98,10 +98,15 @@ def build_status_view(store: ProjectStore) -> StatusView:
     """Aggregate the current Memory state into a Status view.
 
     The four ``*_available`` flags are computed by cache-only retrieval
-    against the **latest** Memory Entry — the same run that surfaces as
-    ``latest_run_reference`` on the envelope. When ``list_run_history``
-    returns an empty list (fresh store, no runs yet), every flag stays
-    ``False`` because there is no run to probe against.
+    against the newest **live** Memory Entry — the same run that surfaces
+    as ``latest_run_reference`` on the envelope. ``list_run_history``
+    returns newest-first across BOTH live and tombstoned runs, so the head
+    is the first entry that is NOT a tombstone (a deleted run must never
+    surface as the current head — see ``_is_tombstoned``). When no live run
+    remains — a fresh store with no runs, OR a store whose runs have all
+    been tombstoned — every flag stays ``False`` and
+    ``latest_run_reference`` is ``null``, while ``run_history_size`` keeps
+    its full count (tombstones included), unchanged.
 
     Each flag is a pure ``isinstance(result, FactSet)`` check against the
     relevant engine's ``get_*`` cache-read helper:
@@ -135,11 +140,15 @@ def build_status_view(store: ProjectStore) -> StatusView:
     """
 
     history = list_run_history(store)
-    latest = history[0] if history else None
+    run_history_size = len(history)
+    latest = next((entry for entry in history if not _is_tombstoned(entry)), None)
     if latest is None:
+        # No live head: either a fresh store (empty history) or every run
+        # has been tombstoned. ``run_history_size`` still reports the full
+        # count (tombstones included) — only the head selection changes.
         return StatusView(
             latest_entry=None,
-            run_history_size=0,
+            run_history_size=run_history_size,
             pinned_engine=store.pinned_engine,
         )
 
@@ -156,13 +165,35 @@ def build_status_view(store: ProjectStore) -> StatusView:
     )
     return StatusView(
         latest_entry=latest,
-        run_history_size=len(history),
+        run_history_size=run_history_size,
         coverage_available=coverage_available,
         regression_available=regression_available,
         localization_available=localization_available,
         replay_available=replay_available,
         pinned_engine=store.pinned_engine,
     )
+
+
+def _is_tombstoned(entry: MemoryEntry) -> bool:
+    """Return True iff ``entry`` is a soft-deleted (tombstoned) run.
+
+    Discriminant: the Memory tombstone primitive stamps
+    ``run_record.status == "tombstoned"`` on delete (equivalently
+    ``entry.tombstoned_at is not None`` for a healthy tombstone; the
+    status token is the more robust of the two — it also holds if a
+    delete is interrupted after the record mutate but before the
+    directory rename). ``status`` filters tombstones OUT of head
+    selection so a deleted run is never reported as the current head
+    (ORC-16).
+
+    Recorded non-goal: legacy partial-state tombstones (MEM-02 — the
+    record kept its original status and ``tombstoned_at`` was never
+    stamped) are indistinguishable from a live run at this layer and are
+    out of scope here. Their creation path is removed by the parallel S9
+    Memory slice; no Memory-side API is added for status.
+    """
+
+    return entry.run_record.status == "tombstoned"
 
 
 def _latest_regression_available(

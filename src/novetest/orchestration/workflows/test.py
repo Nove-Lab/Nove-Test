@@ -204,7 +204,9 @@ async def test_target_in_store(
 
     # Step 3 — persist. ``store_run_evidence`` mutates artifact paths to
     # Project-Store-relative form before write; mirror that here so the
-    # in-memory record matches what later derivations will see.
+    # in-memory record matches what later derivations will see. The
+    # returned Memory Entry is re-read once after ALL derivations complete
+    # (see below), so we only need the persistence side effect here.
     relative_paths = {
         name: str(Path(p).relative_to(store.path))
         for name, p in record.artifact_paths.items()
@@ -212,7 +214,7 @@ async def test_target_in_store(
     from dataclasses import replace as _replace
 
     persisted_record = _replace(record, artifact_paths=relative_paths)
-    entry = store_run_evidence(store, persisted_record)
+    store_run_evidence(store, persisted_record)
     run_record: RunRecord = persisted_record
 
     # Step 4 — best-effort Coverage derivation.
@@ -222,9 +224,6 @@ async def test_target_in_store(
     coverage_facts: CoverageFactSet | None = (
         coverage_outcome if isinstance(coverage_outcome, CoverageFactSet) else None
     )
-    # Refresh the Memory Entry so ``has_coverage_facts`` reflects disk state.
-    if coverage_facts is not None:
-        entry = retrieve_run_evidence(store, run_record.run_reference)
 
     # Step 5 — Regression: resolve latest baseline for the target, then
     # compare. Both calls are best-effort; missing baseline (the natural
@@ -275,11 +274,16 @@ async def test_target_in_store(
             reruns=reruns,
             timeout=timeout,
         )
-        if isinstance(replay_outcome, ReplayResult):
-            # Refresh the Memory Entry so ``has_replay_result`` reflects
-            # the persisted ``replay_result.json`` (mirrors the coverage
-            # refresh at step 4).
-            entry = retrieve_run_evidence(store, run_record.run_reference)
+
+    # Refresh the Memory Entry ONCE, after every derivation (Coverage,
+    # Regression, Localization, Replay) has written its fact files, so the
+    # returned entry's ``has_*`` flags reflect ALL just-derived facts. A
+    # single refresh point replaces the earlier per-step refreshes (which
+    # fired only after Coverage and after a successful Replay) that left
+    # ``has_regression_facts`` / ``has_localization_findings`` reporting
+    # just-derived facts as absent (ORC-26). Strictly fresher and simpler:
+    # the read is unconditional and downstream of the last write.
+    entry = retrieve_run_evidence(store, run_record.run_reference)
 
     # Step 7 — build StageEligibility from the four per-stage outcomes.
     stage_eligibility = _build_stage_eligibility(

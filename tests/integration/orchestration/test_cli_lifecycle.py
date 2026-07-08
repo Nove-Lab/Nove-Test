@@ -167,6 +167,105 @@ def test_status_in_initialized_empty_store_returns_zero_history(
     assert sub_reports["replay"] == "unavailable"
 
 
+def test_status_after_deleting_latest_run_reports_prior_live_run_as_head(
+    basic_workspace: Path, run_cli_in
+) -> None:
+    """ORC-16 subprocess E2E: ``run A → run B → delete B → status`` reports
+    the LIVE run A as head, not the tombstoned B.
+
+    ``list_run_history`` is newest-first across live AND tombstoned runs, so
+    pre-fix ``status`` exposed the just-deleted latest run as
+    ``latest_run_reference``. The user-visible defect shape: after deleting
+    your most recent run, ``status`` must fall back to the newest surviving
+    run — never resurrect the tombstone as the current head.
+    """
+
+    run_cli_in(basic_workspace, ["init"])
+
+    first = run_cli_in(basic_workspace, ["run"])
+    assert first.returncode == 0, first.stderr
+    first_data = first.envelope()["data"]
+    assert isinstance(first_data, dict)
+    first_entry = first_data["memory_entry"]
+    assert isinstance(first_entry, dict)
+    first_record = first_entry["run_record"]
+    assert isinstance(first_record, dict)
+    first_ref = first_record["run_reference"]
+    assert isinstance(first_ref, dict)
+    run_a_id = first_ref["run_id"]
+
+    second = run_cli_in(basic_workspace, ["run"])
+    assert second.returncode == 0, second.stderr
+    second_data = second.envelope()["data"]
+    assert isinstance(second_data, dict)
+    second_entry = second_data["memory_entry"]
+    assert isinstance(second_entry, dict)
+    second_record = second_entry["run_record"]
+    assert isinstance(second_record, dict)
+    second_ref = second_record["run_reference"]
+    assert isinstance(second_ref, dict)
+    run_b_id = second_ref["run_id"]
+    assert run_b_id != run_a_id
+
+    # Delete the NEWEST run (B).
+    delete_result = run_cli_in(basic_workspace, ["memory", "delete", run_b_id])
+    assert delete_result.returncode == 0, delete_result.stderr
+
+    # `status` must now report A (the newest LIVE run) as head — not the
+    # tombstoned B — while run_history_size keeps the full count (2).
+    status_result = run_cli_in(basic_workspace, ["status"])
+    assert status_result.returncode == 0, status_result.stderr
+    status_data = status_result.envelope()["data"]
+    assert isinstance(status_data, dict)
+    assert status_data["run_history_size"] == 2
+    latest_ref = status_data["latest_run_reference"]
+    assert isinstance(latest_ref, dict)
+    assert latest_ref["run_id"] == run_a_id, (
+        f"status head must be the live run A ({run_a_id}), "
+        f"not the tombstoned B ({run_b_id})"
+    )
+
+
+def test_status_after_deleting_only_run_reports_null_head_and_full_size(
+    basic_workspace: Path, run_cli_in
+) -> None:
+    """ORC-16 boundary: delete the only run → ``latest_run_reference`` null,
+    all sub_reports ``unavailable``, but ``run_history_size`` keeps the
+    tombstoned run in its count (behaves like "no live head")."""
+
+    run_cli_in(basic_workspace, ["init"])
+    run_result = run_cli_in(basic_workspace, ["run"])
+    assert run_result.returncode == 0, run_result.stderr
+    run_data = run_result.envelope()["data"]
+    assert isinstance(run_data, dict)
+    entry = run_data["memory_entry"]
+    assert isinstance(entry, dict)
+    record = entry["run_record"]
+    assert isinstance(record, dict)
+    ref = record["run_reference"]
+    assert isinstance(ref, dict)
+    run_id = ref["run_id"]
+
+    delete_result = run_cli_in(basic_workspace, ["memory", "delete", run_id])
+    assert delete_result.returncode == 0, delete_result.stderr
+
+    status_result = run_cli_in(basic_workspace, ["status"])
+    assert status_result.returncode == 0, status_result.stderr
+    status_data = status_result.envelope()["data"]
+    assert isinstance(status_data, dict)
+    assert status_data["latest_run_reference"] is None
+    # The tombstoned run still counts toward history size.
+    assert status_data["run_history_size"] == 1
+    sub_reports = status_data["sub_reports"]
+    assert isinstance(sub_reports, dict)
+    assert sub_reports == {
+        "coverage": "unavailable",
+        "regression": "unavailable",
+        "localization": "unavailable",
+        "replay": "unavailable",
+    }
+
+
 def test_run_with_coverage_flag_populates_envelope(
     coverage_workspace: Path, run_cli_in
 ) -> None:

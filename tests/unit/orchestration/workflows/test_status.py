@@ -84,6 +84,7 @@ def _make_entry(
     created_at: int,
     target_expression: str = "tests/",
     tombstoned_at: int | None = None,
+    status: str = "passed",
 ) -> MemoryEntry:
     ref = RunReference(run_id=run_id, created_at=created_at)
     record = RunRecord(
@@ -92,7 +93,7 @@ def _make_entry(
         target_type="dir",
         engine_name="pytest",
         ecosystem="python",
-        status="passed",
+        status=status,
         started_at=created_at,
         completed_at=created_at + 1,
         summary_counts={"passed": 1, "total": 1},
@@ -393,6 +394,111 @@ def test_single_run_with_no_derived_facts_reports_all_unavailable(
     assert call_log["localization_calls"][0].run_id == "01RUN0000000000000000A"
     # Single-run history → no priors → no regression cache lookup.
     assert call_log["regression_calls"] == []
+
+
+# ---------------------------------------------------------------------------
+# ORC-16 — head selection excludes tombstones. ``list_run_history`` returns
+# newest-first across BOTH live and tombstoned runs, so the head must be the
+# newest LIVE run: a just-deleted latest run must NEVER surface as head, and
+# the flags must be computed against the live head, not the tombstone.
+# ---------------------------------------------------------------------------
+
+
+def _make_tombstoned_entry(run_id: str, *, created_at: int) -> MemoryEntry:
+    """A healthy tombstone: the Memory delete primitive stamps BOTH
+    ``run_record.status == "tombstoned"`` and ``tombstoned_at`` (store.py's
+    ``delete_run_evidence``). ``status`` discriminates on the status token."""
+
+    return _make_entry(
+        run_id,
+        created_at=created_at,
+        tombstoned_at=created_at + 5,
+        status="tombstoned",
+    )
+
+
+def test_head_excludes_tombstoned_latest_selects_newest_live_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run A (live, older), delete B (tombstoned, newest) → head is A.
+
+    Newest-first history = ``[B_tombstoned, A_live]``. Pre-fix,
+    ``build_status_view`` took ``history[0]`` = the tombstone and reported
+    the deleted run as ``latest_run_reference`` with all flags computed
+    against it. Post-fix the head is the newest LIVE entry (A), and the
+    engine cache probes fire against A's reference.
+    """
+
+    live_a = _make_entry("01LIVEA000000000000000A", created_at=100)
+    tombstoned_b = _make_tombstoned_entry("01TOMBB000000000000000B", created_at=200)
+    # list_run_history is newest-first across live + tombstoned.
+    history = [tombstoned_b, live_a]
+    coverage_fact_set = _make_coverage_fact_set(
+        live_a.run_record.run_reference, mapping_granularity="per-test"
+    )
+    call_log = _patch_seams(
+        monkeypatch, history=history, coverage_result=coverage_fact_set
+    )
+
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
+
+    # Head is the live run, NOT the tombstone.
+    assert view.latest_entry is live_a
+    assert view.run_history_size == 2
+
+    payload = view.to_dict()
+    latest_ref = payload["latest_run_reference"]
+    assert isinstance(latest_ref, dict)
+    assert latest_ref["run_id"] == "01LIVEA000000000000000A"
+
+    # Flags follow the live head: every engine cache probe used A's ref
+    # (the fixture only cached coverage FOR A).
+    assert view.coverage_available is True
+    assert call_log["coverage_calls"] == [live_a.run_record.run_reference]
+    assert call_log["localization_calls"] == [live_a.run_record.run_reference]
+    assert call_log["replay_calls"] == [live_a.run_record.run_reference]
+
+
+def test_all_tombstoned_store_reports_null_head_but_keeps_full_history_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every run tombstoned → ``latest_run_reference`` null, all flags
+    ``unavailable``, but ``run_history_size`` keeps the full count.
+
+    This is the "no live head" case: it behaves like a fresh store for the
+    head/flags, yet ``run_history_size`` still reflects the tombstoned runs
+    (no envelope semantic change beyond the head fix). No engine probe
+    fires because there is no live run to probe.
+    """
+
+    tombstoned_a = _make_tombstoned_entry("01TOMBA000000000000000A", created_at=300)
+    tombstoned_b = _make_tombstoned_entry("01TOMBB000000000000000B", created_at=400)
+    call_log = _patch_seams(monkeypatch, history=[tombstoned_b, tombstoned_a])
+
+    view = build_status_view(_StoreStub())  # type: ignore[arg-type]
+
+    assert view.latest_entry is None
+    # Full history count is preserved even with no live head.
+    assert view.run_history_size == 2
+    assert view.coverage_available is False
+    assert view.regression_available is False
+    assert view.localization_available is False
+    assert view.replay_available is False
+    # No live run → no engine cache probe fires.
+    assert call_log["coverage_calls"] == []
+    assert call_log["localization_calls"] == []
+    assert call_log["regression_calls"] == []
+    assert call_log["replay_calls"] == []
+
+    payload = view.to_dict()
+    assert payload["latest_run_reference"] is None
+    assert payload["run_history_size"] == 2
+    assert payload["sub_reports"] == {
+        "coverage": "unavailable",
+        "regression": "unavailable",
+        "localization": "unavailable",
+        "replay": "unavailable",
+    }
 
 
 # ---------------------------------------------------------------------------
