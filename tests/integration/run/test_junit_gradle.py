@@ -208,3 +208,77 @@ def test_cli_smoke_run_emits_envelope(workspace: Path) -> None:
             envelope["data"]["memory_entry"]["run_record"]["engine_name"]
             == "junit"
         )
+
+
+def test_cli_run_dot_directory_target_runs_full_suite(workspace: Path) -> None:
+    """RUN-01 analog (W1/S5): ``novetest run .`` on a Gradle workspace must
+    run the WHOLE suite, NOT pass ``--tests .``.
+
+    Pre-fix, the adapter passed ``--tests .`` verbatim (``junit_adapter.py``
+    Gradle branch); Gradle reads ``.`` as a test-name filter matching
+    nothing → an errored zero-test run (an envelope error / zero
+    ``summary_counts``, never the fixture's 6 tests). The Maven flavour of
+    the same input already ran the suite — this closes the asymmetry. The
+    fix omits ``--tests`` for a ``directory``-typed target so a directory /
+    ``.`` runs the full suite, exactly like the bare ``novetest run`` above.
+
+    A/B honesty: at unpatched HEAD this case fails (the errored zero-test
+    run), which is why it is the regression pin.
+    """
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["NOVETEST_OUTPUT"] = "json"
+
+    init_result = subprocess.run(
+        [sys.executable, "-m", "novetest", "init"],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    assert init_result.returncode == 0, init_result.stderr
+
+    run_result = subprocess.run(
+        [sys.executable, "-m", "novetest", "run", "."],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=600,
+    )
+    # Exit 0 or 3 only — the suite runs. Exit 4 (adapter error) would mean
+    # the pre-fix errored zero-test run reproduced.
+    assert run_result.returncode in (0, 3), (
+        f"`novetest run .` returned exit {run_result.returncode}; expected "
+        f"0 (all passed) or 3 (some user tests failed). Exit 4 would mean "
+        f"the Gradle `--tests .` zero-test defect reproduced. "
+        f"stdout: {run_result.stdout!r} stderr: {run_result.stderr!r}"
+    )
+    envelope = json.loads(run_result.stdout)
+    assert envelope["schema"] == "novetest/v1"
+    assert envelope["ok"] is True, (
+        f"expected a persisted user result, not an error envelope: "
+        f"{envelope!r}"
+    )
+    run_record = envelope["data"]["memory_entry"]["run_record"]
+    assert run_record["engine_name"] == "junit"
+    # The user's verbatim "." survives on the record even though the
+    # adapter normalizes it to "no filter" at the argv layer.
+    assert run_record["target_expression"] == "."
+    assert run_record["target_type"] == "directory"
+    # The full suite ran — NOT an errored zero-test run. The fixture has
+    # 6 tests (4 passed, 1 failed, 1 skipped); the whole suite executing
+    # is the regression signal (a `--tests .` filter would match nothing).
+    assert run_record["status"] != "errored"
+    summary_counts = run_record["summary_counts"]
+    assert summary_counts["total"] == 6, (
+        f"expected the whole 6-test suite to run for `run .`; got "
+        f"{summary_counts!r} (a zero/partial count means `--tests .` "
+        f"filtered the suite)"
+    )
+    assert summary_counts["passed"] == 4
+    assert summary_counts["failed"] == 1

@@ -245,3 +245,82 @@ def test_dotnet_embeds_dash_leading_target_in_filter_value(
         assert dash_target not in argv
         # The embedded value rides behind `--filter` as its argument.
         assert argv[argv.index(f"FullyQualifiedName~{dash_target}") - 1] == "--filter"
+
+
+# ---------------------------------------------------------------------------
+# Windows metacharacter injection guard (RUN-09 / RUN-10, W1/S5)
+# ---------------------------------------------------------------------------
+#
+# The jest (``cmd /c npx``) and junit (``cmd /c mvn`` / ``cmd /c gradle``)
+# launcher paths route the target expression through the Windows command
+# interpreter, so a cmd.exe metacharacter in an untrusted target (a
+# malicious repo's test name / file name) is a shell-injection / RCE
+# surface. Both adapters reject such a target BEFORE any spawn via the
+# shared ``reject_shell_metachar_target`` guard — platform-independent
+# input validation, so these pins are green on the Linux host — and the
+# CLI projects the ``invalid-target`` kind to envelope code
+# ``adapter-invalid-target`` (exit 4). pytest / go / cargo launch the
+# target as a bare argv element (no shell) and dotnet embeds it in
+# ``FullyQualifiedName~``; none route through cmd, so RUN-09 does not
+# apply to them.
+
+# Each carries exactly one cmd.exe special character from & | < > ^ % ".
+METACHAR_TARGETS = [
+    "foo & calc.exe",
+    "bar | whoami",
+    "baz > out.txt",
+    "qux < in.txt",
+    "a ^ b",
+    "done 50%",
+    'say "hi"',
+]
+
+
+@pytest.mark.parametrize("metachar_target", METACHAR_TARGETS)
+async def test_jest_rejects_shell_metachar_target_before_spawn(
+    metachar_target: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import novetest.run.adapters.jest_adapter as adapter
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/npx")
+    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    target = resolve_test_target(metachar_target, workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_jest(target, artifact_dir=tmp_path / "art", timeout=10.0)
+    assert exc_info.value.kind == "invalid-target"
+    # The projected wire token agents branch on (see the pytest dash case
+    # above for the same unit-level pin rationale).
+    assert f"adapter-{exc_info.value.kind}" == "adapter-invalid-target"
+    assert "injection" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("metachar_target", METACHAR_TARGETS)
+async def test_junit_rejects_shell_metachar_target_before_spawn(
+    metachar_target: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/mvn")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "pom.xml").write_text(
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>x</groupId><artifactId>y</artifactId>"
+        "<version>0.0.0</version></project>",
+        encoding="utf-8",
+    )
+
+    import novetest.run.adapters.junit_adapter as adapter
+
+    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+
+    target = resolve_test_target(metachar_target, workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_junit(target, artifact_dir=tmp_path / "art", timeout=10.0)
+    assert exc_info.value.kind == "invalid-target"
+    assert "injection" in str(exc_info.value)

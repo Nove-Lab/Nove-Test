@@ -19,6 +19,7 @@ import pytest
 
 from novetest.run.adapters import junit_adapter
 from novetest.run.adapters.junit_adapter import (
+    _build_tool_launcher,
     _detect_build_tool,
     _detects_junit4_in_manifest,
     _detects_jupiter_in_manifest,
@@ -34,6 +35,8 @@ from novetest.run.adapters.junit_adapter import (
     _strip_trailing_parens,
     _summarize_tests,
 )
+from novetest.run.errors import AdapterInvocationError
+from novetest.run.target_resolver import resolve_test_target
 from novetest.run.types import TestTarget
 from novetest.utils.asyncio_subprocess import SubprocessResult
 
@@ -1461,12 +1464,286 @@ class TestGradleCoverageArgv:
 
 
 # ---------------------------------------------------------------------------
+# Windows launcher safety (RUN-10, W1/S5)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildToolLauncher:
+    """Pure launcher-prefix construction (mirrors jest ``_npx_launcher``).
+
+    POSIX returns the resolved path exec'd directly; Windows wraps the
+    BARE tool name in ``cmd /c`` because ``mvn.cmd`` / ``gradle.bat`` /
+    ``gradlew.bat`` are batch shims ``CreateProcess`` cannot exec — and a
+    bare first token sidesteps ``cmd /c``'s leading-quote-stripping rule.
+    """
+
+    def test_posix_uses_resolved_path(self) -> None:
+        assert _build_tool_launcher("mvn", "/usr/bin/mvn", windows=False) == [
+            "/usr/bin/mvn"
+        ]
+        assert _build_tool_launcher(
+            "gradle", "/opt/gradle/bin/gradle", windows=False
+        ) == ["/opt/gradle/bin/gradle"]
+        assert _build_tool_launcher(
+            "gradlew.bat", "/ws/gradlew", windows=False
+        ) == ["/ws/gradlew"]
+
+    def test_windows_wraps_bare_name_in_cmd(self) -> None:
+        assert _build_tool_launcher(
+            "mvn", r"C:\tools\apache-maven\bin\mvn.cmd", windows=True
+        ) == ["cmd", "/c", "mvn"]
+        assert _build_tool_launcher(
+            "gradle", r"C:\gradle\bin\gradle.bat", windows=True
+        ) == ["cmd", "/c", "gradle"]
+        # The committed wrapper's Windows entry point is ``gradlew.bat``.
+        assert _build_tool_launcher(
+            "gradlew.bat", r"C:\ws\gradlew", windows=True
+        ) == ["cmd", "/c", "gradlew.bat"]
+
+
+class TestJunitWindowsLauncherArgv:
+    """RUN-10: on Windows the main ``mvn``/``gradle`` invocation must be
+    prefixed with ``cmd /c``. The real exec cannot be attempted on this
+    Linux host, so we monkeypatch ``os.name`` to ``"nt"`` and assert the
+    argv PREFIX shape while the subprocess seam is stubbed (nothing is
+    actually spawned). UNVERIFIED against a real Windows ``CreateProcess``
+    — the CI matrix covers the branch post-push."""
+
+    async def test_maven_invocation_routes_through_cmd_on_windows(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        monkeypatch.setattr("os.name", "nt")
+        workspace = tmp_path / "ws"
+        _seed_maven_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_maven_argv_capturing_stub(captured, workspace=workspace),
+        )
+        # `shutil.which("mvn")` returns `mvn.cmd` on Windows.
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}.cmd")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert argv[:3] == ["cmd", "/c", "mvn"]
+        # The resolved `.cmd` path is never handed to CreateProcess directly.
+        assert not any(a.endswith("mvn.cmd") for a in argv)
+
+    async def test_gradle_invocation_routes_through_cmd_on_windows(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        monkeypatch.setattr("os.name", "nt")
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        # No `./gradlew` in this workspace → `gradle` off PATH resolves to
+        # `gradle.bat` on Windows.
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}.bat")
+
+        target = TestTarget(
+            target_expression="",
+            target_type="workspace",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert argv[:3] == ["cmd", "/c", "gradle"]
+        assert not any(a.endswith("gradle.bat") for a in argv)
+
+
+class TestGradleDirectoryTarget:
+    """RUN-01 analog (folded into W1/S5): a directory / ``.`` target on the
+    Gradle path must run the WHOLE suite (omit ``--tests``), NOT pass
+    ``--tests .`` — Gradle reads that as a test-name filter matching
+    nothing → an errored zero-test run. A non-directory filter (file /
+    nodeid / class-name) still passes ``--tests <expr>`` verbatim."""
+
+    async def test_dot_directory_target_omits_tests_filter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        # `novetest run .` classifies to target_type="directory".
+        target = TestTarget(
+            target_expression=".",
+            target_type="directory",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        assert len(captured) == 1
+        argv = captured[0]
+        assert "--tests" not in argv, (
+            "a directory target must run the whole suite, not `--tests .`; "
+            f"argv was {argv!r}"
+        )
+        assert "." not in argv
+
+    async def test_subdirectory_target_omits_tests_filter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="src/test/java",
+            target_type="directory",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        argv = captured[0]
+        assert "--tests" not in argv
+        assert "src/test/java" not in argv
+
+    async def test_class_filter_target_keeps_tests_filter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import shutil as _shutil
+
+        workspace = tmp_path / "ws"
+        _seed_gradle_workspace(workspace)
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            junit_adapter,
+            "run_subprocess",
+            _make_gradle_argv_capturing_stub(captured, workspace=workspace),
+        )
+        monkeypatch.setattr(_shutil, "which", lambda name: f"/fake/{name}")
+
+        target = TestTarget(
+            target_expression="com.example.CalculatorTest",
+            target_type="file",
+            workspace_path=workspace,
+        )
+        await junit_adapter.run_junit(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=10.0,
+            collect_coverage=False,
+        )
+
+        argv = captured[0]
+        assert "--tests" in argv
+        idx = argv.index("--tests")
+        assert argv[idx + 1] == "com.example.CalculatorTest"
+
+
+@pytest.mark.parametrize(
+    "metachar_target",
+    ["foo & calc.exe", "x | whoami", "t > out", "a < b", "p ^ q", "50%x", 'q "r"'],
+)
+async def test_run_junit_rejects_shell_metachar_target_before_spawn(
+    metachar_target: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RUN-10: a cmd.exe metacharacter in the target (which would ride
+    through ``cmd /c`` into ``-Dtest=`` / ``--tests`` on Windows) is
+    rejected as ``invalid-target`` before any build-tool spawn —
+    platform-independent, so green on Linux."""
+
+    workspace = tmp_path / "ws"
+    _seed_maven_workspace(workspace)
+
+    async def bomb(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        raise AssertionError(
+            f"subprocess must not spawn for a rejected target; argv={argv!r}"
+        )
+
+    monkeypatch.setattr(junit_adapter, "run_subprocess", bomb)
+
+    target = resolve_test_target(metachar_target, workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await junit_adapter.run_junit(
+            target, artifact_dir=tmp_path / "art", timeout=10.0
+        )
+    assert exc_info.value.kind == "invalid-target"
+    assert "injection" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
 # ---------------------------------------------------------------------------
 #
-# `run_junit` calls ``artifact_dir = artifact_dir.resolve()`` as the first
-# line of the function body. See ``test_pytest_adapter.py``'s parallel
-# block for the long-form rationale.
+# `run_junit` calls ``artifact_dir = artifact_dir.resolve()`` near the top
+# of the function body (just after the W1/S5 metachar guard, which is a
+# no-op for the empty target these tests use). See
+# ``test_pytest_adapter.py``'s parallel block for the long-form rationale.
 #
 # The two tests below use the "no build tool found" early-raise path —
 # `run_junit` raises ``AdapterInvocationError(kind="build-tool-undetermined")``

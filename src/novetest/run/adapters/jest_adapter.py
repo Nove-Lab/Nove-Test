@@ -36,6 +36,7 @@ import shutil
 import time
 from pathlib import Path
 
+from novetest.run.adapters._target_guard import reject_shell_metachar_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -70,6 +71,15 @@ async def run_jest(
     registered in ``artifact_paths`` under ``coverage_json``. Defaults to
     False so non-coverage callers see byte-identical behavior.
     """
+
+    # RUN-09 (RCE·Windows): on the Windows ``cmd /c npx`` launcher path a
+    # target_expression carrying a cmd.exe metacharacter (``& | < > ^ % "``)
+    # would be interpreted by the command interpreter (command injection
+    # from a malicious repo's test name / file name). Reject before any
+    # spawn or filesystem side effect — platform-independent input
+    # validation, mirroring the dash-leading guard the bare-argv adapters
+    # use.
+    reject_shell_metachar_target(test_target.target_expression, engine_label="jest")
 
     # Defensive resolve: hardens against future callers passing a relative
     # ``artifact_dir``. See pytest_adapter.py for the full rationale —

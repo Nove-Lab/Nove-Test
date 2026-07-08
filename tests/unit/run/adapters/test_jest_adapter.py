@@ -309,6 +309,43 @@ async def test_empty_target_expression_runs_full_suite(
     assert captured_argv[-1] == "--watchman=false"
 
 
+@pytest.mark.parametrize(
+    "metachar_target",
+    ["foo & calc.exe", "x | whoami", "t > out", "a < b", "p ^ q", "50%x", 'q "r"'],
+)
+async def test_shell_metachar_target_rejected_before_spawn(
+    metachar_target: str,
+    jest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RUN-09 (RCE·Windows): a cmd.exe metacharacter in the target would be
+    interpreted by the command interpreter on the ``cmd /c npx`` launcher
+    path. The adapter rejects it as ``invalid-target`` before any spawn —
+    platform-independent input validation, so this is green on Linux."""
+
+    import novetest.run.adapters.jest_adapter as adapter
+
+    async def bomb(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        raise AssertionError(
+            f"subprocess must not spawn for a rejected target; argv={argv!r}"
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", bomb)
+
+    target = resolve_test_target(metachar_target, jest_basic_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_jest(target, artifact_dir=tmp_path, timeout=10.0)
+    assert exc_info.value.kind == "invalid-target"
+    assert "injection" in str(exc_info.value)
+
+
 async def test_unresolvable_npx_raises_typed_error(
     jest_basic_workspace: Path,
     tmp_path: Path,

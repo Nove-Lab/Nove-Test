@@ -51,6 +51,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Final
 
+from novetest.run.adapters._target_guard import reject_shell_metachar_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import AdapterWarning, NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -128,6 +129,15 @@ async def run_junit(
     that detail is needed for the argv composition.
     """
 
+    # RUN-10 (Windows launcher injection): the ``-Dtest=<expr>`` (Maven)
+    # and ``--tests <expr>`` (Gradle) values ride through ``cmd /c`` on
+    # Windows, so a cmd.exe metacharacter (``& | < > ^ % "``) in the
+    # target expression is a command-injection surface. Reject before any
+    # spawn or filesystem side effect — platform-independent input
+    # validation shared with the jest adapter (one call here covers both
+    # the Maven and Gradle branches).
+    reject_shell_metachar_target(test_target.target_expression, engine_label="junit")
+
     # Defensive resolve: hardens against future callers passing a relative
     # ``artifact_dir``. See pytest_adapter.py for the full rationale —
     # downstream code composes ``native_dir = artifact_dir / "native"``
@@ -201,6 +211,45 @@ def _detect_build_tool(workspace_path: Path) -> str | None:
     return None
 
 
+def _build_tool_launcher(
+    bare_name: str, resolved_path: str, *, windows: bool
+) -> list[str]:
+    """Build the launcher prefix that invokes a JVM build tool (RUN-10).
+
+    Mirrors ``jest_adapter._npx_launcher``. On Windows ``mvn``/``gradle``
+    on ``PATH`` resolve to ``mvn.cmd``/``gradle.bat`` and a committed
+    Gradle wrapper's Windows entry point is ``gradlew.bat`` — all *batch*
+    shims. Windows ``CreateProcess`` (what
+    ``asyncio.create_subprocess_exec`` calls) cannot execute
+    ``.cmd``/``.bat`` files; it only runs real PE binaries (and appends
+    only ``.exe`` to a bare name, which is exactly why a bare ``mvn`` fails
+    there). So the shim must run through the command interpreter:
+    ``cmd.exe /c <name> ...``.
+
+    The BARE name (``mvn`` / ``gradle`` / ``gradlew.bat``) — not the
+    resolved path — is handed to ``cmd`` on purpose, exactly as
+    ``_npx_launcher`` does: ``cmd`` applies ``PATHEXT`` and searches the
+    current directory (``run_subprocess`` sets cwd to the workspace, so a
+    co-located ``gradlew.bat`` resolves), and a *bare* first token
+    sidesteps ``cmd /c``'s leading-quote-stripping rule, which would
+    otherwise corrupt the command line when later arguments (e.g. an
+    ``--init-script`` path) contain spaces and get quoted. ``cmd`` itself
+    resolves because ``CreateProcess`` appends ``.exe`` to a bare name.
+
+    On POSIX this is a no-op wrapping of ``resolved_path`` (the same value
+    ``shutil.which`` / the ``./gradlew`` path returned), exec'd directly.
+
+    The Windows branch is UNVERIFIED on this Linux dev host — the JUnit
+    adapter gates Windows (decision 2026-06-03 §R5) and Windows CI has no
+    junit lane; the branch is honestly guarded and covered by the CI
+    matrix post-push (same posture as W1/S3's ``taskkill`` tree-kill).
+    """
+
+    if windows:
+        return ["cmd", "/c", bare_name]
+    return [resolved_path]
+
+
 # ---------------------------------------------------------------------------
 # Maven path
 # ---------------------------------------------------------------------------
@@ -242,8 +291,13 @@ async def _run_maven(
     multi_module_paths = _maven_module_paths(workspace, pom_content)
     multi_module = bool(multi_module_paths)
 
+    # Windows-safe launcher (RUN-10): on Windows ``shutil.which("mvn")``
+    # resolves to ``mvn.cmd`` — a batch shim ``CreateProcess`` cannot exec
+    # directly, so it must run through ``cmd /c`` (mirrors jest's
+    # ``_npx_launcher``). On POSIX this is a no-op wrapping of ``mvn_path``.
+    maven_launcher = _build_tool_launcher("mvn", mvn_path, windows=os.name == "nt")
     argv: list[str] = [
-        mvn_path,
+        *maven_launcher,
         "-B",
         "test",
     ]
@@ -455,7 +509,7 @@ async def _run_maven(
 
     payload: dict[str, object] = {
         "build_tool": "maven",
-        "build_tool_version": await _read_maven_version(mvn_path, workspace),
+        "build_tool_version": await _read_maven_version(maven_launcher, workspace),
         "jupiter_version": _detect_jupiter_version_maven(pom_content),
         "jdk_version": await _read_java_version(workspace),
         "reports": reports_seen,
@@ -545,9 +599,19 @@ async def _run_gradle(
     """
 
     workspace = test_target.workspace_path
+    is_windows = os.name == "nt"
     wrapper_path = workspace / "gradlew"
     if wrapper_path.is_file() and os.access(wrapper_path, os.X_OK):
-        gradle_invocation: list[str] = [str(wrapper_path)]
+        # Windows-safe launcher (RUN-10): the committed wrapper's Windows
+        # entry point is the co-located ``gradlew.bat`` batch shim, which
+        # ``CreateProcess`` cannot exec directly — it must run through
+        # ``cmd /c``. ``run_subprocess`` sets cwd to the workspace, so
+        # cmd's current-directory + PATHEXT search resolves the bare
+        # ``gradlew.bat``. On POSIX the resolved ``./gradlew`` script is
+        # exec'd directly.
+        gradle_invocation: list[str] = _build_tool_launcher(
+            "gradlew.bat", str(wrapper_path), windows=is_windows
+        )
     else:
         gradle_bin = shutil.which("gradle")
         if gradle_bin is None:
@@ -561,7 +625,11 @@ async def _run_gradle(
                     "commit the Gradle wrapper into the workspace"
                 ),
             )
-        gradle_invocation = [gradle_bin]
+        # On Windows ``shutil.which("gradle")`` resolves to ``gradle.bat``
+        # — route through ``cmd /c`` like Maven's ``mvn.cmd``.
+        gradle_invocation = _build_tool_launcher(
+            "gradle", gradle_bin, windows=is_windows
+        )
 
     build_content = _safe_read_text(workspace / "build.gradle")
     if not build_content:
@@ -570,7 +638,19 @@ async def _run_gradle(
 
     argv: list[str] = list(gradle_invocation)
     argv.extend(["test", "--no-daemon"])
-    if test_target.target_expression:
+    # RUN-01 analog (Gradle directory-target defect, folded into W1/S5):
+    # a directory / ``.`` / bare-workspace target must run the WHOLE suite,
+    # NOT be handed to ``--tests``. Gradle reads ``--tests <expr>`` as a
+    # test-name pattern, so ``--tests .`` (from ``novetest run .``, which
+    # ``resolve_test_target`` classifies as ``directory``) matches nothing
+    # → an errored zero-test run. The Maven ``-Dtest=.`` flavour of the
+    # same input runs the suite, hence the asymmetry this fixes. Omitting
+    # the filter for a directory target mirrors the cargo adapter, which
+    # also defers directory→selector translation and runs the whole suite.
+    # A non-directory filter (file / nodeid / class-name) still passes
+    # ``--tests <expr>`` exactly as before; the empty (bare-workspace)
+    # target was already falsy and unaffected.
+    if test_target.target_expression and test_target.target_type != "directory":
         argv.extend(["--tests", test_target.target_expression])
     if collect_coverage and has_jacoco:
         # Gradle JaCoCo report staging — the only mechanism that survives
@@ -1347,13 +1427,20 @@ def _build_child_env() -> dict[str, str]:
     return env
 
 
-async def _read_maven_version(mvn_path: str, workspace: Path) -> str | None:
+async def _read_maven_version(
+    maven_launcher: list[str], workspace: Path
+) -> str | None:
     """Best-effort ``mvn -v`` parse. Returns the bare version
-    (e.g. ``"3.9.9"``) or None on any failure."""
+    (e.g. ``"3.9.9"``) or None on any failure.
+
+    Takes the same Windows-safe launcher list the main invocation uses
+    (``["cmd", "/c", "mvn"]`` on Windows, ``[mvn_path]`` on POSIX) so the
+    probe does not itself fail to exec ``mvn.cmd`` on Windows — matching
+    ``_read_gradle_version``, which already takes the invocation list."""
 
     try:
         result = await run_subprocess(
-            [mvn_path, "-v"],
+            [*maven_launcher, "-v"],
             cwd=workspace,
             timeout=15.0,
         )

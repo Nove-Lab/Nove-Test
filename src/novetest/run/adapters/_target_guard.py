@@ -1,4 +1,13 @@
-"""Dash-leading Test Target guard shared by the bare-argv adapters.
+"""Boundary Test Target guards shared by the adapters.
+
+Two platform-independent, pre-spawn rejection guards live here:
+
+- ``reject_dash_leading_target`` — dash-leading value would be parsed as
+  an engine flag (RUN-22, W1/S1).
+- ``reject_shell_metachar_target`` — a ``cmd.exe`` metacharacter would be
+  interpreted by the Windows command interpreter on the ``cmd /c``
+  launcher paths (jest ``cmd /c npx``, junit ``cmd /c mvn``/``gradle``),
+  a shell-injection / RCE surface (RUN-09 [RCE·Windows] / RUN-10, W1/S5).
 
 pytest, go-test, and cargo-nextest receive ``target_expression`` as a bare
 positional argv element, so a dash-leading value (``--pdb``,
@@ -55,4 +64,46 @@ def reject_dash_leading_target(target_expression: str, *, engine_label: str) -> 
         )
 
 
-__all__ = ["reject_dash_leading_target"]
+# The ``cmd.exe`` special characters. A ``target_expression`` carrying any
+# of these would be interpreted by the Windows command interpreter on the
+# ``cmd /c`` launcher paths (jest's ``cmd /c npx``, junit's ``cmd /c mvn``
+# / ``cmd /c gradle``) — a shell-injection / RCE surface when the target
+# originates from an untrusted repository (a malicious test name or file
+# name). We reject UNCONDITIONALLY (every platform), matching the
+# platform-independent posture of ``reject_dash_leading_target``: the
+# check is a cheap substring scan, these characters are never legitimate
+# in a jest test-path pattern or a junit ``-Dtest``/``--tests`` filter,
+# and one uniform rule keeps the six-engine argv-hygiene contract simple.
+_CMD_METACHARACTERS: frozenset[str] = frozenset("&|<>^%\"")
+
+
+def reject_shell_metachar_target(
+    target_expression: str, *, engine_label: str
+) -> None:
+    """Raise ``invalid-target`` when ``target_expression`` carries a
+    ``cmd.exe`` metacharacter (``& | < > ^ % "``).
+
+    Defends the ``cmd /c`` launcher paths (jest ``cmd /c npx``, junit
+    ``cmd /c mvn`` / ``cmd /c gradle``) against shell-metacharacter
+    injection (review finding RUN-09 [RCE·Windows] / RUN-10). Rejected
+    BEFORE any subprocess spawn, mirroring ``reject_dash_leading_target``,
+    and projected by the CLI to the envelope error code
+    ``adapter-invalid-target`` (exit 4). A target whose filename
+    legitimately contains one of these characters is out of scope — it is
+    rejected loudly with an actionable message rather than silently
+    shell-quoted.
+    """
+
+    found = sorted(c for c in _CMD_METACHARACTERS if c in target_expression)
+    if found:
+        raise AdapterInvocationError(
+            f"target_expression {target_expression!r} contains shell "
+            f"metacharacter(s) {''.join(found)!r} that the Windows command "
+            f"interpreter would interpret on the {engine_label} launcher path "
+            "(command injection); pass a path / node id / test filter with none "
+            'of the & | < > ^ % " characters',
+            kind="invalid-target",
+        )
+
+
+__all__ = ["reject_dash_leading_target", "reject_shell_metachar_target"]
