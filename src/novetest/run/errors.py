@@ -44,8 +44,13 @@ class AdapterInvocationError(RunEngineError):
     """The native engine could not be invoked or produced unusable output.
 
     ``kind`` is a stable machine token (``missing-plugin``, ``missing-engine``,
-    ``unparseable-output``, ``timed-out``); ``install_hint`` is text-only
-    guidance for humans / agents — never auto-executed.
+    ``unparseable-output``, ``timed-out``, ``invalid-target``); the CLI
+    projects it to the envelope error code ``adapter-<kind>``.
+    ``unparseable-output`` is the invocation-level catch-all (build failures,
+    unusable engine output); ``invalid-target`` is raised BEFORE any spawn
+    when the target expression would be consumed as an engine flag (see
+    ``adapters/_target_guard``). ``install_hint`` is text-only guidance for
+    humans / agents — never auto-executed.
     """
 
     def __init__(

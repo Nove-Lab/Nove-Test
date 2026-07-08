@@ -37,11 +37,12 @@ from novetest.run.errors import AdapterInvocationError
 def reject_dash_leading_target(target_expression: str, *, engine_label: str) -> None:
     """Raise a typed error when ``target_expression`` starts with ``-``.
 
-    ``kind="unparseable-output"`` is reused deliberately: the W1/S1 data
-    contract pins the ``AdapterInvocationError`` kind set as unchanged, and
-    ``unparseable-output`` is the established invocation-level catch-all
-    (build failures use it too). A dedicated ``invalid-target`` kind is a
-    candidate for the S8 error-code contract slice.
+    ``kind="invalid-target"`` is dedicated to this boundary rejection
+    (W1/S8 companion slice; W1/S1 originally reused the
+    ``unparseable-output`` invocation-level catch-all because its data
+    contract froze the kind set). The CLI projects it to the envelope
+    error code ``adapter-invalid-target``, so agents can distinguish
+    "flag-shaped target" from "engine output could not be parsed".
     """
 
     if target_expression.startswith("-"):
@@ -50,7 +51,7 @@ def reject_dash_leading_target(target_expression: str, *, engine_label: str) -> 
             f"be consumed as a {engine_label} flag, not a test target; pass a "
             "path / node id / test filter instead (for a file whose name "
             "really starts with '-', prefix it with './')",
-            kind="unparseable-output",
+            kind="invalid-target",
         )
 
 

@@ -25,8 +25,10 @@ dotnet    immune by embedding: ``FullyQualifiedName~<expr>``
 ========  =======================================================
 
 The rejection engines raise ``AdapterInvocationError`` BEFORE any
-subprocess spawn (kind ``unparseable-output`` — the kind set is pinned
-unchanged by the W1/S1 data contract; see ``_target_guard``).
+subprocess spawn (kind ``invalid-target``, dedicated by the W1/S8
+companion slice — W1/S1 shipped with the ``unparseable-output``
+catch-all because its data contract froze the kind set; see
+``_target_guard``).
 """
 
 from __future__ import annotations
@@ -110,7 +112,12 @@ async def test_pytest_rejects_dash_leading_target_before_spawn(
     target = resolve_test_target(dash_target, workspace)
     with pytest.raises(AdapterInvocationError) as exc_info:
         await run_pytest(target, artifact_dir=tmp_path / "art", timeout=10.0)
-    assert exc_info.value.kind == "unparseable-output"
+    assert exc_info.value.kind == "invalid-target"
+    # Unit-level pin of the projected wire token: no run-owned CLI
+    # subprocess path exercises the guard, and the CLI projects
+    # ``code=f"adapter-{exc.kind}"`` → the envelope carries
+    # ``adapter-invalid-target``.
+    assert f"adapter-{exc_info.value.kind}" == "adapter-invalid-target"
     assert "flag" in str(exc_info.value)
 
 
@@ -130,7 +137,7 @@ async def test_gotest_rejects_dash_leading_target_before_spawn(
     target = resolve_test_target(dash_target, workspace)
     with pytest.raises(AdapterInvocationError) as exc_info:
         await run_gotest(target, artifact_dir=tmp_path / "art", timeout=10.0)
-    assert exc_info.value.kind == "unparseable-output"
+    assert exc_info.value.kind == "invalid-target"
     assert "flag" in str(exc_info.value)
 
 
@@ -150,7 +157,7 @@ async def test_cargo_rejects_dash_leading_target_before_spawn(
     target = resolve_test_target(dash_target, workspace)
     with pytest.raises(AdapterInvocationError) as exc_info:
         await run_cargo(target, artifact_dir=tmp_path / "art", timeout=10.0)
-    assert exc_info.value.kind == "unparseable-output"
+    assert exc_info.value.kind == "invalid-target"
     assert "flag" in str(exc_info.value)
 
 

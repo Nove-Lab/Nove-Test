@@ -17,7 +17,7 @@ emitted by the .NET adapter (``WARNING_COVERLET_ABSENT`` /
 brief-authoring error; the JUnit ``engine-misconfigured`` state is a
 readiness-probe outcome (raised as ``EngineNotReadyError``) that
 short-circuits before the adapter runs and surfaces as an
-``envelope.errors[].code == "engine-engine-misconfigured"`` entry,
+``envelope.errors[].code == "engine-misconfigured"`` entry,
 NOT as a warning. Documented deviation per the brief's §2 allowance:
 "Run team may refine if they find a cleaner shape during
 implementation; report deviations in the handoff."
