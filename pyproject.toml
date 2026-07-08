@@ -14,9 +14,34 @@ dependencies = [
 [project.scripts]
 novetest = "novetest.cli.app:main"
 
+# PyPI project-page links, rendered from the first publish. Values pinned
+# verbatim by CEO directive `2026-07-07-pypi-publish-directive.md` §2.
+[project.urls]
+Homepage = "https://ailovestesting.com"
+Documentation = "https://ailovestesting.com/docs/novetest/"
+Repository = "https://github.com/Nove-Lab/Nove-Test"
+Changelog = "https://github.com/Nove-Lab/Nove-Test/releases"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# sdist hygiene: hatchling's default sdist packs the whole tracked tree
+# (empirically 494 files incl. 341 under tests/ — fixture SuT projects,
+# docs/, scripts/, .github/, uv.lock). The published sdist only needs what
+# a wheel rebuild needs: src/ (which carries the vendored _vendor jar +
+# THIRD_PARTY_NOTICES.txt), the readme, and the license/NOTICES files.
+# pyproject.toml is always included by hatchling. `uv build` proves
+# sufficiency on every build by building the wheel FROM this sdist.
+# Patterns are git-style: the leading `/` anchors them to the project
+# root — unanchored `src` would ALSO match tests/fixtures/projects/*/src.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICES.md",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/novetest"]

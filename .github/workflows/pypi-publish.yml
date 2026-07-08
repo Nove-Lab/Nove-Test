@@ -1,0 +1,70 @@
+# pypi-publish — builds and publishes the `novetest` sdist + wheel to PyPI
+# via Trusted Publishing (OIDC, no long-lived secrets). Auth mode confirmed
+# at Gate 1, 2026-07-08 (CEO decision: Trusted Publishing via GitHub Actions).
+#
+# PINNED NAMES — must match the PyPI pending-publisher registration EXACTLY
+# (a verbatim mismatch is the #1 Trusted Publishing failure mode):
+#   owner:       Nove-Lab
+#   repository:  Nove-Test
+#   workflow:    pypi-publish.yml   (this file's basename)
+#   environment: pypi               (the `environment:` key below)
+#
+# Trigger: workflow_dispatch only — the first publish is a deliberate manual
+# runbook step. Tag-triggered publishing joins the release runbook at the
+# next release cut (wire a v* tag trigger alongside release-test.yml then).
+#
+# Artifacts build from the ref the workflow is dispatched on (default: main),
+# i.e. merged main at publish time — NOT from the version tag. Accepted at
+# Gate 1 (decision #2): the delta over the tag is strictly bug fixes; the
+# next release cut re-synchronizes PyPI and the GitHub Release binaries.
+
+name: pypi-publish
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: build + publish to PyPI (Trusted Publishing)
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read   # checkout
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build sdist + wheel
+        run: |
+          uv build
+          ls -la dist
+
+      # PyPI uploads are once-only per version — fail loudly BEFORE the
+      # irreversible step. twine validates metadata renderability; the grep
+      # probes pin the EPL-2.0 compliance payload (vendored JUnit Console
+      # Launcher jar + THIRD_PARTY_NOTICES.txt) in BOTH artifacts, mirroring
+      # release-test.yml's wheel NOTICES probe.
+      - name: Check artifacts before upload
+        run: |
+          set -eu
+          uvx twine check dist/*
+          wheel="$(ls dist/novetest-*-py3-none-any.whl | head -n1)"
+          for path in \
+              'novetest/run/adapters/_vendor/junit-platform-console-standalone-1.11.4.jar' \
+              'novetest/run/adapters/_vendor/THIRD_PARTY_NOTICES.txt'; do
+            if ! python3 -m zipfile -l "$wheel" | grep -qF "$path"; then
+              echo "::error::$path missing from wheel ($wheel)"
+              exit 1
+            fi
+            if ! tar -tzf dist/novetest-*.tar.gz | grep -qF "src/$path"; then
+              echo "::error::src/$path missing from sdist"
+              exit 1
+            fi
+          done
+          echo "::notice::artifact probes passed (twine check + vendored jar/NOTICES in sdist+wheel)"
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
