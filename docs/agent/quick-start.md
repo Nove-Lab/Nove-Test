@@ -154,15 +154,16 @@ integer `priority` (1 = most urgent … 7 = `all_green`).
 | exit | `ok` | meaning | agent action |
 |---|---|---|---|
 | 0 | true | tests passed | proceed |
-| 3 | true | tests **failed** (data, not a tool error) | read `recommendations[]`, act on the bug |
+| 3 | true | tests **failed** or **errored** (data, not a tool error) | read `recommendations[]` / `run_record.status`, act on the bug |
 | 2 | false | usage / validation (bad flag, unknown run_id, `uninitialized`) | fix the call |
 | 4 | false | engine missing / adapter error | check `data.engine_readiness` / `errors[].code` |
 | 5 | false | storage error | inspect `.novetest/` |
 | 1 | false | generic failure | read `errors[]` |
 
-CRUCIAL: a failing test run exits **3 with `ok: true`** — failing tests
-are an expected result, not a transport error. Do not treat exit 3 as a
-crash.
+CRUCIAL: a failing **or errored** test run exits **3 with `ok: true`** —
+failing tests (and a suite that errored before producing results,
+`run_record.status == "errored"`) are expected results, not transport
+errors. Do not treat exit 3 as a crash.
 
 ### `stage_eligibility` vocabulary
 

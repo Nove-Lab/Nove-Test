@@ -47,7 +47,7 @@ of `{code, message, details}` objects.
 | `0` | `EXIT_OK` | `ok: true` | CLI succeeded. For `test`/`run`: tests passed. Data-level `unavailable` outcomes also land here. |
 | `1` | `EXIT_GENERIC` | `ok: false` | Unexpected CLI exception. Report as bug. |
 | `2` | `EXIT_USAGE` | `ok: false` | Bad input (missing Project Store, unknown `run_id`, invalid flag, `reset` without `--confirm`). |
-| `3` | `EXIT_USER_TESTS_FAILED` | `ok: true` | CLI succeeded; tests failed. Product data, not a tooling error. |
+| `3` | `EXIT_USER_TESTS_FAILED` | `ok: true` | CLI succeeded; tests failed or errored. Product data, not a tooling error. |
 | `4` | `EXIT_ENGINE_MISSING` | `ok: false` | Native engine not ready (missing on PATH) or adapter invocation error. |
 | `5` | `EXIT_STORAGE` | `ok: false` | Project Store corrupt or unreadable. |
 
@@ -70,9 +70,11 @@ elif exit_code == 1:
 
 Crucial invariants:
 
-- **`ok: true` does NOT imply exit 0.** Exit 3 (tests failed) is normal:
-  `ok: true` because the CLI did its job; the data says "your tests
-  failed". Always read both.
+- **`ok: true` does NOT imply exit 0.** Exit 3 (tests failed *or*
+  errored) is normal: `ok: true` because the CLI did its job; the data
+  says "your tests failed" (or the suite errored before producing
+  results — `data.memory_entry.run_record.status == "errored"`, on
+  `run`). Always read both.
 - **`ok: false` always implies exit ≠ 0.**
 - **`unavailable` outcomes are exit 0 / `ok: true`.** A coverage,
   regression, or localization stage that can't produce facts returns its
@@ -93,12 +95,13 @@ details}` object. Pin against `code`.
 | `not-found` | 2 | A `run_id` (to `inspect`, `coverage show`, `localization`, `replay`, `memory show`, `compare`, …) matches no Memory Entry. Message: `No Memory Entry for run_id='<id>'`. | List ids with `novetest memory list`. |
 | `invalid-flag` | 2 | Flag value outside the allowed set (bad `--formula`, `--top-n < 1`). `message` lists the allowed values. | Re-issue with a valid flag. |
 | `confirm-required` | 2 | `novetest reset` without `--confirm`. | Pass `--confirm`. |
-| `engine-engine-missing` | 4 | Readiness state is `engine-missing` (no native engine detected). `data.engine_readiness` is present. | Install/configure the engine. |
+| `engine-missing` | 4 | Readiness state is `engine-missing` (no native engine detected). `data.engine_readiness` is present. | Install/configure the engine. |
 | `adapter-<kind>` | 4 | A native adapter invocation failed (e.g. `adapter-jest`). `details.install_hint` may carry a fix. | Apply the hint. |
 | `store-corrupt` | 5 | `.novetest/store.json` unreadable / malformed. | Fix the file; worst case `rm -rf .novetest && novetest init` (loses history). |
 
-Note the doubled-looking `engine-engine-missing` — it is the `engine-`
-prefix plus the readiness state `engine-missing`, **not** `engine-not-ready`.
+The error `code` is the readiness state **verbatim** — `engine-missing`
+or `engine-misconfigured` (the code IS the state; there is no extra
+`engine-` prefix and **no** `engine-not-ready` code).
 
 ```python
 err  = envelope["errors"][0]

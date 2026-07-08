@@ -453,13 +453,13 @@ engine — it records the readiness state and moves on. (The two cases
 where `init` does refuse — no marker at all, or several viable
 engines — are about *which* engine, not its health; see "the pin"
 above.) But the next `novetest run`/`novetest test` exits **4** with
-error code `engine-engine-missing` (the literal string — note the
-doubled "engine") or `engine-engine-misconfigured`. Real run against a
-Python workspace that has no pytest config:
+error code `engine-missing` (the readiness state verbatim — the code IS
+the state) or `engine-misconfigured`. Real run against a Python
+workspace that has no pytest config:
 
 ```
 ✗ run
-  engine-engine-missing: engine readiness state: engine-missing (engine=(none detected))
+  engine-missing: engine readiness state: engine-missing (engine=(none detected))
 ```
 
 (exit 4)

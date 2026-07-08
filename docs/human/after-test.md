@@ -32,14 +32,15 @@ your shell with `echo $?` (or `$LASTEXITCODE` in PowerShell).
 | `0` | Transport succeeded; your tests passed. | Done. (Or read the recommendation.) |
 | `1` | Unexpected error (CLI crash). | This is a bug. File an issue with the output. |
 | `2` | Bad input (missing Project Store, invalid flag, unknown `run_id`). | Fix the invocation. The `✗` block on stdout names what's wrong. |
-| `3` | Transport succeeded; your tests **failed**. | Read recommendations. This is real product information, not a tooling problem. |
+| `3` | Transport succeeded; your tests **failed or errored**. | Read recommendations. This is real product information, not a tooling problem. |
 | `4` | Native test engine not ready (missing on PATH, adapter error). | Install / configure the missing tool. The `✗` block names what to install. |
 | `5` | Project Store corrupt or unreadable. | Inspect `.novetest/store.json`. Worst case: `rm -rf .novetest && novetest init` (you lose history). |
 
-Crucial nuance: **exit code 3 is normal**. Your tests failed; the
-CLI did its job; the output is a recommendation telling you which
-tests failed. The envelope's `ok` is still `true` — the failing
-tests are *data*, not a tooling problem.
+Crucial nuance: **exit code 3 is normal**. Your tests failed — or a
+suite errored before producing results (`run_record.status: "errored"`);
+the CLI did its job; the output is a recommendation telling you which
+tests failed. The envelope's `ok` is still `true` — the failing (or
+errored) tests are *data*, not a tooling problem.
 
 A second nuance: an **"unavailable" outcome is exit 0**. When coverage,
 regression, or localization can't produce facts for a structural reason

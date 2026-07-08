@@ -106,9 +106,9 @@ Missing toolchain → `init` records
 `"engine-misconfigured"`} (with hints in
 `engine_readiness.issues[]`) but `init` still exits 0. A subsequent
 `novetest run`/`novetest test` then exits **4** with
-`errors[0].code = "engine-engine-missing"` (or
-`"engine-engine-misconfigured"`). See the readiness section below for
-the exact envelope.
+`errors[0].code = "engine-missing"` (or `"engine-misconfigured"` — the
+code is the readiness state verbatim). See the readiness section below
+for the exact envelope.
 
 ---
 
@@ -273,7 +273,7 @@ verbs gate on readiness and exit **4** if it is not `ready`. Real
   },
   "errors": [
     {
-      "code": "engine-engine-missing",
+      "code": "engine-missing",
       "details": {},
       "message": "engine readiness state: engine-missing (engine=(none detected))"
     }
@@ -288,15 +288,16 @@ verbs gate on readiness and exit **4** if it is not `ready`. Real
 
 `engine_readiness` keys: `ecosystem`, `engine`, `engine_version`,
 `evidence` (array of detected marker filenames), `issues` (array),
-`state`. The error `code` is the doubled-prefix
-`engine-engine-missing` (`engine-` + the state `engine-missing`); a
-misconfigured engine produces `engine-engine-misconfigured`, also exit
-4. Adapter-level failures (e.g. an unparseable report) instead exit 4
-with `errors[0].code = "adapter-<kind>"`, where `<kind>` is a stable
-token such as `missing-plugin`, `missing-binary`, `missing-engine`,
-`unparseable-output`, `misconfigured-environment`, or `timed-out` (the
-exact set varies by engine — match the `adapter-` prefix, not a fixed
-list).
+`state`. The error `code` is the readiness state **verbatim** —
+`engine-missing`, or `engine-misconfigured` for a misconfigured engine,
+also exit 4 (the code IS the state, with no extra prefix). Adapter-level
+failures (e.g. an unparseable report, or a dash-/flag-leading target
+rejected at the boundary) instead exit 4 with
+`errors[0].code = "adapter-<kind>"`, where `<kind>` is a stable token
+such as `missing-plugin`, `missing-binary`, `missing-engine`,
+`unparseable-output`, `invalid-target`, `misconfigured-environment`, or
+`timed-out` (the exact set varies by engine — match the `adapter-`
+prefix, not a fixed list).
 
 ### Agent routing
 

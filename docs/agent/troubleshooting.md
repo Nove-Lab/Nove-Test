@@ -30,17 +30,19 @@ Every envelope has exactly these top-level keys (JSON-sorted):
 | 2 | `not-found` | The `run_id` doesn't exist. `novetest memory list`, pick a real ULID. |
 | 2 | `invalid-flag` | Flag value outside the closed set. Read `errors[0].message` for the allowed list. |
 | 2 | `confirm-required` | `novetest reset` needs `--confirm`. Re-issue with `--confirm` (destructive). |
-| 3 | (none) | `ok: true` — **the user's tests failed.** Read `data.recommendations`. Not a tool error. |
-| 4 | `engine-engine-missing` | No usable engine. Read `data.engine_readiness.issues[]` for install hints. |
-| 4 | `engine-engine-misconfigured` | Engine applies but tooling missing. Read `data.engine_readiness.issues[]`. |
-| 4 | `adapter-<kind>` | Engine ran but failed (build error, missing plugin, timeout). Read `errors[0].message` (stderr tail). |
+| 3 | (none) | `ok: true` — **the user's tests failed or errored.** Read `data.recommendations` (or `run_record.status` on `run`). Not a tool error. |
+| 4 | `engine-missing` | No usable engine. Read `data.engine_readiness.issues[]` for install hints. |
+| 4 | `engine-misconfigured` | Engine applies but tooling missing. Read `data.engine_readiness.issues[]`. |
+| 4 | `adapter-<kind>` | Engine ran but failed (build error, missing plugin, timeout, dash-leading target). Read `errors[0].message` (stderr tail). |
 | 5 | `store-corrupt` / `store-wipe-failed` | Storage-level failure. Surface to operator. |
 
-> Two spellings that bite parsers: an unready engine surfaces as the
-> doubled `engine-engine-missing` code (error prefix `engine-` + state
-> `engine-missing`), and adapter codes are keyed on the **failure
-> kind** (`adapter-unparseable-output`), not the engine name. There is
-> no `engine-not-ready` code and no `not-implemented` runtime code.
+> Two things that bite parsers: an unready engine surfaces the readiness
+> state **verbatim** as the error code (`engine-missing` /
+> `engine-misconfigured` — the code IS the state, no extra prefix), and
+> adapter codes are keyed on the **failure kind**
+> (`adapter-unparseable-output`, `adapter-invalid-target`), not the
+> engine name. There is no `engine-not-ready` code and no
+> `not-implemented` runtime code.
 
 ---
 
@@ -73,13 +75,22 @@ invoked from outside the project tree, `cd` into it first.
 
 **Idempotency.** Safe to retry indefinitely after `init`.
 
-### `no-engine-detected` (exit 4, `init` only)
+### `no-engine-detected` (exit 4)
 
-Markerless directory; nothing created. `data.candidates[]` lists
-`{ecosystem, engine_name, path}` sub-projects (bounded scan, depth ≤ 2;
-`data.scan_refused: true` at `/` and `$HOME` — scan not attempted).
-Recovery: `cd` into each candidate `path`, run `init` there. Do NOT
-create `.novetest/` in directories the operator didn't designate.
+Two shapes, discriminated by the `data` payload:
+
+- **`init` on a markerless directory** — nothing created.
+  `data.candidates[]` lists `{ecosystem, engine_name, path}` sub-projects
+  (bounded scan, depth ≤ 2; `data.scan_refused: true` at `/` and `$HOME`
+  — scan not attempted). Recovery: `cd` into each candidate `path`, run
+  `init` there. Do NOT create `.novetest/` in directories the operator
+  didn't designate.
+- **`run` / `test` on a markerless anchor** (a pin-less legacy store with
+  no engine marker at the workspace root) — same `no-engine-detected`
+  code, but the payload is `data.engine_readiness` (`state:
+  "engine-missing"`), **not** `data.candidates`. Recovery: `novetest init`
+  (or `novetest init --engine <name>`) at the anchor to pin an engine,
+  then retry.
 
 ### `engine-ambiguous` (exit 2)
 
@@ -89,7 +100,7 @@ Recovery: `novetest init --engine <name>` with a value from
 `data.candidates[]`. Viability is host-dependent; never cache this
 outcome across machines.
 
-### `engine-engine-missing` (exit 4)
+### `engine-missing` (exit 4)
 
 ```json
 {
@@ -106,7 +117,7 @@ outcome across machines.
   },
   "errors": [
     {
-      "code": "engine-engine-missing",
+      "code": "engine-missing",
       "details": {},
       "message": "engine readiness state: engine-missing (engine=(none detected))"
     }
@@ -141,8 +152,9 @@ surface the `issues[]` to the operator and abort. After a fix, the next
 `novetest init` records `engine_readiness.state == "ready"`.
 
 > `engine_readiness.state` is one of exactly three values:
-> `ready`, `engine-missing`, `engine-misconfigured`. `engine-misconfigured`
-> surfaces as the error code `engine-engine-misconfigured`.
+> `ready`, `engine-missing`, `engine-misconfigured`. The `engine-missing`
+> and `engine-misconfigured` states surface as the error code of the
+> **same name** — the code IS the state.
 
 ### `adapter-<kind>` (exit 4)
 
@@ -164,11 +176,15 @@ surface the `issues[]` to the operator and abort. After a fix, the next
 ```
 
 **Cause.** The engine launched but failed before producing parseable
-output. `<kind>` ∈ `unparseable-output`, `missing-plugin`,
-`missing-binary`, `missing-engine`, `timed-out`,
-`misconfigured-environment` (the exact set varies by adapter). This is
-an engine-level problem (build error, missing dependency), not a Nove
-Test bug. Some adapter errors attach `details.install_hint`.
+output — or, for `adapter-invalid-target`, the target expression was
+rejected at the adapter boundary **before any spawn** (a dash-/flag-leading
+target that would be consumed as an engine flag, e.g.
+`novetest run -- --pdb`). `<kind>` ∈ `unparseable-output`,
+`invalid-target`, `missing-plugin`, `missing-binary`, `missing-engine`,
+`timed-out`, `misconfigured-environment` (the exact set varies by
+adapter). This is an engine-level or target-level problem (build error,
+missing dependency, flag-shaped target), not a Nove Test bug. Some
+adapter errors attach `details.install_hint`.
 
 **Recovery.** Read `errors[0].message` for the engine's stderr tail; fix
 the underlying issue, then retry. (Note: an unknown verb like
@@ -302,9 +318,12 @@ Should not occur.
 
 ## Exit 3 is not an error (the most important rule)
 
-A failing test run returns `ok: true`, exit `3`, an empty `errors`
-array, and a populated `data.recommendations`. Route on the exit code,
-not on `ok`:
+A failing **or errored** test run returns `ok: true`, exit `3`, an empty
+`errors` array, and a populated `data.recommendations`. An *errored*
+suite — one that crashed before producing normal results (e.g. a pytest
+collection / import error) — is still a persisted user result:
+`data.memory_entry.run_record.status` (`"errored"` vs `"failed"`)
+discriminates it. Route on the exit code, not on `ok`:
 
 ```python
 exit_code = run_novetest("test")          # process return code
@@ -458,7 +477,7 @@ script does, once).
 | Exit 2, `invalid-flag` | Auto-recover: fix the value. |
 | Exit 2, `confirm-required` | Re-issue with `--confirm` ONLY with operator approval. |
 | Exit 5, `store-corrupt` / `store-wipe-failed` | Do NOT auto-recover. Surface (destructive recovery destroys data). |
-| Exit 4, `engine-engine-missing` / `-misconfigured` | Auto-recover IF policy permits installs (use `data.engine_readiness.issues[]`). Else surface. |
+| Exit 4, `engine-missing` / `engine-misconfigured` | Auto-recover IF policy permits installs (use `data.engine_readiness.issues[]`). Else surface. |
 | Exit 4, `adapter-*` | Surface (engine-level issue, not a Nove Test bug). |
 | Exit 1, `cli-error` | Surface with the envelope. Do not retry blindly. |
 

@@ -31,14 +31,16 @@ Every command maps to one of six exit codes:
 | 0 | Success. |
 | 1 | Generic / unexpected failure (e.g. an uncaught internal error). |
 | 2 | Usage / validation: uninitialized store, bad argument, unknown `run_id`, bad flag, `reset` without `--confirm`. |
-| 3 | **Your tests failed.** The tool worked (`ok: true`); this is product information, not an error. |
+| 3 | **Your tests failed or errored.** The tool worked (`ok: true`); this is product information, not an error. |
 | 4 | The engine could not run: no/insufficient native engine, or an adapter invocation error. |
 | 5 | Project Store storage error (corrupt store, wipe failed). |
 
-The important subtlety: **exit 3 is not a tooling error.** A failing
-test run still reports `ok: true`; failing tests are data. Treat exit 3
-the way you'd treat a failing `pytest` invocation — read the
-recommendation block, fix the code or the test, re-run.
+The important subtlety: **exit 3 is not a tooling error.** A failing —
+or errored — test run still reports `ok: true`; failing tests are data,
+and a suite that errored before producing results (e.g. a collection or
+import error) is a recorded result too (`run_record.status: "errored"`).
+Treat exit 3 the way you'd treat a failing `pytest` invocation — read
+the recommendation block, fix the code or the test, re-run.
 
 ---
 
@@ -190,17 +192,16 @@ Re-run `novetest init` after fixing.
 
 ## `test` / `run` issues
 
-### `✗ run  engine-engine-missing: …` (exit 4)
+### `✗ run  engine-missing: …` (exit 4)
 
 ```
 ✗ run
-  engine-engine-missing: engine readiness state: engine-missing (engine=(none detected))
+  engine-missing: engine readiness state: engine-missing (engine=(none detected))
 ```
 
-No usable native engine. The error `code` really is the
-doubled-looking `engine-engine-missing` (the `engine-` error prefix
-plus the readiness state `engine-missing`). The same shape applies to
-`novetest test`.
+No usable native engine. The error `code` is the readiness state
+verbatim — `engine-missing` (the code IS the state, with no extra
+prefix). The same shape applies to `novetest test`.
 
 **Fix.** Run `novetest init` (or just re-run the verb — `test`/`run`
 re-probe readiness each time) and read the readiness `issue:` lines, or
@@ -218,7 +219,7 @@ If the engine **is** on PATH but Nove Test still doesn't see it:
    `install with: pip install pytest` (or `… pytest-json-report`).
 2. **Wrong project.** Confirm you're in the right directory.
 
-### `✗ run  engine-engine-misconfigured: …` (exit 4)
+### `✗ run  engine-misconfigured: …` (exit 4)
 
 The engine applies but a required piece is missing — pytest /
 `pytest-json-report` not importable, nextest not installed, JDK
@@ -230,9 +231,10 @@ The readiness `issue:` line names the exact install command.
 The engine started but failed before producing parseable results — a
 build failure, missing plugin, or a tool the adapter shells out to
 exiting non-zero. The code is `adapter-<kind>`, e.g.
-`adapter-unparseable-output`, `adapter-missing-plugin`,
-`adapter-missing-binary`, `adapter-timed-out`. The message includes the
-engine's own stderr tail.
+`adapter-unparseable-output`, `adapter-invalid-target` (a dash-/flag-leading
+target rejected before launch, e.g. `novetest run -- --pdb`),
+`adapter-missing-plugin`, `adapter-missing-binary`, `adapter-timed-out`.
+The message includes the engine's own stderr tail.
 
 **Fix.** Read the stderr tail in the message — the underlying problem is
 at the engine level (your build, your dependencies), not in Nove Test.
@@ -251,10 +253,12 @@ explicit target, check the collected count before trusting a green
 result — a typo'd or non-anchor-relative path "passes" without running
 anything.
 
-### Exit code 3 (tests failed) — NOT an error
+### Exit code 3 (tests failed or errored) — NOT an error
 
-Your tests actually failed (`ok: true`, exit 3). The recommendation
-block on stdout names which locations to investigate, e.g.:
+Your tests actually failed — or the suite errored before it could
+produce results (`ok: true`, exit 3; `run_record.status` is `failed`
+vs `errored`). The recommendation block on stdout names which locations
+to investigate, e.g.:
 
 ```
 5 recommendations · 1 category · run_id=…
