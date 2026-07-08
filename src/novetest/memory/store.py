@@ -158,11 +158,26 @@ def delete_run_evidence(
 ) -> MemoryEntry:
     """Tombstone the live run for ``run_reference``; return the post-tombstone entry.
 
-    Tombstoning is a single ``Path.rename`` from ``memory/runs/...`` to
-    ``memory/tombstones/run_<id>/`` (POSIX-atomic on the same filesystem),
-    plus an in-place update of ``record.json`` that sets the status field to
-    ``tombstoned`` and stamps ``metadata["tombstoned_at"]``. Re-deletion of
-    an already-tombstoned run is a no-op that returns the existing entry.
+    Order is **mutate-then-single-rename** (MEM-02): the fully-updated
+    tombstoned ``record.json`` (``status="tombstoned"`` plus a stamped
+    ``metadata["tombstoned_at"]``) is materialized at the LIVE location first —
+    written to a sibling temp file and ``Path.replace``-d into place so the live
+    ``record.json`` is never observed half-written — and only THEN is the
+    directory moved to ``memory/tombstones/run_<id>/`` with a single
+    POSIX-atomic ``Path.rename``.
+
+    That order makes a crash mid-delete self-healing rather than permanently
+    corrupt. The only residue a crash can leave is a *live*-located run whose
+    ``record.json`` already says tombstoned (the move had not yet run); because
+    ``_resolve`` keys ``tombstoned`` off *location*, a re-issued
+    ``delete_run_evidence`` does not short-circuit — it re-stamps and completes
+    the rename, so the ``MemoryEntry`` invariant (``tombstoned_at`` non-null iff
+    soft-deleted) is restored. The former rename-then-write order could instead
+    strand a *tombstone*-located record still carrying the original ``status``
+    and ``tombstoned_at=None``, which the re-delete no-op made permanent.
+
+    Re-deletion of an already-tombstoned run is a no-op that returns the
+    existing entry.
     """
     resolved = _resolve(store, run_reference)
     if resolved.tombstoned:
@@ -174,20 +189,22 @@ def delete_run_evidence(
             tombstoned_at=resolved.tombstoned_at,
         )
 
-    tombstone_dir = _tombstone_run_dir(store, run_reference)
-    tombstone_dir.parent.mkdir(parents=True, exist_ok=True)
-    resolved.run_dir.rename(tombstone_dir)
-
     tombstoned_at = int(time.time() * 1000)
     new_metadata = dict(resolved.record.metadata)
     new_metadata["tombstoned_at"] = tombstoned_at
     tombstoned_record = replace(
         resolved.record, status="tombstoned", metadata=new_metadata
     )
-    (tombstone_dir / RECORD_FILENAME).write_text(
-        json.dumps(tombstoned_record.to_dict(), indent=2) + "\n",
-        encoding="utf-8",
-    )
+    # Materialize the tombstoned record at the LIVE location before moving it,
+    # so any crash leaves a self-healing live record — never a permanently
+    # invariant-violating tombstone. The single rename that follows carries an
+    # already-complete record into the tombstone location atomically.
+    _atomic_write_record(resolved.run_dir / RECORD_FILENAME, tombstoned_record)
+
+    tombstone_dir = _tombstone_run_dir(store, run_reference)
+    tombstone_dir.parent.mkdir(parents=True, exist_ok=True)
+    resolved.run_dir.rename(tombstone_dir)
+
     return _build_memory_entry(
         store,
         record=tombstoned_record,
@@ -275,6 +292,20 @@ def _iter_all_records(store: ProjectStore) -> Iterator[_ResolvedRecord]:
 def _read_record(path: Path) -> RunRecord:
     raw = path.read_text(encoding="utf-8")
     return RunRecord.from_dict(json.loads(raw))
+
+
+def _atomic_write_record(record_path: Path, record: RunRecord) -> None:
+    """Write ``record`` to ``record_path`` atomically via a sibling temp file.
+
+    The bytes are staged in ``<name>.tmp`` in the same directory, then
+    ``Path.replace``-d onto ``record_path``. ``Path.replace`` is a same-dir
+    atomic rename, so a reader (or a crash) never observes a torn ``record.json``:
+    the file is either the previous content or the complete new content.
+    """
+    payload = json.dumps(record.to_dict(), indent=2) + "\n"
+    tmp_path = record_path.with_name(record_path.name + ".tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(record_path)
 
 
 def _path_mtime_ms(path: Path) -> int:

@@ -195,6 +195,137 @@ def test_delete_unknown_run_raises(store: ProjectStore) -> None:
         delete_run_evidence(store, ghost)
 
 
+# --- MEM-02: tombstone atomicity (mutate-then-single-rename) ------------------
+#
+# `delete_run_evidence` materializes the fully-tombstoned `record.json` at the
+# LIVE location first, then moves the directory with ONE atomic `Path.rename`.
+# These tests crash the process at the rename boundary and pin the write order,
+# proving no crash can strand a permanently invariant-violating tombstone
+# (`status` original + `tombstoned_at=None` at the tombstone location, which the
+# re-delete no-op used to make permanent). The `move_then_crash` / order-pin
+# tests fail against the old rename-then-write module (A/B honesty check).
+
+
+def test_delete_crash_at_rename_is_not_a_permanent_partial_state(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash the instant the tombstone move completes must not strand an
+    invariant-violating tombstone.
+
+    Reproduces the MEM-02 window: the directory move to ``tombstones/`` has
+    completed but the process dies before returning. Under mutate-then-single-
+    rename the moved record is ALREADY fully tombstoned, so a re-issued delete
+    (a no-op on the now-tombstoned run) reports a valid entry — ``status ==
+    "tombstoned"`` AND non-null ``tombstoned_at``. Under the OLD rename-then-
+    write order the moved record still carried the original status with
+    ``tombstoned_at=None`` and the re-delete no-op made that permanent, so this
+    test FAILS there (A/B proof).
+    """
+    record = _record(run_id="01CRASH", created_at=TS_2024_01_02)
+    store_run_evidence(store, record)
+
+    real_rename = Path.rename
+
+    def move_then_crash(self: Path, target: Path) -> Path:
+        real_rename(self, target)
+        raise OSError("simulated crash immediately after the tombstone move")
+
+    monkeypatch.setattr(Path, "rename", move_then_crash)
+    with pytest.raises(OSError):
+        delete_run_evidence(store, record.run_reference)
+
+    # The move happened; the record now lives in the tombstone location. A
+    # re-issued delete must expose a valid tombstone, not a phantom one.
+    monkeypatch.setattr(Path, "rename", real_rename)
+    healed = delete_run_evidence(store, record.run_reference)
+    assert healed.run_record.status == "tombstoned"
+    assert healed.tombstoned_at is not None
+    assert healed.run_record.metadata["tombstoned_at"] == healed.tombstoned_at
+
+    refetched = retrieve_run_evidence(store, record.run_reference)
+    assert refetched.tombstoned_at is not None
+    assert refetched.run_record.status == "tombstoned"
+
+
+def test_delete_crash_before_move_leaves_live_and_self_heals(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the record is stamped but the move never runs, the run stays LIVE and
+    a re-issued delete completes cleanly.
+
+    ``Path.rename`` is forced to raise WITHOUT moving anything, so the
+    tombstoned ``record.json`` sits at the live location. ``_resolve`` keys
+    ``tombstoned`` off *location*, so the run still resolves LIVE (no phantom
+    tombstone with a null timestamp), and a re-issued delete does not
+    short-circuit — it re-stamps and completes the move, restoring the invariant.
+    """
+    record = _record(run_id="01LIVEHEAL", created_at=TS_2024_01_02)
+    store_run_evidence(store, record)
+
+    def refuse_move(self: Path, target: Path) -> Path:
+        raise OSError("simulated crash before the tombstone move")
+
+    monkeypatch.setattr(Path, "rename", refuse_move)
+    with pytest.raises(OSError):
+        delete_run_evidence(store, record.run_reference)
+
+    live_dir = (
+        store.path / "memory" / "runs" / "2024" / "01" / "02"
+        / f"{RUN_DIR_PREFIX}01LIVEHEAL"
+    )
+    tomb_dir = store.path / "memory" / "tombstones" / f"{RUN_DIR_PREFIX}01LIVEHEAL"
+    assert live_dir.is_dir()
+    assert not tomb_dir.exists()
+    # The atomic write left no stray temp file behind.
+    assert not (live_dir / (RECORD_FILENAME + ".tmp")).exists()
+    # Location says live → no invariant-violating tombstone is exposed.
+    availability = get_memory_entry_availability(store, record.run_reference)
+    assert availability["tombstoned"] is False
+    assert retrieve_run_evidence(store, record.run_reference).tombstoned_at is None
+
+    # Self-heal: restore the move and re-issue delete.
+    monkeypatch.undo()
+    healed = delete_run_evidence(store, record.run_reference)
+    assert healed.run_record.status == "tombstoned"
+    assert healed.tombstoned_at is not None
+    assert not live_dir.exists()
+    assert (tomb_dir / RECORD_FILENAME).is_file()
+
+
+def test_delete_writes_tombstoned_record_before_the_move(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the write-then-rename order: at the instant the move runs, the source
+    ``record.json`` is ALREADY tombstoned.
+
+    A spy wraps ``Path.rename`` and, before performing the real move, reads the
+    ``record.json`` at the source (live) directory. Under mutate-then-single-
+    rename that content is already ``tombstoned`` with a stamped
+    ``tombstoned_at``; under the OLD order it would still be the original status
+    (the write happened after the move), so this FAILS there.
+    """
+    record = _record(run_id="01ORDER", created_at=TS_2024_01_02)
+    store_run_evidence(store, record)
+
+    seen: dict[str, object] = {}
+    real_rename = Path.rename
+
+    def spy_rename(self: Path, target: Path) -> Path:
+        raw = json.loads((self / RECORD_FILENAME).read_text(encoding="utf-8"))
+        seen["status"] = raw["status"]
+        seen["tombstoned_at"] = raw["metadata"].get("tombstoned_at")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", spy_rename)
+    entry = delete_run_evidence(store, record.run_reference)
+
+    assert seen["status"] == "tombstoned"
+    assert seen["tombstoned_at"] == entry.tombstoned_at
+    # And the delete still completed normally into the tombstone location.
+    assert entry.run_record.status == "tombstoned"
+    assert entry.tombstoned_at is not None
+
+
 def test_availability_all_false_after_store(store: ProjectStore) -> None:
     record = _record()
     store_run_evidence(store, record)
