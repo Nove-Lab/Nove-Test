@@ -85,6 +85,7 @@ from novetest.run import (
     AdapterWarning,
     EngineCandidate,
     EngineNotReadyError,
+    RunEngineError,
     list_supported_engine_pairs,
 )
 
@@ -269,6 +270,93 @@ def _engine_not_ready_code(exc: EngineNotReadyError) -> str:
     if isinstance(exc, WorkspaceEngineUndetectedError):
         return "no-engine-detected"
     return exc.readiness.state
+
+
+def _map_execution_exception(
+    command: str, exc: EngineAmbiguousError | RunEngineError
+) -> tuple[Envelope, int]:
+    """Single source of truth for run/test execution-exception → (envelope, exit).
+
+    ORC-02 (dedup) + ORC-21 (structural fallback for the RunEngineError family).
+    ``run_cmd`` and ``test_cmd`` used to carry a verbatim-duplicated three-block
+    ``except`` tree; both now collapse to one
+    ``except (EngineAmbiguousError, RunEngineError)`` that calls this helper,
+    threading ``command`` (``"run"`` / ``"test"``) into every envelope so the two
+    verbs cannot drift (the ORC-03 doubled-prefix bug was born of exactly such a
+    copy-paste pair).
+
+    ``isinstance`` order is load-bearing: ``WorkspaceEngineUndetectedError`` is an
+    ``EngineNotReadyError`` subclass, so it must reach the readiness branch (where
+    ``_engine_not_ready_code`` maps it to the D7 ``no-engine-detected`` token).
+
+    - ``EngineAmbiguousError`` (a TOCTOU race — a marker appearing between the
+      ``_require_store`` migration and the workflow's own D6 fallback) →
+      ``engine-ambiguous`` + ``data.candidates``, exit 2.
+    - ``EngineNotReadyError`` → ``data.engine_readiness`` + the D7 readiness token,
+      exit 4.
+    - ``AdapterInvocationError`` → ``adapter-<kind>`` (``install_hint`` in
+      ``details`` when present), exit 4.
+    - **ORC-21 structural fallback** — any OTHER ``RunEngineError`` subclass
+      (today only ``EngineNotSupportedError``, which is UNREACHABLE from these
+      verbs — every supported pair has both a marker-table entry and an
+      ``_invoke_adapter`` branch, and ``--engine`` is validated upstream) → a
+      structured ``engine-not-supported`` envelope at exit 4, NOT a fall-through
+      to the generic exit-1 ``cli-error`` handler that would drop the verb name
+      and the structured engine-missing exit. Defensive today; the guard is what
+      keeps a future 7th engine / new subclass structured.
+    """
+    if isinstance(exc, EngineAmbiguousError):
+        return (
+            Envelope(
+                command=command,
+                ok=False,
+                data={"candidates": _engine_candidates_payload(exc.candidates)},
+                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
+            ),
+            EXIT_USAGE,
+        )
+    if isinstance(exc, EngineNotReadyError):
+        return (
+            Envelope(
+                command=command,
+                ok=False,
+                data={"engine_readiness": _readiness_payload(exc.readiness)},
+                errors=(
+                    EnvelopeError(
+                        code=_engine_not_ready_code(exc),
+                        message=str(exc),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+    if isinstance(exc, AdapterInvocationError):
+        return (
+            Envelope(
+                command=command,
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code=f"adapter-{exc.kind}",
+                        message=str(exc),
+                        details=(
+                            {"install_hint": exc.install_hint}
+                            if exc.install_hint is not None
+                            else {}
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_ENGINE_MISSING,
+        )
+    return (
+        Envelope(
+            command=command,
+            ok=False,
+            errors=(EnvelopeError(code="engine-not-supported", message=str(exc)),),
+        ),
+        EXIT_ENGINE_MISSING,
+    )
 
 
 def _adapter_to_envelope_warnings(
@@ -601,53 +689,13 @@ def run_cmd(
                 target, store, collect_coverage=coverage, engine=engine_pair
             )
         )
-    except EngineAmbiguousError as exc:
-        # Only reachable via a TOCTOU race (a marker appearing between the
-        # _require_store migration and the workflow's own D6 fallback);
-        # mapped anyway so the fragile path stays structured.
-        _emit_and_exit(
-            Envelope(
-                command="run",
-                ok=False,
-                data={"candidates": _engine_candidates_payload(exc.candidates)},
-                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
-            ),
-            EXIT_USAGE,
-        )
-    except EngineNotReadyError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="run",
-                ok=False,
-                data={"engine_readiness": _readiness_payload(exc.readiness)},
-                errors=(
-                    EnvelopeError(
-                        code=_engine_not_ready_code(exc),
-                        message=str(exc),
-                    ),
-                ),
-            ),
-            EXIT_ENGINE_MISSING,
-        )
-    except AdapterInvocationError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="run",
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code=f"adapter-{exc.kind}",
-                        message=str(exc),
-                        details=(
-                            {"install_hint": exc.install_hint}
-                            if exc.install_hint is not None
-                            else {}
-                        ),
-                    ),
-                ),
-            ),
-            EXIT_ENGINE_MISSING,
-        )
+    except (EngineAmbiguousError, RunEngineError) as exc:
+        # ORC-02/ORC-21: one shared mapping for both verbs. EngineAmbiguous is
+        # only reachable via a TOCTOU race (a marker appearing between the
+        # _require_store migration and the workflow's own D6 fallback); the
+        # RunEngineError family (EngineNotReady / AdapterInvocation / the
+        # structural fallback) maps to its structured exit here.
+        _emit_and_exit(*_map_execution_exception("run", exc))
 
     entry = outcome.memory_entry
     record = entry.run_record
@@ -1665,51 +1713,10 @@ def test_cmd(
         outcome = asyncio.run(
             test_target_in_store(target, store, reruns=reruns, engine=engine_pair)
         )
-    except EngineAmbiguousError as exc:
-        # TOCTOU guard — see run_cmd's matching clause.
-        _emit_and_exit(
-            Envelope(
-                command="test",
-                ok=False,
-                data={"candidates": _engine_candidates_payload(exc.candidates)},
-                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
-            ),
-            EXIT_USAGE,
-        )
-    except EngineNotReadyError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="test",
-                ok=False,
-                data={"engine_readiness": _readiness_payload(exc.readiness)},
-                errors=(
-                    EnvelopeError(
-                        code=_engine_not_ready_code(exc),
-                        message=str(exc),
-                    ),
-                ),
-            ),
-            EXIT_ENGINE_MISSING,
-        )
-    except AdapterInvocationError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="test",
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code=f"adapter-{exc.kind}",
-                        message=str(exc),
-                        details=(
-                            {"install_hint": exc.install_hint}
-                            if exc.install_hint is not None
-                            else {}
-                        ),
-                    ),
-                ),
-            ),
-            EXIT_ENGINE_MISSING,
-        )
+    except (EngineAmbiguousError, RunEngineError) as exc:
+        # ORC-02/ORC-21: same shared mapping as run_cmd — the two verbs cannot
+        # drift because they thread their own ``command`` through one helper.
+        _emit_and_exit(*_map_execution_exception("test", exc))
 
     envelope, exit_code = build_test_envelope(outcome)
     _emit_and_exit(envelope, exit_code)
