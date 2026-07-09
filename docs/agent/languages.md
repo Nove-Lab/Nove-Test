@@ -290,14 +290,15 @@ verbs gate on readiness and exit **4** if it is not `ready`. Real
 `evidence` (array of detected marker filenames), `issues` (array),
 `state`. The error `code` is the readiness state **verbatim** —
 `engine-missing`, or `engine-misconfigured` for a misconfigured engine,
-also exit 4 (the code IS the state, with no extra prefix). Adapter-level
-failures (e.g. an unparseable report, or a dash-/flag-leading target
-rejected at the boundary) instead exit 4 with
+also exit 4 (the code IS the state, with no extra prefix). Engine-level
+adapter failures (e.g. an unparseable report) instead exit 4 with
 `errors[0].code = "adapter-<kind>"`, where `<kind>` is a stable token
 such as `missing-plugin`, `missing-binary`, `missing-engine`,
-`unparseable-output`, `invalid-target`, `misconfigured-environment`, or
-`timed-out` (the exact set varies by engine — match the `adapter-`
-prefix, not a fixed list).
+`unparseable-output`, `misconfigured-environment`, or `timed-out` (the
+exact set varies by engine — match the `adapter-` prefix, not a fixed
+list). The one exception is `adapter-invalid-target` — a dash-/flag-/
+metacharacter-shaped target rejected at the boundary is a caller **usage
+error** and exits **2**, not 4.
 
 ### Agent routing
 

@@ -30,10 +30,11 @@ Every envelope has exactly these top-level keys (JSON-sorted):
 | 2 | `not-found` | The `run_id` doesn't exist. `novetest memory list`, pick a real ULID. |
 | 2 | `invalid-flag` | Flag value outside the closed set. Read `errors[0].message` for the allowed list. |
 | 2 | `confirm-required` | `novetest reset` needs `--confirm`. Re-issue with `--confirm` (destructive). |
+| 2 | `adapter-invalid-target` | Malformed test target (dash-/flag-/metachar-shaped) rejected before launch. A **caller usage error** — fix the target expression, then retry. |
 | 3 | (none) | `ok: true` — **the user's tests failed or errored.** Read `data.recommendations` (or `run_record.status` on `run`). Not a tool error. |
 | 4 | `engine-missing` | No usable engine. Read `data.engine_readiness.issues[]` for install hints. |
 | 4 | `engine-misconfigured` | Engine applies but tooling missing. Read `data.engine_readiness.issues[]`. |
-| 4 | `adapter-<kind>` | Engine ran but failed (build error, missing plugin, timeout, dash-leading target). Read `errors[0].message` (stderr tail). |
+| 4 | `adapter-<kind>` | Engine ran but failed (build error, missing plugin, timeout). Read `errors[0].message` (stderr tail). (`adapter-invalid-target` is the exception — exit 2, a usage error; see above.) |
 | 5 | `store-corrupt` / `store-wipe-failed` | Storage-level failure. Surface to operator. |
 
 > Two things that bite parsers: an unready engine surfaces the readiness
@@ -176,20 +177,34 @@ surface the `issues[]` to the operator and abort. After a fix, the next
 ```
 
 **Cause.** The engine launched but failed before producing parseable
-output — or, for `adapter-invalid-target`, the target expression was
-rejected at the adapter boundary **before any spawn** (a dash-/flag-leading
-target that would be consumed as an engine flag, e.g.
-`novetest run -- --pdb`). `<kind>` ∈ `unparseable-output`,
-`invalid-target`, `missing-plugin`, `missing-binary`, `missing-engine`,
-`timed-out`, `misconfigured-environment` (the exact set varies by
-adapter). This is an engine-level or target-level problem (build error,
-missing dependency, flag-shaped target), not a Nove Test bug. Some
-adapter errors attach `details.install_hint`.
+output. `<kind>` ∈ `unparseable-output`, `missing-plugin`,
+`missing-binary`, `missing-engine`, `timed-out`,
+`misconfigured-environment` (the exact set varies by adapter). This is an
+engine-level problem (build error, missing dependency), not a Nove Test
+bug. Some adapter errors attach `details.install_hint`. (`invalid-target`
+is a caller usage error, NOT an engine failure — it exits **2**, see the
+next section.)
 
 **Recovery.** Read `errors[0].message` for the engine's stderr tail; fix
 the underlying issue, then retry. (Note: an unknown verb like
 `novetest bogusverb` becomes `novetest test bogusverb` and surfaces here
 as an adapter error — it is NOT a "command not found".)
+
+### `adapter-invalid-target` (exit 2)
+
+**Cause.** The target expression was rejected at the adapter boundary
+**before any spawn** — a dash-/flag-/metachar-shaped target that would be
+consumed as an engine flag or shell metacharacter, e.g.
+`novetest run -- --pdb`. The error code is `adapter-invalid-target` (an
+`adapter-<kind>` code, kind `invalid-target`), but this is a **caller
+usage error** — you passed a malformed argument — so it exits **2**
+(`EXIT_USAGE`), not exit 4 like the engine-level adapter kinds above.
+
+**Recovery.** Fix the **target expression** (not the engine): drop the
+leading dash / flag / shell metacharacter, then retry. This is a
+usage-error recovery path (correct the argument), distinct from the
+engine-remediation path (install/repair the toolchain) that the exit-4
+`adapter-<kind>` codes call for.
 
 ### `not-found` (exit 2)
 
@@ -476,9 +491,10 @@ script does, once).
 | Exit 2, `not-found` | Auto-recover: `memory list` and pick. |
 | Exit 2, `invalid-flag` | Auto-recover: fix the value. |
 | Exit 2, `confirm-required` | Re-issue with `--confirm` ONLY with operator approval. |
+| Exit 2, `adapter-invalid-target` | Auto-recover: fix the malformed target expression (drop the leading dash / flag / metacharacter). |
 | Exit 5, `store-corrupt` / `store-wipe-failed` | Do NOT auto-recover. Surface (destructive recovery destroys data). |
 | Exit 4, `engine-missing` / `engine-misconfigured` | Auto-recover IF policy permits installs (use `data.engine_readiness.issues[]`). Else surface. |
-| Exit 4, `adapter-*` | Surface (engine-level issue, not a Nove Test bug). |
+| Exit 4, `adapter-*` (except `adapter-invalid-target`, exit 2) | Surface (engine-level issue, not a Nove Test bug). |
 | Exit 1, `cli-error` | Surface with the envelope. Do not retry blindly. |
 
 ---

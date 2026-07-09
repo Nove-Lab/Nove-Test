@@ -10,10 +10,14 @@ fall through to the generic exit-1 ``cli-error`` handler and lose its verb name
 
 Two guarantees are pinned here:
 
-- **Behavior preservation (ORC-02).** For each of the three previously-mapped
-  exceptions, the shared helper's ``(Envelope, exit)`` is byte-identical — on
-  BOTH ``run`` and ``test`` — to the pre-S17 inlined block. The oracle is a
-  verbatim replica of that old inline construction (``_old_inline_mapping``),
+- **Behavior preservation (ORC-02).** For each of the previously-mapped
+  exceptions the shared helper's ``(Envelope, exit)`` is byte-identical — on
+  BOTH ``run`` and ``test`` — to the pre-S17 inlined block, with ONE
+  intentional carve-out: ``adapter-invalid-target``'s exit code was
+  reclassified 4 → 2 (usage error) per the 2026-07-09 decision, so it is
+  pinned separately (``test_invalid_target_reclassified_to_usage_exit``) and
+  excluded from the byte-identical oracle set (``_PRE_S17_IDS``). The oracle is
+  a verbatim replica of that old inline construction (``_old_inline_mapping``),
   holding the shared projection helpers constant, which is exactly the right
   scope for a behavior-preserving refactor proof (helper-internal correctness
   is covered by the ORC-03/ORC-23 pins in
@@ -124,14 +128,18 @@ _MAPPED_EXCEPTIONS: dict[str, RunEngineError | EngineAmbiguousError] = {
     ),
 }
 
-# The three families that existed before S17 — the behavior-preservation set.
+# The families that map byte-identically to the pre-S17 inline block — the
+# behavior-preservation set. ``adapter-no-hint`` (kind ``invalid-target``) is
+# DELIBERATELY absent: its exit code was reclassified 4 → 2 by the 2026-07-09
+# decision, so it no longer equals the old inline block and is pinned on its
+# own (``test_invalid_target_reclassified_to_usage_exit``). Every OTHER adapter
+# kind still maps byte-identically, so ``adapter-with-hint`` stays here.
 _PRE_S17_IDS = [
     "ambiguous",
     "not-ready-missing",
     "not-ready-misconfigured",
     "markerless-undetected",
     "adapter-with-hint",
-    "adapter-no-hint",
 ]
 
 
@@ -145,7 +153,11 @@ def _old_inline_mapping(command: str, exc: Exception) -> tuple[Envelope, int]:
 
     Identical on ``run_cmd`` and ``test_cmd`` modulo ``command=`` (that copy-
     paste symmetry is precisely what ORC-02 dedups). ``_map_execution_exception``
-    must equal this for every exception the old blocks mapped.
+    must equal this for every exception in ``_PRE_S17_IDS``. It INTENTIONALLY
+    diverges for ``kind == "invalid-target"``: this oracle preserves the old
+    exit-4 mapping (as pre-S17 emitted), while the live helper now returns exit 2
+    per the 2026-07-09 reclassification — so ``adapter-no-hint`` is excluded from
+    the byte-identical set and pinned separately.
     """
     if isinstance(exc, EngineAmbiguousError):
         return (
@@ -259,11 +271,38 @@ class TestBehaviorPreservation:
             "install_hint": "cargo install cargo-nextest"
         }
 
-        no_hint, _ = _map_execution_exception(
+        no_hint, no_hint_exit = _map_execution_exception(
             "run", _MAPPED_EXCEPTIONS["adapter-no-hint"]
         )
         assert no_hint.errors[0].code == "adapter-invalid-target"
         assert no_hint.errors[0].details == {}
+        # invalid-target reclassified 4 → 2 (usage error); code string unchanged.
+        assert no_hint_exit == EXIT_USAGE
+
+    @pytest.mark.parametrize("command", ["run", "test"])
+    def test_invalid_target_reclassified_to_usage_exit(self, command: str) -> None:
+        """``adapter-invalid-target`` is the ONE adapter kind that intentionally
+        diverges from the pre-S17 exit-4 mapping: a dash-/flag-/metachar-shaped
+        target is a *caller* usage error → exit 2 (``EXIT_USAGE``), not the
+        engine-missing class. The wire error-code STRING and envelope shape are
+        UNCHANGED; only the exit code flips 4 → 2. Pinned on BOTH verbs.
+        (``decisions/2026-07-09-adapter-invalid-target-exit-code-reclassification.md``)
+        """
+        env, exit_code = _map_execution_exception(
+            command, _MAPPED_EXCEPTIONS["adapter-no-hint"]
+        )
+        assert (env.errors[0].code, exit_code) == (
+            "adapter-invalid-target",
+            EXIT_USAGE,
+        )
+        # Discriminating guard: EVERY OTHER AdapterInvocationError kind still
+        # maps to exit 4, so a future regression that broadens the exit-2
+        # carve-out (or flips it into a blanket adapter change) fails loudly.
+        for other_kind in ("missing-engine", "unparseable-output", "timed-out"):
+            _, other_exit = _map_execution_exception(
+                command, AdapterInvocationError("boom", kind=other_kind)
+            )
+            assert other_exit == EXIT_ENGINE_MISSING, other_kind
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +385,9 @@ class TestVerbsRouteThroughTheHelper:
             ("not-ready-missing", EXIT_ENGINE_MISSING),
             ("markerless-undetected", EXIT_ENGINE_MISSING),
             ("adapter-with-hint", EXIT_ENGINE_MISSING),
-            ("adapter-no-hint", EXIT_ENGINE_MISSING),
+            # invalid-target reclassified 4 → 2 (2026-07-09); proven end-to-end
+            # through the real run_cmd handler, not just the helper.
+            ("adapter-no-hint", EXIT_USAGE),
         ],
     )
     def test_run_verb_emits_helper_result(
@@ -374,6 +415,9 @@ class TestVerbsRouteThroughTheHelper:
             ("not-ready-misconfigured", EXIT_ENGINE_MISSING),
             ("markerless-undetected", EXIT_ENGINE_MISSING),
             ("adapter-with-hint", EXIT_ENGINE_MISSING),
+            # invalid-target reclassified 4 → 2 (2026-07-09); proven end-to-end
+            # through the real test_cmd handler on BOTH verbs.
+            ("adapter-no-hint", EXIT_USAGE),
         ],
     )
     def test_test_verb_emits_helper_result(

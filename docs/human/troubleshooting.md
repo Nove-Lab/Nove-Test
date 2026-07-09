@@ -231,10 +231,10 @@ The readiness `issue:` line names the exact install command.
 The engine started but failed before producing parseable results — a
 build failure, missing plugin, or a tool the adapter shells out to
 exiting non-zero. The code is `adapter-<kind>`, e.g.
-`adapter-unparseable-output`, `adapter-invalid-target` (a dash-/flag-leading
-target rejected before launch, e.g. `novetest run -- --pdb`),
-`adapter-missing-plugin`, `adapter-missing-binary`, `adapter-timed-out`.
-The message includes the engine's own stderr tail.
+`adapter-unparseable-output`, `adapter-missing-plugin`,
+`adapter-missing-binary`, `adapter-timed-out`. The message includes the
+engine's own stderr tail. (`adapter-invalid-target` is the exception — a
+malformed target, not an engine failure; it exits **2**, see below.)
 
 **Fix.** Read the stderr tail in the message — the underlying problem is
 at the engine level (your build, your dependencies), not in Nove Test.
@@ -244,6 +244,19 @@ Fix it and re-run.
 > not found". The first non-verb token is treated as a test selector
 > (`novetest test frobnicate`), so the engine tries to run it as a test
 > path and fails with an adapter error.
+
+### `✗ test  adapter-invalid-target: …` (exit 2)
+
+The target you passed was rejected **before launch** — a dash-/flag-/
+metacharacter-shaped target that would be swallowed as an engine flag or
+shell metacharacter, e.g. `novetest run -- --pdb`. The code is still
+`adapter-invalid-target`, but this is a **usage error** (a malformed
+argument), so it exits **2**, not exit 4 like the engine-level adapter
+failures above.
+
+**Fix.** Correct the **target expression** — drop the leading dash /
+flag / metacharacter — and re-run. The problem is your argument, not the
+engine or your build.
 
 ### An explicit target that matches nothing reports `passed` with 0 tests
 

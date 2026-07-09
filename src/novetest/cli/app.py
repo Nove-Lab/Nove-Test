@@ -295,7 +295,12 @@ def _map_execution_exception(
     - ``EngineNotReadyError`` → ``data.engine_readiness`` + the D7 readiness token,
       exit 4.
     - ``AdapterInvocationError`` → ``adapter-<kind>`` (``install_hint`` in
-      ``details`` when present), exit 4.
+      ``details`` when present), exit 4 — EXCEPT ``kind == "invalid-target"``,
+      which is a caller usage error (a dash-/flag-/metachar-shaped target) and
+      maps to exit 2 (``EXIT_USAGE``), not the engine-missing class
+      (``decisions/2026-07-09-adapter-invalid-target-exit-code-reclassification.md``).
+      The error-code STRING (``adapter-invalid-target``) and the envelope shape
+      are unchanged; only this one kind's exit code differs.
     - **ORC-21 structural fallback** — any OTHER ``RunEngineError`` subclass
       (today only ``EngineNotSupportedError``, which is UNREACHABLE from these
       verbs — every supported pair has both a marker-table entry and an
@@ -331,6 +336,14 @@ def _map_execution_exception(
             EXIT_ENGINE_MISSING,
         )
     if isinstance(exc, AdapterInvocationError):
+        # ``invalid-target`` (a dash-/flag-/metachar-shaped target rejected at
+        # the adapter boundary) is a caller USAGE error → exit 2, not the
+        # engine-missing class; every other adapter kind stays exit 4. Only the
+        # exit code differs — the error-code string and envelope shape are
+        # unchanged (2026-07-09 reclassification decision).
+        adapter_exit = (
+            EXIT_USAGE if exc.kind == "invalid-target" else EXIT_ENGINE_MISSING
+        )
         return (
             Envelope(
                 command=command,
@@ -347,7 +360,7 @@ def _map_execution_exception(
                     ),
                 ),
             ),
-            EXIT_ENGINE_MISSING,
+            adapter_exit,
         )
     return (
         Envelope(
