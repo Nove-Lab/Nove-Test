@@ -36,6 +36,7 @@ from novetest.memory.store import (
     list_run_history,
     retrieve_run_evidence,
 )
+from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.memory_entry import MemoryEntry
 from novetest.models.regression_fact_set import (
     OutputDiffRecord,
@@ -63,7 +64,7 @@ from novetest.regression.retrieval import get_regression_facts
 # engines emit raw outcome strings; we map them onto three coarse buckets
 # so the 9-category transition taxonomy stays closed.
 _PASS_LIKE: frozenset[str] = frozenset({"passed", "xpassed"})
-_FAIL_LIKE: frozenset[str] = frozenset({"failed", "errored"})
+_FAIL_LIKE: frozenset[str] = FAIL_LIKE_OUTCOMES  # SSoT: novetest.models (S25)
 _SKIP_LIKE: frozenset[str] = frozenset({"skipped", "xfailed"})
 
 # Artifact-path keys Run Team's adapters register for the captured native

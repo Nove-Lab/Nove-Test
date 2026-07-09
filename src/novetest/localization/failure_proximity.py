@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from novetest.memory.project_store import ProjectStore
+from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.localization_finding import (
     CodeLocation,
     EvidenceCitation,
@@ -66,8 +67,9 @@ _REGRESSION_BOOST_ALPHA: Final[float] = 0.5
 _EVIDENCE_LINE_CAP: Final[int] = 10
 
 # Outcome bucket — failed-like outcomes are the ones whose failure trace
-# we care about. Mirrors ``derive.py::_FAILED_OUTCOMES``.
-_FAILED_OUTCOMES: Final[frozenset[str]] = frozenset({"failed", "errored"})
+# we care about. The single source of truth lives in
+# ``novetest.models.FAIL_LIKE_OUTCOMES`` (S25).
+_FAILED_OUTCOMES: Final[frozenset[str]] = FAIL_LIKE_OUTCOMES
 
 # Placeholder formula string used on the LocalizationFinding so the
 # closed-enum validation passes; failure_proximity does not compute any

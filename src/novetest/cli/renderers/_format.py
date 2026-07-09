@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+from novetest.models import FAIL_LIKE_OUTCOMES
+
 # Status glyphs — Unicode literals, no ANSI escapes.
 GLYPH_OK = "✓"  # ✓
 GLYPH_FAIL = "✗"  # ✗
@@ -29,7 +31,11 @@ GLYPH_UNKNOWN = "?"
 
 
 _PASS_STATUSES = frozenset({"passed", "pass", "ok"})
-_FAIL_STATUSES = frozenset({"failed", "fail", "errored", "error"})
+# Fail-like statuses come from the SSoT (S25): exactly {"failed", "errored"}.
+# The former literal also carried singular "fail"/"error" — spellings no run
+# record status ever holds (the normalizer never emits them), so this narrowing
+# changes no real glyph output.
+_FAIL_STATUSES = FAIL_LIKE_OUTCOMES
 
 
 def run_status_glyph(status: str) -> str:

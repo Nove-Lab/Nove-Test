@@ -34,6 +34,7 @@ divergence across all replay runs, ``test_id`` names it; otherwise ``None``.
 
 from __future__ import annotations
 
+from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
@@ -52,7 +53,7 @@ _RUN_PASS = "passed"
 _RUN_FAIL = "failed"
 _RUN_ERRORED = "errored"
 
-_FAILED_TEST_OUTCOMES: frozenset[str] = frozenset({"failed", "errored"})
+_FAILED_TEST_OUTCOMES: frozenset[str] = FAIL_LIKE_OUTCOMES  # SSoT: novetest.models (S25)
 
 
 def classify_replay_consistency(

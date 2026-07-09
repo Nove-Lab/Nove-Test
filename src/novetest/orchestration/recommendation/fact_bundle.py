@@ -34,7 +34,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from novetest.models import LocalizationFinding, ReplayResult, RunRecord
+from novetest.models import (
+    FAIL_LIKE_OUTCOMES,
+    LocalizationFinding,
+    ReplayResult,
+    RunRecord,
+)
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.localization_finding import LOCALIZATION_MODES
 from novetest.models.regression_fact_set import RegressionFactSet
@@ -279,9 +284,15 @@ def record_has_failed_tests(record: RunRecord) -> bool:
 
 
 def _is_fail_outcome(outcome: str) -> bool:
-    """Return True for the fail-like outcome strings native engines emit."""
+    """Return True for the fail-like outcome strings native engines emit.
 
-    return outcome.lower() in {"failed", "error", "errored"}
+    The membership set is the ``novetest.models.FAIL_LIKE_OUTCOMES`` SSoT
+    (S25 / correction C6): exactly ``{"failed", "errored"}``. The former
+    inline literal also accepted singular ``"error"`` — an XCT-05 drift that
+    no adapter can reach (the normalizer maps ``error -> errored``).
+    """
+
+    return outcome.lower() in FAIL_LIKE_OUTCOMES
 
 
 def passed_count(bundle: FactBundle) -> int:

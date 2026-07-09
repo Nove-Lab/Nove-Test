@@ -22,14 +22,16 @@ from novetest.localization.results import (
 )
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.localization_finding import LocalizationFinding
 from novetest.models.run_reference import RunReference
 
 
-# Outcome bucket for "failed-like" — mirrors derive.py. Localization cares
-# only about the failed/non-failed distinction, so the 3-bucket
-# pass/fail/skip vocabulary used by Regression is overkill here.
-_FAILED_OUTCOMES: frozenset[str] = frozenset({"failed", "errored"})
+# Outcome bucket for "failed-like" — the single source of truth lives in
+# ``novetest.models.FAIL_LIKE_OUTCOMES`` (S25). Localization cares only about
+# the failed/non-failed distinction, so the 3-bucket pass/fail/skip vocabulary
+# used by Regression is overkill here.
+_FAILED_OUTCOMES: frozenset[str] = FAIL_LIKE_OUTCOMES
 
 
 def get_localization_findings(

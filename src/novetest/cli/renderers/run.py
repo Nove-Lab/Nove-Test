@@ -5,8 +5,13 @@ from __future__ import annotations
 from novetest.cli.output import Envelope
 from novetest.cli.renderers._format import GLYPH_FAIL, run_status_glyph
 from novetest.cli.renderers._outcomes import coverage_outcome_line
+from novetest.models import FAIL_LIKE_OUTCOMES
 
-_FAILED_OUTCOMES = frozenset({"failed", "errored", "error"})
+# Fail-like outcomes come from the SSoT (S25): exactly {"failed", "errored"}.
+# The former literal also carried singular "error" — a spelling no test result
+# outcome ever holds (the normalizer maps error -> errored), so the failed-test
+# list this renderer emits is unchanged for real data.
+_FAILED_OUTCOMES = FAIL_LIKE_OUTCOMES
 
 
 def render_run(envelope: Envelope) -> str:

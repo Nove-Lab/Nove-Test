@@ -14,6 +14,15 @@ from typing import Any, ClassVar, Self
 SCHEMA_VERSION: int = 1
 
 
+# Canonical set of "fail-like" test outcomes — the single source of truth consumed by
+# recommendation synthesis, localization, regression, replay, and the CLI renderers.
+# Membership decision (S25 / correction C6): the vocabulary is exactly {"failed", "errored"}.
+# Singular "error" and "fail" are DELIBERATELY excluded — the normalizer never emits them
+# (the outcome vocabulary above is passed | failed | skipped | xfailed | xpassed | errored;
+# dotnet normalizes error -> errored), so including them only invites drift.
+FAIL_LIKE_OUTCOMES: frozenset[str] = frozenset({"failed", "errored"})
+
+
 @dataclass(slots=True, frozen=True)
 class TestResult:
     """One test outcome as normalized from a Native Result.

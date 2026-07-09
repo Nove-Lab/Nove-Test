@@ -23,10 +23,11 @@ from novetest.models.memory_entry import MemoryEntry
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
-from novetest.models.test_result import TestResult
+from novetest.models.test_result import FAIL_LIKE_OUTCOMES, TestResult
 
 
 __all__ = [
+    "FAIL_LIKE_OUTCOMES",
     "CodeLocation",
     "CoverageFactSet",
     "CoverageSummary",

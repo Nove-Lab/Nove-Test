@@ -66,6 +66,7 @@ from novetest.memory.store import (
     list_run_history,
     retrieve_run_evidence,
 )
+from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.localization_finding import (
     CodeLocation,
@@ -95,10 +96,10 @@ DEFAULT_TOP_N: int = 10
 # AI consumer's context. Top-K is by descending score within the symbol.
 _EVIDENCE_LINE_CAP: int = 10
 
-# Outcome bucket for "failed-like" — mirrors regression engine's
-# _FAIL_LIKE but local: the Localization decision is "did this test
-# FAIL?" with no need for the 3-bucket pass/fail/skip distinction.
-_FAILED_OUTCOMES: frozenset[str] = frozenset({"failed", "errored"})
+# Outcome bucket for "failed-like" — the single source of truth lives in
+# ``novetest.models.FAIL_LIKE_OUTCOMES`` (S25): the Localization decision is
+# "did this test FAIL?" with no need for the 3-bucket pass/fail/skip distinction.
+_FAILED_OUTCOMES: frozenset[str] = FAIL_LIKE_OUTCOMES
 
 
 # ---------------------------------------------------------------------------
