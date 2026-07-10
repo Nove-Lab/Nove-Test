@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from novetest.memory.project_store import ProjectStore, create_project_store
+from novetest.memory.project_store import (
+    STORE_METADATA_FILENAME,
+    ProjectStore,
+    ProjectStoreNotFoundError,
+    create_project_store,
+)
 from novetest.memory.store import (
     RECORD_FILENAME,
     RUN_DIR_PREFIX,
     RunEvidenceAlreadyExistsError,
     RunEvidenceNotFoundError,
+    SkippedRecord,
     delete_run_evidence,
     find_runs_for_target,
     get_memory_entry_availability,
@@ -83,13 +90,15 @@ def test_store_writes_record_under_ulid_date_path(store: ProjectStore) -> None:
 
 def test_store_round_trips_through_disk(store: ProjectStore) -> None:
     record = _record()
-    store_run_evidence(store, record)
+    entry = store_run_evidence(store, record)
     persisted_path = (
         store.path / "memory" / "runs" / "2024" / "01" / "02" / f"{RUN_DIR_PREFIX}01HXYZ"
         / RECORD_FILENAME
     )
     raw = json.loads(persisted_path.read_text(encoding="utf-8"))
-    assert raw == record.to_dict()
+    # The persisted document is the caller's record plus Memory's MEM-04
+    # `stored_at` stamp — no other key is added, dropped, or rewritten.
+    assert raw == {**record.to_dict(), "stored_at": entry.stored_at}
 
 
 def test_store_refuses_to_overwrite(store: ProjectStore) -> None:
@@ -663,3 +672,301 @@ def test_has_regression_facts_for_tombstoned_run_with_matching_pair(
 
     assert avail["has_regression_facts"] is True
     assert avail["tombstoned"] is True
+
+
+# --- MEM-01: run+reset race — no silent run loss -------------------------------
+#
+# `wipe_project_store` atomically renames `.novetest/` away. If that happens
+# after this process resolved its store handle, `store_run_evidence`'s
+# `mkdir(parents=True)` used to resurrect a store.json-less skeleton at the old
+# path; `find_nearest_store` skips such a `.novetest/` forever, so the run was
+# silently orphaned. The fix re-verifies `store.json` immediately before the
+# mkdir and raises the domain uninitialized error instead. A/B: drop the
+# pre-mkdir check and both tests below fail (no raise; skeleton resurrected).
+
+
+def _live_record_path(store: ProjectStore, run_id: str) -> Path:
+    """Path of a TS_2024_01_02-dated run's record.json (date path 2024/01/02)."""
+    return (
+        store.path / "memory" / "runs" / "2024" / "01" / "02"
+        / f"{RUN_DIR_PREFIX}{run_id}" / RECORD_FILENAME
+    )
+
+
+def test_store_raises_uninitialized_when_store_wiped_concurrently(
+    store: ProjectStore, tmp_path: Path
+) -> None:
+    # Simulate the wipe's atomic detach landing between handle resolution and
+    # the store write: the whole `.novetest/` moves to a staging sibling.
+    store.path.rename(tmp_path / ".novetest.deleting.01RACEULID")
+
+    with pytest.raises(ProjectStoreNotFoundError):
+        store_run_evidence(store, _record())
+
+    # Load-bearing: no orphan skeleton was resurrected at the old path.
+    assert not store.path.exists()
+
+
+def test_store_raises_uninitialized_when_metadata_vanished(
+    store: ProjectStore,
+) -> None:
+    # Partial shape: the directory survives but `store.json` is gone. Such a
+    # `.novetest/` is not a store (find_nearest_store walks past it), so
+    # writing into it would orphan the run just the same.
+    (store.path / STORE_METADATA_FILENAME).unlink()
+
+    with pytest.raises(ProjectStoreNotFoundError):
+        store_run_evidence(store, _record())
+
+    assert not _live_record_path(store, "01HXYZ").exists()
+
+
+# --- MEM-04: stored_at is persisted, not mtime-derived -------------------------
+#
+# `store_run_evidence` stamps `stored_at` (epoch ms) INTO `record.json`; every
+# read path prefers that persisted value and only falls back to the file mtime
+# for legacy (pre-MEM-04) records. Tombstoning preserves the ORIGINAL stamp —
+# `tombstoned_at` stays the separate deletion timestamp. The stamp never leaks
+# into the nested `run_record` wire projection (MemoryEntry.stored_at is the
+# established envelope slot).
+
+
+def test_stored_at_persisted_and_preferred_over_mtime(store: ProjectStore) -> None:
+    record = _record()
+    entry = store_run_evidence(store, record)
+    record_path = _live_record_path(store, "01HXYZ")
+
+    raw = json.loads(record_path.read_text(encoding="utf-8"))
+    assert raw["stored_at"] == entry.stored_at
+    assert isinstance(raw["stored_at"], int)
+
+    # Shift the file mtime far away (backup restore / git checkout / cloud
+    # sync all do this in the wild). The reported stored_at must not move.
+    os.utime(record_path, ns=(TS_2026_05_13 * 10**6, TS_2026_05_13 * 10**6))
+
+    assert retrieve_run_evidence(store, record.run_reference).stored_at == entry.stored_at
+    assert list_run_history(store)[0].stored_at == entry.stored_at
+    assert (
+        find_runs_for_target(store, record.target_expression)[0].stored_at
+        == entry.stored_at
+    )
+
+
+def test_legacy_record_without_stored_at_falls_back_to_mtime(
+    store: ProjectStore,
+) -> None:
+    # Hand-write a pre-MEM-04 record.json. `to_dict()` omits the key when the
+    # field is None, so this is byte-exactly the legacy shape.
+    record = _record()
+    assert "stored_at" not in record.to_dict()
+    record_path = _live_record_path(store, "01HXYZ")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        json.dumps(record.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    os.utime(record_path, ns=(TS_2026_05_13 * 10**6, TS_2026_05_13 * 10**6))
+
+    fetched = retrieve_run_evidence(store, record.run_reference)
+    assert fetched.stored_at == TS_2026_05_13
+
+
+def test_tombstone_preserves_original_stored_at(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Whole-second stamps keep the float round-trip through time.time() exact.
+    stamp_store = TS_2024_01_02 + 5_000
+    stamp_delete = TS_2024_01_02 + 777_000
+    record = _record()
+
+    monkeypatch.setattr("novetest.memory.store.time.time", lambda: stamp_store / 1000)
+    entry = store_run_evidence(store, record)
+    assert entry.stored_at == stamp_store
+
+    monkeypatch.setattr("novetest.memory.store.time.time", lambda: stamp_delete / 1000)
+    deleted = delete_run_evidence(store, record.run_reference)
+
+    # stored_at did NOT shift to deletion time; tombstoned_at is separate.
+    assert deleted.stored_at == stamp_store
+    assert deleted.tombstoned_at == stamp_delete
+
+    tombstone_record = store.path / "memory" / "tombstones" / f"{RUN_DIR_PREFIX}01HXYZ" / RECORD_FILENAME
+    raw = json.loads(tombstone_record.read_text(encoding="utf-8"))
+    assert raw["stored_at"] == stamp_store
+
+    refetched = retrieve_run_evidence(store, record.run_reference)
+    assert refetched.stored_at == stamp_store
+    assert refetched.tombstoned_at == stamp_delete
+
+    # The re-delete no-op reports the same preserved stamp.
+    again = delete_run_evidence(store, record.run_reference)
+    assert again.stored_at == stamp_store
+
+
+def test_legacy_tombstone_stamps_pre_delete_mtime_not_deletion_time(
+    store: ProjectStore,
+) -> None:
+    # A LEGACY record being tombstoned: the rewrite stamps the pre-rewrite
+    # mtime (the best available approximation of the original store instant)
+    # so deletion does not shift stored_at even for old records.
+    record = _record()
+    record_path = _live_record_path(store, "01HXYZ")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        json.dumps(record.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    os.utime(record_path, ns=(TS_2026_05_13 * 10**6, TS_2026_05_13 * 10**6))
+
+    deleted = delete_run_evidence(store, record.run_reference)
+
+    assert deleted.stored_at == TS_2026_05_13
+    tombstone_record = store.path / "memory" / "tombstones" / f"{RUN_DIR_PREFIX}01HXYZ" / RECORD_FILENAME
+    raw = json.loads(tombstone_record.read_text(encoding="utf-8"))
+    assert raw["stored_at"] == TS_2026_05_13
+    assert retrieve_run_evidence(store, record.run_reference).stored_at == TS_2026_05_13
+
+
+def test_stored_at_stays_off_the_run_record_wire_projection(
+    store: ProjectStore,
+) -> None:
+    # Envelope byte-compat pin: `MemoryEntry.to_dict()["run_record"]` must not
+    # grow a `stored_at` key — the stamp surfaces ONLY at the MemoryEntry level.
+    record = _record()
+    stored = store_run_evidence(store, record)
+
+    entries = [
+        stored,
+        retrieve_run_evidence(store, record.run_reference),
+        *list_run_history(store),
+        *find_runs_for_target(store, record.target_expression),
+    ]
+    for entry in entries:
+        assert entry.run_record.stored_at is None
+        payload = entry.to_dict()
+        assert "stored_at" not in payload["run_record"]
+        assert payload["stored_at"] == stored.stored_at
+
+
+# --- MEM-05: per-record isolation in history scans ------------------------------
+#
+# One torn/corrupt/future-schema `record.json` must not kill the scan
+# interfaces (`list_run_history` / `find_runs_for_target`) that memory list,
+# regression baseline resolution, and localization latest-derivation all walk.
+# Failed records are SKIPPED and surfaced through the optional `skipped`
+# collector (path included). Targeted reads stay LOUD. A/B: revert the
+# isolation in `_iter_all_records` and every scan test below dies on the
+# planted record again.
+
+
+def _plant_torn_record(store: ProjectStore, run_id: str, created_at: int) -> Path:
+    """Store a healthy run, then tear its record.json (torn-write shape)."""
+    store_run_evidence(store, _record(run_id=run_id, created_at=created_at))
+    matches = [
+        p
+        for p in (store.path / "memory" / "runs").rglob(RECORD_FILENAME)
+        if p.parent.name == f"{RUN_DIR_PREFIX}{run_id}"
+    ]
+    assert len(matches) == 1
+    matches[0].write_text('{"schema_version": 1, "run_refe', encoding="utf-8")
+    return matches[0]
+
+
+def test_list_run_history_skips_torn_record_and_reports_its_path(
+    store: ProjectStore,
+) -> None:
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+
+    assert [e.entry_id for e in entries] == ["01OK"]
+    assert len(skipped) == 1
+    assert skipped[0].path == torn_path
+    assert skipped[0].error  # non-empty parse failure message
+
+
+def test_list_run_history_skips_future_schema_record(store: ProjectStore) -> None:
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    future = _record(run_id="01FUTURE", created_at=TS_2026_05_13)
+    store_run_evidence(store, future)
+    future_path = (
+        store.path / "memory" / "runs" / "2026" / "05" / "13"
+        / f"{RUN_DIR_PREFIX}01FUTURE" / RECORD_FILENAME
+    )
+    raw = json.loads(future_path.read_text(encoding="utf-8"))
+    raw["schema_version"] = 2
+    future_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+
+    assert [e.entry_id for e in entries] == ["01OK"]
+    assert [s.path for s in skipped] == [future_path]
+    assert "schema_version" in skipped[0].error
+
+
+def test_scan_survives_corrupt_record_without_a_collector(
+    store: ProjectStore,
+) -> None:
+    # The non-CLI consumers (status/inspect/regression/localization) call the
+    # scan interfaces WITHOUT a collector: isolation alone must hold.
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    assert [e.entry_id for e in list_run_history(store)] == ["01OK"]
+
+
+def test_find_runs_for_target_skips_corrupt_record(store: ProjectStore) -> None:
+    target = "tests/test_shared.py"
+    store_run_evidence(
+        store, _record(run_id="01OK", created_at=TS_2024_01_02, target_expression=target)
+    )
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    skipped: list[SkippedRecord] = []
+    result = find_runs_for_target(store, target, skipped=skipped)
+
+    assert [e.entry_id for e in result] == ["01OK"]
+    assert [s.path for s in skipped] == [torn_path]
+
+
+def test_corrupt_tombstoned_record_is_skipped_too(store: ProjectStore) -> None:
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    gone = _record(run_id="01GONE", created_at=TS_2026_05_13)
+    store_run_evidence(store, gone)
+    delete_run_evidence(store, gone.run_reference)
+    tombstone_record = (
+        store.path / "memory" / "tombstones" / f"{RUN_DIR_PREFIX}01GONE" / RECORD_FILENAME
+    )
+    tombstone_record.write_text("not json at all", encoding="utf-8")
+
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+
+    assert [e.entry_id for e in entries] == ["01OK"]
+    assert [s.path for s in skipped] == [tombstone_record]
+
+
+def test_targeted_read_of_corrupt_run_stays_loud(store: ProjectStore) -> None:
+    # `retrieve_run_evidence` names ONE run — a parse failure must propagate
+    # (exception-type re-wrapping / exit-5 mapping is S42, not this slice).
+    torn = _record(run_id="01TORN", created_at=TS_2026_05_13)
+    _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    with pytest.raises(ValueError):  # json.JSONDecodeError is a ValueError
+        retrieve_run_evidence(store, torn.run_reference)
+
+
+def test_targeted_read_of_future_schema_run_stays_loud(store: ProjectStore) -> None:
+    future = _record(run_id="01FUTURE", created_at=TS_2026_05_13)
+    store_run_evidence(store, future)
+    future_path = (
+        store.path / "memory" / "runs" / "2026" / "05" / "13"
+        / f"{RUN_DIR_PREFIX}01FUTURE" / RECORD_FILENAME
+    )
+    raw = json.loads(future_path.read_text(encoding="utf-8"))
+    raw["schema_version"] = 2
+    future_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        retrieve_run_evidence(store, future.run_reference)

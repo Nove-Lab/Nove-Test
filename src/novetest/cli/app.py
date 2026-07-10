@@ -45,6 +45,7 @@ from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
     RunEvidenceNotFoundError,
+    SkippedRecord,
     delete_run_evidence,
     list_run_history,
     retrieve_run_evidence,
@@ -806,11 +807,32 @@ memory_app = App(name="memory", help="Memory commands: list / show / delete run 
 app.command(memory_app)
 
 
+def _corrupt_record_warnings(
+    skipped: list[SkippedRecord],
+) -> tuple[EnvelopeWarning, ...]:
+    """Project MEM-05 scan skips onto envelope ``warnings[]`` entries.
+
+    One warning per skipped record; the message carries the corrupt file's
+    path verbatim so an operator can locate it without grepping. Emitted only
+    by the memory verbs — non-CLI consumers of the scan interfaces get the
+    isolation (skip, don't crash) without a warning channel.
+    """
+    return tuple(
+        EnvelopeWarning(
+            code="corrupt-run-record-skipped",
+            message=f"Skipped unreadable run record at {s.path}: {s.error}",
+            details={"path": str(s.path)},
+        )
+        for s in skipped
+    )
+
+
 @memory_app.command(name="list")
 def memory_list() -> None:
     """List Run History newest-first."""
     store = _require_store("memory.list")
-    entries = list_run_history(store)
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
     _emit_and_exit(
         Envelope(
             command="memory.list",
@@ -819,6 +841,7 @@ def memory_list() -> None:
                 "count": len(entries),
                 "entries": [e.to_dict() for e in entries],
             },
+            warnings=_corrupt_record_warnings(skipped),
         ),
         EXIT_OK,
     )
@@ -828,7 +851,9 @@ def memory_list() -> None:
 def memory_show(run_id: str) -> None:
     """Show the Memory Entry for ``run_id`` (live or tombstoned)."""
     store = _require_store("memory.show")
-    entries = list_run_history(store)
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+    warnings = _corrupt_record_warnings(skipped)
     target = next(
         (e for e in entries if e.run_record.run_reference.run_id == run_id),
         None,
@@ -844,6 +869,7 @@ def memory_show(run_id: str) -> None:
                         message=f"No Memory Entry for run_id={run_id!r}",
                     ),
                 ),
+                warnings=warnings,
             ),
             EXIT_USAGE,
         )
@@ -856,11 +882,17 @@ def memory_show(run_id: str) -> None:
                 command="memory.show",
                 ok=False,
                 errors=(EnvelopeError(code="not-found", message=str(exc)),),
+                warnings=warnings,
             ),
             EXIT_USAGE,
         )
     _emit_and_exit(
-        Envelope(command="memory.show", ok=True, data={"memory_entry": entry.to_dict()}),
+        Envelope(
+            command="memory.show",
+            ok=True,
+            data={"memory_entry": entry.to_dict()},
+            warnings=warnings,
+        ),
         EXIT_OK,
     )
 
@@ -869,7 +901,9 @@ def memory_show(run_id: str) -> None:
 def memory_delete(run_id: str) -> None:
     """Tombstone the Memory Entry for ``run_id`` (POSIX-atomic rename)."""
     store = _require_store("memory.delete")
-    entries = list_run_history(store)
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+    warnings = _corrupt_record_warnings(skipped)
     target = next(
         (e for e in entries if e.run_record.run_reference.run_id == run_id),
         None,
@@ -885,6 +919,7 @@ def memory_delete(run_id: str) -> None:
                         message=f"No Memory Entry for run_id={run_id!r}",
                     ),
                 ),
+                warnings=warnings,
             ),
             EXIT_USAGE,
         )
@@ -900,6 +935,7 @@ def memory_delete(run_id: str) -> None:
                 command="memory.delete",
                 ok=False,
                 errors=(EnvelopeError(code="not-found", message=str(exc)),),
+                warnings=warnings,
             ),
             EXIT_USAGE,
         )
@@ -908,6 +944,7 @@ def memory_delete(run_id: str) -> None:
             command="memory.delete",
             ok=True,
             data={"memory_entry": entry.to_dict()},
+            warnings=warnings,
         ),
         EXIT_OK,
     )

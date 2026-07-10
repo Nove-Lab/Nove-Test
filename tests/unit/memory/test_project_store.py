@@ -284,9 +284,10 @@ def test_wipe_rmtree_failure_leaves_staging_orphan_not_live_store(
     assert (orphans[0] / STORE_METADATA_FILENAME).is_file()
     # No manual cleanup: `project_store.shutil` IS the same module object as
     # any `shutil` imported here, so calling `shutil.rmtree` while the patch
-    # is in effect would re-trigger `boom`. The future `vacuum` verb is the
-    # intended sweep mechanism for orphans by name pattern (deferred per the
-    # decision doc §"Out of scope"); `tmp_path` teardown handles us here.
+    # is in effect would re-trigger `boom`. The MEM-03 entry sweep in
+    # `create_project_store` / `wipe_project_store` is the production reap
+    # for this orphan (see the staging-residue tests below); `tmp_path`
+    # teardown handles us here.
 
 
 def test_wipe_then_create_project_store_succeeds(tmp_path: Path) -> None:
@@ -558,3 +559,97 @@ def test_find_nearest_store_from_file_start_walks_from_parent(tmp_path: Path) ->
     module = src / "module.py"
     module.write_text("x = 1\n", encoding="utf-8")
     assert find_nearest_store(module) == tmp_path.resolve()
+
+
+# --- MEM-03: staging-residue sweep at init/reset entry -------------------------
+#
+# A wipe whose `rmtree` failed after the detach rename leaves a
+# `.novetest.deleting.<ulid>` tree that nothing ever re-read — the retry path
+# even refuses with `ProjectStoreNotFoundError` (store.json is gone), so the
+# orphan leaked forever. `create_project_store` and `wipe_project_store` now
+# best-effort reap `_STAGING_DIR_PREFIX*` siblings at entry. Best-effort is
+# load-bearing: a sweep failure must NEVER fail the verb it rides on.
+
+
+def _plant_staging_residue(parent: Path, ulid: str = "01ORPHANULID") -> Path:
+    """Materialize a leaked `.novetest.deleting.<ulid>` tree with content."""
+    residue = parent / f".novetest.deleting.{ulid}"
+    (residue / "memory" / "runs").mkdir(parents=True)
+    (residue / STORE_METADATA_FILENAME).write_text("{}", encoding="utf-8")
+    return residue
+
+
+def test_create_project_store_reaps_staging_residue(tmp_path: Path) -> None:
+    residue = _plant_staging_residue(tmp_path)
+
+    store = create_project_store(tmp_path)
+
+    assert not residue.exists()
+    # The verb itself is unaffected by the sweep.
+    assert (store.path / STORE_METADATA_FILENAME).is_file()
+
+
+def test_wipe_reaps_prior_staging_residue_and_still_wipes(tmp_path: Path) -> None:
+    store = create_project_store(tmp_path)
+    residue_a = _plant_staging_residue(tmp_path, "01ORPHANA")
+    residue_b = _plant_staging_residue(tmp_path, "01ORPHANB")
+
+    report = wipe_project_store(store.path)
+
+    assert isinstance(report, WipeReport)
+    assert not residue_a.exists()
+    assert not residue_b.exists()
+    assert not store.path.exists()
+    assert list(tmp_path.glob(".novetest.deleting.*")) == []
+
+
+def test_wipe_on_uninitialized_workspace_still_reaps_residue(tmp_path: Path) -> None:
+    """The canonical MEM-03 scenario: retry-after-failed-wipe.
+
+    The failed wipe already detached the store, so the retry raises
+    `ProjectStoreNotFoundError` — but the entry sweep must have reaped the
+    orphan anyway. Before the sweep existed this exact path left the residue
+    invisible to the tool forever (A/B: with the sweep moved after the
+    not-found refusal, this test fails).
+    """
+    residue = _plant_staging_residue(tmp_path)
+    missing = tmp_path / STORE_DIRNAME
+
+    with pytest.raises(ProjectStoreNotFoundError):
+        wipe_project_store(missing)
+
+    assert not residue.exists()
+
+
+def test_sweep_ignores_non_staging_siblings_and_plain_files(tmp_path: Path) -> None:
+    """Only DIRECTORIES carrying the staging prefix are reaped."""
+    keeper_dir = tmp_path / ".novetest-backup"
+    keeper_dir.mkdir()
+    keeper_file = tmp_path / ".novetest.deleting.notes.txt"
+    keeper_file.write_text("a plain FILE with the prefix is left alone", encoding="utf-8")
+
+    store = create_project_store(tmp_path)
+
+    assert keeper_dir.is_dir()
+    assert keeper_file.is_file()
+    assert (store.path / STORE_METADATA_FILENAME).is_file()
+
+
+def test_sweep_failure_never_fails_the_verb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Best-effort pin: even an rmtree that RAISES must not break `init`.
+
+    `shutil.rmtree(..., ignore_errors=True)` should not raise, but the sweep
+    guards against it anyway — this monkeypatch proves the guard is real.
+    """
+    _plant_staging_residue(tmp_path)
+
+    def boom(path: object, ignore_errors: bool = False) -> None:  # noqa: ARG001
+        raise OSError("simulated sweep rmtree failure")
+
+    monkeypatch.setattr("novetest.memory.project_store.shutil.rmtree", boom)
+
+    store = create_project_store(tmp_path)
+
+    assert (store.path / STORE_METADATA_FILENAME).is_file()

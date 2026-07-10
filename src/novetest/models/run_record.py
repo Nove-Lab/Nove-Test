@@ -31,6 +31,15 @@ class RunRecord:
     own. `artifact_paths` is a name -> Project-Store-relative-path map
     (e.g. ``{"junit_xml": "run/artifacts/<run_id>/native/junit.xml"}``) so
     Memory can resolve raw payloads without engine-specific knowledge.
+
+    ``stored_at`` (MEM-04) is the Memory engine's persistence stamp: the
+    epoch-ms wall-clock instant ``store_run_evidence`` wrote the record. It is
+    an additive-optional ``record.json`` key under the frozen ``schema_version
+    == 1`` — the key is omitted (not ``null``) when unset, so every pre-change
+    record round-trips byte-identically, and readers fall back to the file
+    mtime for such legacy records. Producers (the Run engine) leave it ``None``;
+    Memory stamps it at store time and keeps it OFF the nested wire projection
+    (consumers read ``MemoryEntry.stored_at``, the established envelope slot).
     """
 
     CURRENT_SCHEMA_VERSION: ClassVar[int] = SCHEMA_VERSION
@@ -48,10 +57,11 @@ class RunRecord:
     test_results: tuple[TestResult, ...] = field(default_factory=tuple)
     artifact_paths: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    stored_at: int | None = None
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "run_reference": self.run_reference.to_dict(),
             "target_expression": self.target_expression,
@@ -67,6 +77,12 @@ class RunRecord:
             "artifact_paths": dict(self.artifact_paths),
             "metadata": dict(self.metadata),
         }
+        # Additive optional field: omitted entirely when unset (the
+        # `pinned_engine` precedent), so a pre-MEM-04 record never grows a
+        # key it did not have when re-serialized.
+        if self.stored_at is not None:
+            payload["stored_at"] = self.stored_at
+        return payload
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Self:
@@ -90,6 +106,7 @@ class RunRecord:
 
         engine_version_raw = d.get("engine_version")
         completed_at_raw = d.get("completed_at")
+        stored_at_raw = d.get("stored_at")
         summary_counts_raw = d.get("summary_counts") or {}
         test_results_raw = d.get("test_results") or []
         artifact_paths_raw = d.get("artifact_paths") or {}
@@ -109,6 +126,7 @@ class RunRecord:
             test_results=tuple(TestResult.from_dict(dict(tr)) for tr in test_results_raw),
             artifact_paths={str(k): str(v) for k, v in artifact_paths_raw.items()},
             metadata=dict(metadata_raw),
+            stored_at=None if stored_at_raw is None else int(stored_at_raw),
             schema_version=int(schema_version),
         )
 

@@ -91,3 +91,40 @@ def test_instances_are_frozen() -> None:
     record = _sample_record()
     with pytest.raises(AttributeError):
         record.status = "passed"  # type: ignore[misc]
+
+
+# --- MEM-04: additive-optional `stored_at` ------------------------------------
+#
+# The Memory engine's persistence stamp. Contract (task
+# memory-team-2026-07-10-w2-s41): epoch-ms int, OPTIONAL under the frozen
+# schema_version == 1, key omitted (not null) when unset so pre-change records
+# round-trip byte-identically, absence tolerated forever.
+
+
+def test_stored_at_defaults_to_none_and_stays_off_to_dict() -> None:
+    record = _sample_record()
+    assert record.stored_at is None
+    assert "stored_at" not in record.to_dict()
+
+
+def test_stored_at_round_trips_when_set() -> None:
+    record = _sample_record(stored_at=1_700_000_000_900)
+    payload = record.to_dict()
+    assert payload["stored_at"] == 1_700_000_000_900
+    restored = RunRecord.from_dict(payload)
+    assert restored == record
+    assert restored.stored_at == 1_700_000_000_900
+
+
+def test_from_dict_tolerates_legacy_payload_without_stored_at() -> None:
+    # A pre-MEM-04 record.json has no `stored_at` key; it must load forever
+    # (readers fall back to file mtime at the store layer).
+    payload = _sample_record().to_dict()
+    assert "stored_at" not in payload
+    restored = RunRecord.from_dict(payload)
+    assert restored.stored_at is None
+
+
+def test_stored_at_does_not_bump_schema_version() -> None:
+    assert SCHEMA_VERSION == 1
+    assert _sample_record(stored_at=1).to_dict()["schema_version"] == 1

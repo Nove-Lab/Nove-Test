@@ -188,6 +188,7 @@ def create_project_store(workspace_path: Path) -> ProjectStore:
         raise FileNotFoundError(
             f"Workspace path is not an existing directory: {workspace_path}"
         )
+    _sweep_staging_residue(workspace_path)
     store_path = workspace_path / STORE_DIRNAME
     metadata_path = store_path / STORE_METADATA_FILENAME
 
@@ -408,7 +409,14 @@ def wipe_project_store(store_path: Path) -> WipeReport:
 
     Returns the ``WipeReport`` (store path, previous ``initialized_at``, and
     per-category removal counts).
+
+    Entry also best-effort reaps ``.novetest.deleting.*`` residue from earlier
+    failed wipes (MEM-03). The sweep runs BEFORE the not-found refusal —
+    deliberately: the canonical leak scenario is a wipe whose ``rmtree`` failed
+    after the detach rename, so the retry finds no ``store.json`` and would
+    otherwise never reach a sweep placed later.
     """
+    _sweep_staging_residue(store_path.parent)
     if not (store_path / STORE_METADATA_FILENAME).exists():
         raise ProjectStoreNotFoundError(
             f"No Project Store at {store_path}; nothing to wipe"
@@ -426,6 +434,32 @@ def wipe_project_store(store_path: Path) -> WipeReport:
         previous_initialized_at=handle.initialized_at,
         items_removed=items_removed,
     )
+
+
+def _sweep_staging_residue(parent: Path) -> None:
+    """Best-effort reap of orphaned ``.novetest.deleting.*`` staging trees (MEM-03).
+
+    A wipe whose ``rmtree`` failed after the detach rename leaves a
+    ``.novetest.deleting.<ulid>`` tree that nothing re-reads — before this
+    sweep it leaked forever. ``create_project_store`` and ``wipe_project_store``
+    call this at entry so init/reset reclaim the space. Strictly best-effort:
+    scan or removal failures are swallowed — the sweep must NEVER fail the
+    verb it rides on. Only directories carrying the staging prefix are
+    touched; the live ``.novetest/`` can never match.
+    """
+    try:
+        candidates = [
+            child
+            for child in parent.iterdir()
+            if child.name.startswith(_STAGING_DIR_PREFIX) and child.is_dir()
+        ]
+    except OSError:
+        return
+    for candidate in candidates:
+        try:
+            shutil.rmtree(candidate, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def _count_wipe_items(store_path: Path) -> dict[str, int]:
