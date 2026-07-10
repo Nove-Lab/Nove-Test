@@ -48,7 +48,6 @@ from novetest.run.adapters.dotnet_adapter import (
     _parse_coverlet_version_from_text,
     _parse_semver,
     _parse_trx_duration_ms,
-    _slugify_for_coverlet,
     _trx_outcome_to_status,
     run_xunit,
 )
@@ -764,7 +763,7 @@ class TestArgvComposition:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Coverage requested but Coverlet absent → no ``--collect`` +
-        ``engine-misconfigured`` warning + ``coverage_xml`` artifact omitted."""
+        ``coverlet-absent`` warning + ``coverage_xml`` artifact omitted."""
 
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -1096,24 +1095,51 @@ class TestCoberturaCorrelation:
         assert per_test == []
         assert aggregate is None
 
-    def test_slugify_for_coverlet_replaces_unsafe_chars(self) -> None:
-        """Per the R1 probe — parametrized names contain `(`, `)`, `,`, `:`,
-        ` ` which the slugifier must collapse safely."""
 
-        name = "MathLib.Tests.MathTests.TestParametrized(a: 1, b: 2, expected: 3)"
-        slug = _slugify_for_coverlet(name)
-        # No path-unsafe chars remain.
-        for bad in ("<", ">", "/", "\\", "(", ")", ",", ":", " "):
-            assert bad not in slug
-        # Collapses runs of underscores.
-        assert "__" not in slug
-        # Identifier core survives.
-        assert "TestParametrized" in slug
+# ---------------------------------------------------------------------------
+# Warning-code taxonomy (RUN-07, W2/S15)
+# ---------------------------------------------------------------------------
 
-    def test_slugify_truncates_long_names(self) -> None:
-        long_name = "x" * 500
-        slug = _slugify_for_coverlet(long_name)
-        assert len(slug) == 250
+
+# The readiness-state vocabulary — `run/types.py`
+# ``EngineReadinessResult.state`` (documented trio; deliberately not
+# enum-locked in production, so pinned literally here).
+_READINESS_STATE_TOKENS = frozenset(
+    {"ready", "engine-missing", "engine-misconfigured"}
+)
+
+
+class TestCoverletWarningCodes:
+    """RUN-07 pins: the two Coverlet degradation warnings carry UNIQUE
+    slugs, distinct from each other and from every readiness-state token.
+
+    Pre-S15 both constants were the literal ``"engine-misconfigured"`` —
+    colliding with each other (machine consumers keying on
+    ``envelope.warnings[].code`` could not distinguish below-floor from
+    absent) and with the readiness-state token of the same name (a
+    successful run wore a failure-taxonomy label). Reverting either slug
+    fails these pins — the A/B proof for wire delta A.
+    """
+
+    def test_warning_codes_are_the_pinned_wire_literals(self) -> None:
+        assert WARNING_COVERLET_BELOW_FLOOR == "coverlet-below-floor"
+        assert WARNING_COVERLET_ABSENT == "coverlet-absent"
+
+    def test_warning_codes_are_distinct_from_each_other(self) -> None:
+        assert WARNING_COVERLET_BELOW_FLOOR != WARNING_COVERLET_ABSENT
+
+    def test_warning_codes_are_not_readiness_state_tokens(self) -> None:
+        for code in (
+            WARNING_COVERLET_BELOW_FLOOR,
+            WARNING_COVERLET_ABSENT,
+            WARNING_XUNIT_V3_DEFERRED,
+            WARNING_AMBIGUOUS_PROJECT,
+        ):
+            assert code not in _READINESS_STATE_TOKENS, (
+                f"warning code {code!r} collides with a readiness-state "
+                f"token — the warning taxonomy must never reuse the "
+                f"EngineReadinessResult.state vocabulary (RUN-07)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1702,11 +1728,11 @@ class TestEnvelopeSafetyNet:
 
     Pins the F1b safety-net contract: when restore happens but the
     probe still returns None, the adapter MUST emit an
-    ``AdapterWarning(code="coverlet-absent-or-stale", ...)`` onto
+    ``AdapterWarning(code="coverlet-absent", ...)`` onto
     ``NativeResult.warnings`` which the orchestration → CLI projection
     lifts to ``envelope.warnings[]`` (the canonical post-sunset
     surface). On the happy path (Coverlet present + version ≥ floor)
-    NO ``coverlet-absent-or-stale`` warning is emitted.
+    NO ``coverlet-absent`` warning is emitted.
 
     Pre-2026-06-19 these tests pinned the v1 metadata bridge keys on
     ``RunRecord.metadata``; the 2026-06-19 amendment to
@@ -1721,7 +1747,7 @@ class TestEnvelopeSafetyNet:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Coverage requested + Coverlet truly absent → a single
-        ``coverlet-absent-or-stale`` AdapterWarning on
+        ``coverlet-absent`` AdapterWarning on
         ``NativeResult.warnings`` with the expected code, a non-empty
         actionable message, and structured details (csproj + floor)."""
 
@@ -1772,7 +1798,7 @@ class TestEnvelopeSafetyNet:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Happy path — Coverlet 6.0.2 present + ≥ floor → NO
-        ``coverlet-absent-or-stale`` warning emitted. We do NOT want a
+        ``coverlet-absent`` warning emitted. We do NOT want a
         no-op safety-net warning on the successful path (would confuse
         AI parsers / dashboards scanning ``envelope.warnings[]``)."""
 

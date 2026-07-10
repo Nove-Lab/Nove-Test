@@ -230,6 +230,151 @@ async def test_coverage_missing_plugin_raises_missing_plugin(
 
 
 # ---------------------------------------------------------------------------
+# Collection-error-under-coverage classification boundary (W2/S15 rider,
+# routed from the W1/S8 close)
+# ---------------------------------------------------------------------------
+#
+# pytest-cov writes NO coverage JSON when the session is interrupted during
+# collection, but the pytest JSON report still lands and parses. That is a
+# USER result (`status="errored"` → exit 3 per the documented contract at
+# docs/agent/troubleshooting.md "Exit 3 is not an error"), NOT an adapter
+# failure. The boundary: missing coverage JSON raises `unparseable-output`
+# ONLY when pytest exited 0 (a clean run that produced no coverage is a
+# genuine anomaly). Reverting the boundary in `run_pytest` fails
+# `test_collection_error_with_coverage_returns_errored_result` with the
+# old `AdapterInvocationError` — the A/B proof for wire delta B.
+
+
+async def test_collection_error_with_coverage_returns_errored_result(
+    tmp_path: Path,
+) -> None:
+    """REAL pytest: a broken test module (collection error, exit 2) under
+    ``collect_coverage=True`` returns a NativeResult that normalizes to a
+    persisted ``errored`` run — no raise, coverage artifacts omitted."""
+
+    from novetest.run.normalizer import normalize_native_result
+    from novetest.run.types import NativeEngineContext
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "test_broken_syntax.py").write_text(
+        "def broken(:\n    pass\n", encoding="utf-8"
+    )
+    artifact_dir = tmp_path / "art"
+
+    target = resolve_test_target("", workspace)
+    result = await run_pytest(
+        target,
+        artifact_dir=artifact_dir,
+        timeout=60.0,
+        collect_coverage=True,
+    )
+
+    # pytest exits 2 on a collection error; the JSON report still parsed.
+    assert result.returncode == 2
+    assert result.payload["exitcode"] == 2
+    # Coverage artifacts omitted — pytest-cov never wrote them.
+    assert "coverage_json" not in result.artifact_paths
+    assert "coverage_xml" not in result.artifact_paths
+    # The report artifact is still registered (a persisted user result).
+    assert result.artifact_paths["pytest_json_report"].is_file()
+
+    record = normalize_native_result(
+        result,
+        NativeEngineContext(ecosystem="python", engine_name="pytest"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "errored"
+
+
+async def test_coverage_json_missing_on_clean_exit_still_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The KEEP side of the boundary: pytest exit 0 + parsed report but NO
+    coverage JSON → the genuine-anomaly raise stays (`unparseable-output`)."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    async def fake_run_subprocess(
+        argv: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        report_arg = next(
+            a for a in argv if a.startswith("--json-report-file=")
+        )
+        Path(report_arg.split("=", 1)[1]).write_text(
+            json.dumps(
+                {"exitcode": 0, "summary": {"total": 1, "passed": 1}, "tests": []}
+            ),
+            encoding="utf-8",
+        )
+        # Deliberately does NOT write the --cov-report=json target.
+        return SubprocessResult(
+            returncode=0, stdout=b"", stderr=b"", timed_out=False
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", fake_run_subprocess)
+
+    target = resolve_test_target("", tmp_path)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_pytest(
+            target,
+            artifact_dir=tmp_path / "art",
+            timeout=30.0,
+            collect_coverage=True,
+        )
+    assert exc_info.value.kind == "unparseable-output"
+    assert "coverage JSON" in str(exc_info.value)
+
+
+async def test_coverage_json_missing_on_nonzero_exit_does_not_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stub twin of the real collection-error test: identical fake run
+    except ``returncode=2`` → NO raise, coverage artifacts omitted. Pins
+    the boundary discriminant to ``result.returncode`` exactly."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    async def fake_run_subprocess(
+        argv: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        report_arg = next(
+            a for a in argv if a.startswith("--json-report-file=")
+        )
+        Path(report_arg.split("=", 1)[1]).write_text(
+            json.dumps(
+                {"exitcode": 2, "summary": {"total": 0}, "tests": []}
+            ),
+            encoding="utf-8",
+        )
+        return SubprocessResult(
+            returncode=2, stdout=b"", stderr=b"E   SyntaxError\n", timed_out=False
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", fake_run_subprocess)
+
+    target = resolve_test_target("", tmp_path)
+    result = await run_pytest(
+        target,
+        artifact_dir=tmp_path / "art",
+        timeout=30.0,
+        collect_coverage=True,
+    )
+    assert result.returncode == 2
+    assert "coverage_json" not in result.artifact_paths
+    assert "coverage_xml" not in result.artifact_paths
+
+
+# ---------------------------------------------------------------------------
 # artifact_dir.resolve() hardening (2026-06-08, B2-4 cycle)
 # ---------------------------------------------------------------------------
 #

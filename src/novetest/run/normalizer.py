@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from novetest.models import RunRecord, RunReference, TestResult
+from novetest.models import FAIL_LIKE_OUTCOMES, RunRecord, RunReference, TestResult
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeEngineContext, NativeResult
 
@@ -161,7 +161,7 @@ def _build_pytest_test_result(test_entry: Mapping[str, Any]) -> TestResult:
         duration_ms = int(round(sum(accumulated) * 1000))
 
     failure_reference: str | None = None
-    if outcome in ("failed", "errored") and call_phase_map is not None:
+    if outcome in FAIL_LIKE_OUTCOMES and call_phase_map is not None:
         crash = call_phase_map.get("crash")
         if isinstance(crash, Mapping):
             message = crash.get("message")
@@ -205,7 +205,7 @@ def _aggregate_pytest_status(
     if exit_code in (2, 3, 5):
         # pytest internal / usage error / no-tests-collected paths.
         return "errored"
-    failures = sum(1 for tr in test_results if tr.outcome in ("failed", "errored"))
+    failures = sum(1 for tr in test_results if tr.outcome in FAIL_LIKE_OUTCOMES)
     if failures:
         return "failed"
     return "passed"
@@ -285,7 +285,7 @@ def _build_jest_test_result(suite_file: str, entry: Mapping[str, Any]) -> TestRe
 
     failure_reference: str | None = None
     failure_messages = entry.get("failureMessages")
-    if outcome in ("failed", "errored") and isinstance(failure_messages, list):
+    if outcome in FAIL_LIKE_OUTCOMES and isinstance(failure_messages, list):
         joined = "\n".join(str(m) for m in failure_messages if isinstance(m, str))
         if joined:
             failure_reference = joined
@@ -326,7 +326,7 @@ def _aggregate_jest_status(
     success = payload.get("success")
     if success is True:
         return "passed"
-    failures = sum(1 for tr in test_results if tr.outcome in ("failed", "errored"))
+    failures = sum(1 for tr in test_results if tr.outcome in FAIL_LIKE_OUTCOMES)
     num_failed = payload.get("numFailedTests")
     if (isinstance(num_failed, int) and num_failed > 0) or failures:
         return "failed"
@@ -700,7 +700,7 @@ def _normalize_junit_payload(
         duration_ms = duration_raw if isinstance(duration_raw, int) else None
 
         failure_reference: str | None = None
-        if status in ("failed", "errored"):
+        if status in FAIL_LIKE_OUTCOMES:
             failure_reference = failure_logs.get(identity)
             if failure_reference is None:
                 # Adapter elected not to write a per-test log (e.g.
@@ -752,7 +752,7 @@ def _aggregate_junit_status(
     """
 
     failures = sum(
-        1 for tr in test_results if tr.outcome in ("failed", "errored")
+        1 for tr in test_results if tr.outcome in FAIL_LIKE_OUTCOMES
     )
     if failures:
         return "failed"
@@ -830,7 +830,7 @@ def _normalize_xunit_payload(
         duration_ms = duration_raw if isinstance(duration_raw, int) else None
 
         failure_reference: str | None = None
-        if status in ("failed", "errored"):
+        if status in FAIL_LIKE_OUTCOMES:
             failure_reference = failure_logs.get(identity)
             if failure_reference is None:
                 # Adapter elected not to write a per-test log (e.g. the
@@ -892,7 +892,7 @@ def _aggregate_xunit_status(
     """
 
     failures = sum(
-        1 for tr in test_results if tr.outcome in ("failed", "errored")
+        1 for tr in test_results if tr.outcome in FAIL_LIKE_OUTCOMES
     )
     if failures:
         return "failed"

@@ -264,15 +264,15 @@ async def run_gotest(
     # "no `run` action ever fired" + "non-zero exit" combination as the
     # discriminant: a successful empty-test-set package exits 0 with a
     # `skip` action, distinguishing it from a build failure.
-    if not saw_run_action and result.returncode != 0:
-        stderr_text = result.stderr.decode("utf-8", errors="replace")
-        stdout_text = result.stdout.decode("utf-8", errors="replace")
-        detail_source = stderr_text if stderr_text else stdout_text
-        raise AdapterInvocationError(
-            f"go test exited {result.returncode} without running any test "
-            f"(likely build failure); detail tail: {detail_source[-400:]}",
-            kind="unparseable-output",
-        )
+    #
+    # A build failure (corrupt `go.mod`, syntax error in the SuT) is a
+    # USER-side error, not an adapter failure (S15 rider, routed from the
+    # W1/S8 close — morally identical to a pytest import error): the
+    # payload flows on to normalization, where zero test results + a
+    # non-zero exit yield a persisted `status="errored"` Run Record
+    # (exit 3). The build detail is preserved in the stdout/stderr
+    # artifacts written above.
+    build_failed = not saw_run_action and result.returncode != 0
 
     # Write the events.jsonl artifact — one canonical event per line so
     # downstream consumers (the future Localization / Replay slices) can
@@ -281,7 +281,7 @@ async def run_gotest(
         for event in events:
             f.write(json.dumps(event) + "\n")
 
-    if collect_coverage and not cover_path.exists():
+    if collect_coverage and not build_failed and not cover_path.exists():
         stderr_text = result.stderr.decode("utf-8", errors="replace")
         raise AdapterInvocationError(
             f"go test --coverage did not write {cover_path}; "
@@ -302,10 +302,12 @@ async def run_gotest(
         "stdout": stdout_path,
         "stderr": stderr_path,
     }
-    if collect_coverage:
+    if collect_coverage and not build_failed:
         # Distinct key from pytest/jest's `coverage_json` — the future
         # Coverage-team slice will dispatch on `engine_name == "go-test"`
-        # to parse the cover-profile format (NOT Istanbul JSON).
+        # to parse the cover-profile format (NOT Istanbul JSON). On a
+        # build failure no profile was written; the key is omitted so
+        # downstream `coverage` verbs report unavailable for this run.
         artifact_paths["coverage_profile"] = cover_path
 
     return NativeResult(

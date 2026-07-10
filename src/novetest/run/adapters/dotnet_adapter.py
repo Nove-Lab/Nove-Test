@@ -71,7 +71,7 @@ The fix has three parts:
 2. **F1b — envelope-level visibility via ``NativeResult.warnings``.**
    When ``--coverage`` is requested AND ``_probe_coverlet_version``
    returns ``None`` AFTER restore, the adapter appends a
-   ``coverlet-absent-or-stale`` ``AdapterWarning`` to
+   ``coverlet-absent`` ``AdapterWarning`` to
    ``NativeResult.warnings``. The orchestration → CLI projection lifts
    it to the envelope's top-level ``warnings`` field at
    ``envelope.warnings[]`` (code + message + structured details). This
@@ -106,9 +106,10 @@ Coverlet floor enforcement (per decision §2 + §5):
   ``dotnet list <csproj> package --include-transitive --format json``
   (preferred path; SDK ≥ 7.0). Fallback to tabular text parsing for
   SDK < 7.0 per decision R3-low (we tolerate line-wrapping).
-- Resolved < 6.0.2 OR absent → ``engine-misconfigured`` warning +
-  aggregate fallback (drops ``<PerTestCoverage>`` element from the
-  runsettings entirely; glob is aggregate-only).
+- Resolved < 6.0.2 → ``coverlet-below-floor`` warning; absent →
+  ``coverlet-absent`` warning. Both degrade to the aggregate fallback
+  (drops ``<PerTestCoverage>`` element from the runsettings entirely;
+  glob is aggregate-only).
 
 The adapter NEVER modifies the user's ``.csproj``, ``runsettings``,
 ``Directory.Build.props``, or any other build manifest. Hermetic
@@ -147,14 +148,19 @@ ENGINE_NAME: Final[str] = "xunit"
 _DEFAULT_TIMEOUT_SECONDS: Final[float] = 600.0
 
 # Coverlet floor — decision §2. Below this we degrade to aggregate mode
-# AND emit an ``engine-misconfigured`` warning so the user can upgrade.
+# AND emit a ``coverlet-below-floor`` warning so the user can upgrade.
 COVERLET_FLOOR_VERSION: Final[tuple[int, int, int]] = (6, 0, 2)
 
 # Warning kinds — surfaced on ``payload["warnings"]``. Treated as binding
 # contract by downstream consumers (recommendation synthesis, AI envelopes).
+# The two Coverlet kinds carry unique slugs (RUN-07, W2/S15): they used to
+# share the literal "engine-misconfigured", colliding with each other AND
+# with the readiness-state token of the same name (`run/types.py`
+# ``EngineReadinessResult.state``) — a warning taxonomy must never reuse a
+# readiness-state string.
 WARNING_XUNIT_V3_DEFERRED: Final[str] = "xunit-v3-coverage-deferred"
-WARNING_COVERLET_BELOW_FLOOR: Final[str] = "engine-misconfigured"
-WARNING_COVERLET_ABSENT: Final[str] = "engine-misconfigured"
+WARNING_COVERLET_BELOW_FLOOR: Final[str] = "coverlet-below-floor"
+WARNING_COVERLET_ABSENT: Final[str] = "coverlet-absent"
 WARNING_AMBIGUOUS_PROJECT: Final[str] = "ambiguous-project-layout"
 
 # Coverlet runsettings — decision §1.1 VERBATIM. The
@@ -246,9 +252,9 @@ async def run_xunit(
        (omit ``--collect`` / ``--settings``).
     3. Coverage-mode + xUnit v2: probe the user's resolved Coverlet
        version via ``dotnet list package --include-transitive --format
-       json`` (with tabular fallback). Below floor OR absent → emit
-       ``engine-misconfigured`` warning + degrade to aggregate-mode
-       runsettings.
+       json`` (with tabular fallback). Below floor → emit
+       ``coverlet-below-floor`` warning; absent → ``coverlet-absent``
+       warning. Both degrade to aggregate-mode runsettings.
     4. Generate the hermetic ``coverlet.runsettings`` under
        ``<artifact_dir>/native/`` if coverage requested. Build argv.
     5. Spawn ``dotnet test``. Capture stdout/stderr under
@@ -782,7 +788,7 @@ async def _ensure_csproj_restored(
     - Subsequent invocations of the same fixture: ~50-200 ms
 
     Non-zero exit is tolerated rather than raised — callers (the F1b
-    safety-net + the existing ``engine-misconfigured`` warning) will
+    safety-net + the existing ``coverlet-absent`` warning) will
     surface a structured user-facing message if the probe ALSO returns
     None after a failed restore. Pre-existing ``obj/`` from a prior
     ``dotnet test`` may still satisfy the probe even when today's
@@ -1412,39 +1418,6 @@ def _glob_coverage_xml(
 
 
 # ---------------------------------------------------------------------------
-# Coverlet slug correlation (R1 probe — currently inert; kept for
-# forward-compat with a future Coverlet release that honors PerTestCoverage)
-# ---------------------------------------------------------------------------
-
-
-def _slugify_for_coverlet(test_display_name: str) -> str:
-    """Forward-slugifier that mirrors Coverlet's filename safe-ification.
-
-    Algorithm (informed by Coverlet's `coverage.MakeSafeFilename` source
-    + the canonical .NET path-safe rules):
-    - Replace path-unsafe chars (`<>:"|?*/\\\\`) with ``_``
-    - Replace whitespace and parens / commas / colons / equals with ``_``
-    - Collapse runs of ``_`` to a single ``_``
-    - Truncate to 250 chars (a conservative bound below the typical
-      filesystem-name limit of 255; leaves room for the
-      ``coverage.<slug>.cobertura.xml`` envelope)
-
-    Used by the R1 probe (currently inert — see module docstring) AND
-    available for downstream filename → testName reverse lookup if a
-    future Coverlet release starts producing per-test files.
-    """
-
-    out = test_display_name
-    for bad in ("<", ">", ":", '"', "|", "?", "*", "/", "\\"):
-        out = out.replace(bad, "_")
-    for bad in ("(", ")", ",", "=", " ", "\t", "\n", "\r"):
-        out = out.replace(bad, "_")
-    # Collapse multiple underscores.
-    out = re.sub(r"_+", "_", out)
-    return out[:250]
-
-
-# ---------------------------------------------------------------------------
 # Misc helpers
 # ---------------------------------------------------------------------------
 
@@ -1507,7 +1480,6 @@ __all__ = [
     "_parse_coverlet_version_from_text",
     "_parse_semver",
     "_parse_trx_duration_ms",
-    "_slugify_for_coverlet",
     "_trx_outcome_to_status",
     "run_xunit",
 ]

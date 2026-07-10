@@ -240,9 +240,9 @@ The **baseline**; see [quick-start.md](./quick-start.md).
   [--filter "FullyQualifiedName~<target>"]`; coverage runs do
   `dotnet restore <csproj>` first.
 - **Coverage:** Coverlet Cobertura `coverage_xml` (requires
-  `coverlet.collector` ≥ 6.0.2; below floor → degrades with a warning
-  whose `code` is the literal `engine-misconfigured`). Other warning
-  codes: `ambiguous-project-layout`.
+  `coverlet.collector` ≥ 6.0.2; below floor → degrades with a
+  `coverlet-below-floor` warning; absent → `coverlet-absent`, coverage
+  not collected). Other warning codes: `ambiguous-project-layout`.
 
 ---
 

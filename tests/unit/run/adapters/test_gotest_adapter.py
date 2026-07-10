@@ -570,15 +570,72 @@ async def test_subtests_produce_parent_and_child_node_ids(
     assert "TestParent/one" in seen_tests
 
 
-async def test_build_failure_shape_raises_unparseable(
+async def test_build_failure_returns_payload_that_normalizes_to_errored(
     gotest_basic_workspace: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A build failure produces empty stdout + non-zero exit, which the
-    adapter must surface as a typed `unparseable-output` error — the
-    same precedent as the pytest adapter's "no JSON report" path.
+    """A build failure (corrupt `go.mod`, syntax error in the SuT —
+    empty stdout + non-zero exit, no `run` action) is a USER error, not
+    an adapter failure (W2/S15 rider, routed from the W1/S8 close;
+    morally identical to a pytest import error): the adapter returns a
+    NativeResult whose payload normalizes to a persisted ``errored``
+    Run Record (zero test results) → exit 3, with the build detail
+    preserved in the stderr artifact.
+
+    Pre-S15 this shape raised ``AdapterInvocationError`` kind
+    ``unparseable-output`` (exit 4) — reverting the classification in
+    `run_gotest` fails this test with that raise (the A/B proof for
+    wire delta C).
     """
+
+    from novetest.run.normalizer import normalize_native_result
+    from novetest.run.types import NativeEngineContext
+
+    import novetest.run.adapters.gotest_adapter as adapter
+
+    build_stderr = (
+        b"./broken.go:4:12: undefined: notAnIdentifier\n"
+        b"FAIL\texample.com/broken [build failed]\n"
+    )
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=2,
+            stdout_bytes=b"",
+            stderr_bytes=build_stderr,
+        ),
+    )
+
+    target = resolve_test_target("", gotest_basic_workspace)
+    result = await run_gotest(target, artifact_dir=tmp_path, timeout=60.0)
+
+    assert result.returncode == 2
+    assert result.payload["events"] == []
+    # Build detail preserved in the stderr artifact.
+    assert result.artifact_paths["stderr"].read_bytes() == build_stderr
+
+    record = normalize_native_result(
+        result,
+        NativeEngineContext(ecosystem="go", engine_name="go-test"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert record.status == "errored"
+    assert record.test_results == ()
+
+
+async def test_build_failure_with_coverage_omits_profile_and_does_not_raise(
+    gotest_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Build failure + ``collect_coverage=True``: no cover profile was
+    written, but that is a consequence of the USER-side build failure —
+    the missing-profile `unparseable-output` raise must NOT fire, and the
+    ``coverage_profile`` artifact key is omitted (downstream `coverage`
+    verbs report unavailable for this run)."""
 
     import novetest.run.adapters.gotest_adapter as adapter
 
@@ -586,18 +643,20 @@ async def test_build_failure_shape_raises_unparseable(
         adapter,
         "run_subprocess",
         _make_stub_subprocess(
-            returncode=2,
+            returncode=1,
             stdout_bytes=b"",
-            stderr_bytes=b"./broken.go:4:12: undefined: notAnIdentifier\n"
-            b"FAIL\texample.com/broken [build failed]\n",
+            stderr_bytes=b"go: errors parsing go.mod:\n"
+            b"go.mod:1: unknown directive: modle\n",
+            write_cover_profile=False,
         ),
     )
 
-    target = resolve_test_target("", gotest_basic_workspace)
-    with pytest.raises(AdapterInvocationError) as exc_info:
-        await run_gotest(target, artifact_dir=tmp_path, timeout=60.0)
-    assert exc_info.value.kind == "unparseable-output"
-    assert "build failure" in str(exc_info.value).lower() or "build failed" in str(exc_info.value)
+    target = resolve_test_target("", gotest_basic_coverage_workspace)
+    result = await run_gotest(
+        target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
+    )
+    assert result.returncode == 1
+    assert "coverage_profile" not in result.artifact_paths
 
 
 async def test_skip_action_does_not_trigger_build_failure(

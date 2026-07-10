@@ -181,15 +181,28 @@ async def run_pytest(
             kind="unparseable-output",
         )
 
+    coverage_written = False
     if collect_coverage:
         assert coverage_json_path is not None and coverage_xml_path is not None
-        if not coverage_json_path.exists():
+        coverage_written = coverage_json_path.exists()
+        if not coverage_written and result.returncode == 0:
+            # A clean pytest exit that produced no coverage JSON is a
+            # genuine anomaly — pytest-cov was requested and pytest
+            # reported success, so the file MUST exist.
             stderr_text = result.stderr.decode("utf-8", errors="replace")
             raise AdapterInvocationError(
                 f"pytest-cov did not write coverage JSON to {coverage_json_path}; "
                 f"stderr tail: {stderr_text[-400:]}",
                 kind="unparseable-output",
             )
+        # Non-zero exit + missing coverage JSON is NOT an adapter failure
+        # (S15 rider, routed from the W1/S8 close): a collection/import
+        # error interrupts pytest before pytest-cov writes its report,
+        # but the pytest JSON report above parsed fine — that is a
+        # persisted USER result (`status="errored"` → exit 3 per
+        # docs/agent/troubleshooting.md "Exit 3 is not an error"), with
+        # the coverage artifacts omitted so downstream `coverage` verbs
+        # report unavailable for this run.
 
     engine_version = _read_pytest_version(test_target.workspace_path)
 
@@ -198,7 +211,7 @@ async def run_pytest(
         "stdout": stdout_path,
         "stderr": stderr_path,
     }
-    if collect_coverage:
+    if coverage_written:
         assert coverage_json_path is not None and coverage_xml_path is not None
         artifact_paths["coverage_json"] = coverage_json_path
         artifact_paths["coverage_xml"] = coverage_xml_path

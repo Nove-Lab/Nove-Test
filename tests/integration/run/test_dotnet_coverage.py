@@ -261,10 +261,10 @@ async def test_coverage_run_on_fresh_fixture_with_no_prior_restore(
     # is ``NativeResult.warnings`` (envelope.warnings[] after projection),
     # not the removed ``metadata.coverage_unavailable_*`` keys.
     coverlet_absent_warnings = [
-        w for w in result.warnings if w.code == "coverlet-absent-or-stale"
+        w for w in result.warnings if w.code == "coverlet-absent"
     ]
     assert not coverlet_absent_warnings, (
-        f"coverlet-absent-or-stale warning emitted despite successful "
+        f"coverlet-absent warning emitted despite successful "
         f"probe: {[(w.code, w.message) for w in coverlet_absent_warnings]!r}. "
         f"The F1b safety-net should only fire when the probe returns "
         f"None after restore."

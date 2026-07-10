@@ -28,6 +28,7 @@ from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.orchestration.recommendation import fact_bundle
 from novetest.regression import compare
 from novetest.replay import classifier
+from novetest.run import normalizer
 
 
 # The documented ``TestResult.outcome`` vocabulary (test_result.py docstring
@@ -50,6 +51,9 @@ _CONSUMERS: tuple[tuple[str, object, str], ...] = (
     ("novetest.orchestration.recommendation.fact_bundle", fact_bundle, "FAIL_LIKE_OUTCOMES"),
     ("novetest.cli.renderers._format", _format, "_FAIL_STATUSES"),
     ("novetest.cli.renderers.run", run_renderer, "_FAILED_OUTCOMES"),
+    # W2/S15 rider (routed from the S25 close): run/normalizer.py folded
+    # its 8 inline ("failed", "errored") tuples into the SSoT.
+    ("novetest.run.normalizer", normalizer, "FAIL_LIKE_OUTCOMES"),
 )
 
 

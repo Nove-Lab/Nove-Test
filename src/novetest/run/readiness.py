@@ -223,11 +223,18 @@ def _pytest_configured(workspace: Path) -> bool:
 
 
 async def _probe_pytest_version(workspace: Path) -> str | None:
-    result = await run_subprocess(
-        [sys.executable, "-c", "import pytest; print(pytest.__version__)"],
-        cwd=workspace,
-        timeout=15.0,
-    )
+    # RUN-26 guard: degrade an exec failure (interpreter vanished /
+    # became non-executable between resolution and spawn) to the probe's
+    # "not available" return instead of crashing the readiness pass —
+    # same posture as ``_probe_dotnet_sdk_version``.
+    try:
+        result = await run_subprocess(
+            [sys.executable, "-c", "import pytest; print(pytest.__version__)"],
+            cwd=workspace,
+            timeout=15.0,
+        )
+    except (OSError, FileNotFoundError):
+        return None
     if result.returncode != 0:
         return None
     version = result.stdout.decode("utf-8", errors="replace").strip()
@@ -235,11 +242,15 @@ async def _probe_pytest_version(workspace: Path) -> str | None:
 
 
 async def _probe_pytest_jsonreport(workspace: Path) -> bool:
-    result = await run_subprocess(
-        [sys.executable, "-c", "import pytest_jsonreport"],
-        cwd=workspace,
-        timeout=15.0,
-    )
+    # RUN-26 guard — see ``_probe_pytest_version``.
+    try:
+        result = await run_subprocess(
+            [sys.executable, "-c", "import pytest_jsonreport"],
+            cwd=workspace,
+            timeout=15.0,
+        )
+    except (OSError, FileNotFoundError):
+        return False
     return result.returncode == 0
 
 
@@ -410,9 +421,27 @@ async def _assess_gotest_readiness(
             ),
         )
 
-    version_probe = await run_subprocess(
-        ["go", "version"], cwd=project_workspace, timeout=10.0
-    )
+    # RUN-26 guard: `shutil.which` passed above, but the binary can vanish
+    # or lose its exec bit before the spawn (TOCTOU). Degrade to
+    # ``engine-misconfigured`` — the same verdict a broken installation
+    # gets — instead of crashing the readiness pass.
+    try:
+        version_probe = await run_subprocess(
+            ["go", "version"], cwd=project_workspace, timeout=10.0
+        )
+    except (OSError, FileNotFoundError):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="go", engine_name="go-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "`go version` could not be executed (the `go` binary "
+                "vanished or became non-executable after PATH resolution); "
+                "check the Go installation",
+            ),
+        )
     if version_probe.returncode != 0:
         stderr_text = version_probe.stderr.decode("utf-8", errors="replace").strip()
         return EngineReadinessResult(
@@ -507,11 +536,28 @@ async def _assess_cargo_readiness(
         )
 
     # nextest is REQUIRED — no plain-text fallback (Q3 decision §3).
-    nextest_probe = await run_subprocess(
-        ["cargo", "nextest", "--version"],
-        cwd=project_workspace,
-        timeout=15.0,
-    )
+    # RUN-26 guard: `shutil.which` passed above, but the binary can vanish
+    # or lose its exec bit before the spawn (TOCTOU). Degrade to
+    # ``engine-misconfigured`` instead of crashing the readiness pass.
+    try:
+        nextest_probe = await run_subprocess(
+            ["cargo", "nextest", "--version"],
+            cwd=project_workspace,
+            timeout=15.0,
+        )
+    except (OSError, FileNotFoundError):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="rust", engine_name="cargo-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "`cargo nextest --version` could not be executed (the "
+                "`cargo` binary vanished or became non-executable after "
+                "PATH resolution); check the Rust installation (rustup)",
+            ),
+        )
     if nextest_probe.returncode != 0:
         return EngineReadinessResult(
             state="engine-misconfigured",
@@ -527,11 +573,26 @@ async def _assess_cargo_readiness(
             ),
         )
 
-    version_probe = await run_subprocess(
-        ["cargo", "--version"],
-        cwd=project_workspace,
-        timeout=10.0,
-    )
+    # RUN-26 guard — same TOCTOU degradation as the nextest probe above.
+    try:
+        version_probe = await run_subprocess(
+            ["cargo", "--version"],
+            cwd=project_workspace,
+            timeout=10.0,
+        )
+    except (OSError, FileNotFoundError):
+        return EngineReadinessResult(
+            state="engine-misconfigured",
+            engine_context=NativeEngineContext(
+                ecosystem="rust", engine_name="cargo-test"
+            ),
+            evidence=candidate.evidence,
+            issues=(
+                "`cargo --version` could not be executed (the `cargo` "
+                "binary vanished or became non-executable after PATH "
+                "resolution); check the Rust installation (rustup)",
+            ),
+        )
     if version_probe.returncode != 0:
         stderr_text = version_probe.stderr.decode("utf-8", errors="replace").strip()
         return EngineReadinessResult(

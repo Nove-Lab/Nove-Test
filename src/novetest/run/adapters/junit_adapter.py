@@ -1371,34 +1371,6 @@ def _stage_coverage_xml(
 
 
 # ---------------------------------------------------------------------------
-# Coverage artifact glob (Maven multi-module aware)
-# ---------------------------------------------------------------------------
-
-
-def _glob_jacoco_xml(workspace: Path, multi_module_paths: list[Path]) -> Path | None:
-    """Return the JaCoCo XML artifact for the run.
-
-    For a single-module project: ``target/site/jacoco/jacoco.xml``.
-
-    For multi-module: per ``decisions/2026-06-03`` brief §6 D2 we emit
-    one CoverageFact PER MODULE downstream — but the ``coverage_xml``
-    artifact key on the NativeResult is a single Path. We return the
-    FIRST per-module XML found; the Coverage engine's
-    `_derive_junit_jacoco` is responsible for re-globbing every module
-    XML using the workspace root + `metadata["multi_module"]`.
-    """
-
-    if multi_module_paths:
-        for module_dir in multi_module_paths:
-            candidate = module_dir / "target" / "site" / "jacoco" / "jacoco.xml"
-            if candidate.is_file():
-                return candidate
-        return None
-    candidate = workspace / "target" / "site" / "jacoco" / "jacoco.xml"
-    return candidate if candidate.is_file() else None
-
-
-# ---------------------------------------------------------------------------
 # Child env + version probes
 # ---------------------------------------------------------------------------
 

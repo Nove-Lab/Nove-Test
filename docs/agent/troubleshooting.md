@@ -453,7 +453,8 @@ for observability:
 | `missing-jacoco` | junit | `--coverage` requested but JaCoCo not declared; coverage degraded. |
 | `xunit-v3-coverage-deferred` | xunit | xUnit v3 detected; coverage deferred. |
 | `ambiguous-project-layout` | xunit | Multiple candidate test projects. |
-| `engine-misconfigured` | xunit | Coverlet absent / below 6.0.2 floor; coverage degraded (this warning code literally reuses the state string). |
+| `coverlet-below-floor` | xunit | Coverlet below the 6.0.2 floor; coverage degraded to aggregate mode. |
+| `coverlet-absent` | xunit | `--coverage` requested but `coverlet.collector` not in the package graph; coverage not collected. |
 
 ---
 

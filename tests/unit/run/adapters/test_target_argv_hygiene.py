@@ -259,7 +259,8 @@ def test_dotnet_embeds_dash_leading_target_in_filter_value(
 # shared ``reject_shell_metachar_target`` guard — platform-independent
 # input validation, so these pins are green on the Linux host — and the
 # CLI projects the ``invalid-target`` kind to envelope code
-# ``adapter-invalid-target`` (exit 4). pytest / go / cargo launch the
+# ``adapter-invalid-target`` (exit 2, usage error — reclassified from
+# exit 4 by the 2026-07-09 decision). pytest / go / cargo launch the
 # target as a bare argv element (no shell) and dotnet embeds it in
 # ``FullyQualifiedName~``; none route through cmd, so RUN-09 does not
 # apply to them.

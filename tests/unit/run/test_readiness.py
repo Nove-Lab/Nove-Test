@@ -418,6 +418,136 @@ async def test_cargo_workspace_with_failing_cargo_version_is_misconfigured(
 
 
 # ---------------------------------------------------------------------------
+# TOCTOU exec-failure degradation (RUN-26, W2/S15)
+#
+# `shutil.which` can pass and the binary then vanish / lose its exec bit
+# before the probe's spawn — `run_subprocess` raises FileNotFoundError.
+# Every probe must degrade to a readiness RESULT (the dotnet probe's
+# pre-existing posture), never crash `assess_engine_readiness` with an
+# uncaught exception.
+# ---------------------------------------------------------------------------
+
+
+def _patch_run_subprocess_raises(
+    monkeypatch: pytest.MonkeyPatch, exc: BaseException
+) -> None:
+    """Make every `readiness.run_subprocess` call raise ``exc`` (the
+    TOCTOU shape: which() passed, exec failed)."""
+
+    async def raising_run_subprocess(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> object:
+        raise exc
+
+    monkeypatch.setattr(
+        readiness_module, "run_subprocess", raising_run_subprocess
+    )
+
+
+async def test_pytest_probe_exec_failure_degrades_to_misconfigured(
+    basic_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both pytest probes raising FileNotFoundError → the version probe
+    degrades to None and the plugin probe to False, so the workspace lands
+    ``engine-misconfigured`` with both install-hint issues — no exception."""
+
+    _patch_run_subprocess_raises(
+        monkeypatch, FileNotFoundError(2, "No such file or directory")
+    )
+
+    readiness = await assess_engine_readiness(basic_workspace)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "pytest"
+    assert any("pytest" in issue for issue in readiness.issues)
+
+
+async def test_go_probe_exec_failure_degrades_to_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`go` resolvable on PATH but the `go version` spawn raises
+    FileNotFoundError (TOCTOU) → ``engine-misconfigured``, not a crash."""
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    _patch_go_on_path(monkeypatch, available=True)
+    _patch_run_subprocess_raises(
+        monkeypatch, FileNotFoundError(2, "No such file or directory: 'go'")
+    )
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "go-test"
+    assert any("could not be executed" in issue for issue in readiness.issues)
+
+
+async def test_cargo_nextest_probe_exec_failure_degrades_to_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cargo` resolvable but the `cargo nextest --version` spawn raises
+    (TOCTOU / PermissionError shape) → ``engine-misconfigured``."""
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=True)
+    _patch_run_subprocess_raises(
+        monkeypatch, PermissionError(13, "Permission denied: 'cargo'")
+    )
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "cargo-test"
+    assert any("could not be executed" in issue for issue in readiness.issues)
+
+
+async def test_cargo_version_probe_exec_failure_degrades_to_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The nextest probe succeeds but the follow-up `cargo --version`
+    spawn raises (the binary vanished BETWEEN the two probes) →
+    ``engine-misconfigured`` — covers the second cargo guard site."""
+
+    from novetest.utils.asyncio_subprocess import SubprocessResult
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    _patch_cargo_on_path(monkeypatch, available=True)
+
+    async def nextest_ok_then_raise(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        if isinstance(argv, (list, tuple)) and len(argv) >= 3 and argv[1] == "nextest":
+            return SubprocessResult(
+                returncode=0,
+                stdout=b"cargo-nextest 0.9.70\n",
+                stderr=b"",
+                timed_out=False,
+            )
+        raise FileNotFoundError(2, "No such file or directory: 'cargo'")
+
+    monkeypatch.setattr(readiness_module, "run_subprocess", nextest_ok_then_raise)
+
+    readiness = await assess_engine_readiness(tmp_path)
+    assert readiness.state == "engine-misconfigured"
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_name == "cargo-test"
+    assert any("cargo --version" in issue for issue in readiness.issues)
+
+
+# ---------------------------------------------------------------------------
 # Polyglot disambiguation (2026-07-03 pin-driven-dispatch slice)
 #
 # `assess_engine_readiness` probes the FIRST candidate in canonical table

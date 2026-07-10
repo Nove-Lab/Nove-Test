@@ -88,7 +88,8 @@ def reject_shell_metachar_target(
     injection (review finding RUN-09 [RCE·Windows] / RUN-10). Rejected
     BEFORE any subprocess spawn, mirroring ``reject_dash_leading_target``,
     and projected by the CLI to the envelope error code
-    ``adapter-invalid-target`` (exit 4). A target whose filename
+    ``adapter-invalid-target`` (exit 2, usage error — reclassified from
+    exit 4 by the 2026-07-09 decision). A target whose filename
     legitimately contains one of these characters is out of scope — it is
     rejected loudly with an actionable message rather than silently
     shell-quoted.

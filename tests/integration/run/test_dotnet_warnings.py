@@ -6,7 +6,7 @@ Covers the two adapter-emitted warning kinds catalogued in
 
 | Kind | Trigger |
 |---|---|
-| ``engine-misconfigured`` (canonical: ``coverage-requested-but-coverlet-absent``) | ``dotnet-test-basic`` fixture (no coverlet) + ``--coverage`` |
+| ``coverlet-absent`` (pre-W2/S15: the readiness-state-colliding literal ``engine-misconfigured``) | ``dotnet-test-basic`` fixture (no coverlet) + ``--coverage`` |
 | ``xunit-v3-coverage-deferred`` | csproj declaring ``<PackageReference Include="xunit" Version="3.*" />`` + ``--coverage`` |
 
 Per the 2026-06-06 envelope-warnings-projection slice (brief §1.2), each
@@ -81,8 +81,7 @@ def coverage_absent_workspace(tmp_path: Path) -> Path:
 
     The base fixture's csproj declares no coverage tooling, so running
     ``novetest run --coverage`` against it triggers the
-    ``engine-misconfigured`` /
-    ``coverage-requested-but-coverlet-absent`` warning. Tests using this
+    ``coverlet-absent`` warning. Tests using this
     fixture stay isolated — they get a per-test copy so the source
     fixture's git state stays clean.
     """
@@ -113,7 +112,7 @@ def test_cli_smoke_coverage_absent_emits_envelope_warning(
     coverage_absent_workspace: Path,
 ) -> None:
     """``novetest run --coverage`` against a no-coverlet fixture surfaces the
-    ``engine-misconfigured`` warning at ``envelope.warnings[]``.
+    ``coverlet-absent`` warning at ``envelope.warnings[]``.
 
     Post-2026-06-19 v1-metadata-channel sunset: ``envelope.warnings[]`` is the
     sole canonical user-visible surface. The v1 metadata bridge keys on
@@ -144,7 +143,7 @@ def test_cli_smoke_coverage_absent_emits_envelope_warning(
     assert isinstance(warnings_block, list)
 
     # Find the coverage-absent warning by ``code`` (== adapter's
-    # WARNING_COVERLET_ABSENT literal which is "engine-misconfigured").
+    # WARNING_COVERLET_ABSENT literal, "coverlet-absent" since W2/S15).
     matching = [w for w in warnings_block if w.get("code") == WARNING_COVERLET_ABSENT]
     assert matching, (
         f"expected at least one envelope warning with code="
