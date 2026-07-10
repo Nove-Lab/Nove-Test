@@ -106,6 +106,6 @@ def test_to_dict_is_json_serializable() -> None:
     decoded = json.loads(encoded)
     assert decoded == {
         "run_reference": None,
-        "reason": "no_run_evidence",
+        "reason": "no-run-evidence",
         "detail": None,
     }

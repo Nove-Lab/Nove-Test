@@ -228,9 +228,9 @@ medium), or `failure_proximity` (no coverage at all — a heuristic, not
 SBFL, confidence low). There is no `--mode` flag.
 
 With no failing tests, localization is `— unavailable
-(no_failed_tests)` (exit 0). `localization latest` walks newest-first
+(no-failed-tests)` (exit 0). `localization latest` walks newest-first
 to the first analyzable run on the active target (on a store with no
-analyzable run it reports `— unavailable (run_not_analyzable)`).
+analyzable run it reports `— unavailable (run-not-analyzable)`).
 
 **Switching formulas.** All four formulas are always computed and
 cached. If you re-invoke `localization` with a *different, explicit*

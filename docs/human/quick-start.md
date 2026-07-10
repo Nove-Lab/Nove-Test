@@ -176,7 +176,7 @@ novetest inspect 01KVYRJJJ75ZRHC05GNKYRK99S
 
   coverage      ✓ per-test · 13/13 statements (100.0%)
   regression    ✓ clean · regressed=0 fixed=0 still_failing=0
-  localization  — unavailable (missing_derived_facts)
+  localization  — unavailable (missing-derived-facts)
   replay        ? unavailable (missing-derived-facts)
 ```
 

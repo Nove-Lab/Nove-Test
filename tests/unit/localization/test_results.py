@@ -2,11 +2,15 @@
 
 The 5-element ``KNOWN_REASONS`` set is pinned by
 ``agent-comms/decisions/2026-05-28-localization-finding-shape.md`` §6 + §X
-(the §X split that introduced ``missing_derived_facts`` lands in this
-slice).
+(the §X split that introduced ``missing-derived-facts``). The values are
+kebab-case since W2/S29 (ANA-09): one reason convention across all engines,
+with ``missing-derived-facts`` literally identical to the
+coverage / regression / replay token.
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -45,11 +49,43 @@ def test_known_reasons_has_exactly_five_elements() -> None:
 
 def test_reason_constants_have_pinned_string_values() -> None:
     """All five constants pin specific string values consumers may match on."""
-    assert REASON_NO_FAILED_TESTS == "no_failed_tests"
-    assert REASON_NO_COVERAGE == "no_coverage"
-    assert REASON_NO_RUN_EVIDENCE == "no_run_evidence"
-    assert REASON_MISSING_DERIVED_FACTS == "missing_derived_facts"
-    assert REASON_RUN_NOT_ANALYZABLE == "run_not_analyzable"
+    assert REASON_NO_FAILED_TESTS == "no-failed-tests"
+    assert REASON_NO_COVERAGE == "no-coverage"
+    assert REASON_NO_RUN_EVIDENCE == "no-run-evidence"
+    assert REASON_MISSING_DERIVED_FACTS == "missing-derived-facts"
+    assert REASON_RUN_NOT_ANALYZABLE == "run-not-analyzable"
+
+
+def test_all_reasons_are_kebab_case() -> None:
+    """W2/S29 (ANA-09) guard: every reason is kebab-case — lowercase words
+    joined by single hyphens, no underscores. Localization was the last
+    engine on snake_case; this pins the converged convention."""
+    kebab = re.compile(r"^[a-z]+(-[a-z]+)*$")
+    for reason in KNOWN_REASONS:
+        assert kebab.fullmatch(reason), f"non-kebab-case reason: {reason!r}"
+        assert "_" not in reason
+
+
+def test_missing_derived_facts_matches_sibling_engines_spelling() -> None:
+    """The convergence point of ANA-09: localization's
+    ``missing-derived-facts`` is the LITERAL same token coverage,
+    regression, and replay emit for the same concept, so a single matcher
+    works across every engine's unavailable outcome in one ``inspect``
+    payload. Read-only imports — this test must never mutate those
+    modules."""
+    from novetest.coverage.results import (
+        REASON_MISSING_DERIVED_FACTS as COVERAGE_MISSING_DERIVED_FACTS,
+    )
+    from novetest.regression.results import (
+        REASON_MISSING_DERIVED_FACTS as REGRESSION_MISSING_DERIVED_FACTS,
+    )
+    from novetest.replay.errors import (
+        REASON_MISSING_DERIVED_FACTS as REPLAY_MISSING_DERIVED_FACTS,
+    )
+
+    assert REASON_MISSING_DERIVED_FACTS == COVERAGE_MISSING_DERIVED_FACTS
+    assert REASON_MISSING_DERIVED_FACTS == REGRESSION_MISSING_DERIVED_FACTS
+    assert REASON_MISSING_DERIVED_FACTS == REPLAY_MISSING_DERIVED_FACTS
 
 
 def test_unavailable_constructable_with_run_reference() -> None:
@@ -85,11 +121,11 @@ def test_unavailable_invalid_reason_raises() -> None:
         LocalizationUnavailable(run_reference=_REF, reason="bogus")
 
 
-def test_unavailable_hyphenated_missing_derived_facts_is_rejected() -> None:
-    """Regression uses the hyphenated form ``missing-derived-facts``;
-    Localization uses underscore form to match its existing convention.
-    A hyphenated reason here must be rejected by the closed-enum guard."""
+def test_unavailable_snake_case_missing_derived_facts_is_rejected() -> None:
+    """The pre-S29 underscore spelling ``missing_derived_facts`` is no
+    longer a member of the closed enum — a silent revert of the ANA-09
+    kebab-case rename (or a stale producer) must fail loudly here."""
     with pytest.raises(ValueError, match="reason"):
         LocalizationUnavailable(
-            run_reference=_REF, reason="missing-derived-facts"
+            run_reference=_REF, reason="missing_derived_facts"
         )

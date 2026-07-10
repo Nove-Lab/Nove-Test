@@ -53,8 +53,8 @@ def test_get_cache_present_returns_finding(
 def test_get_cache_absent_returns_unavailable(
     tmp_path: Path, default_ref: RunReference
 ) -> None:
-    """Per decision §X split: cache-empty → ``missing_derived_facts``
-    (recoverable: caller should derive). ``run_not_analyzable`` is
+    """Per decision §X split: cache-empty → ``missing-derived-facts``
+    (recoverable: caller should derive). ``run-not-analyzable`` is
     reserved for structurally non-derivable runs (e.g. tombstoned)."""
     store = create_project_store(tmp_path)
     result = get_localization_findings(store, default_ref)
@@ -138,7 +138,7 @@ def test_availability_aggregate_coverage_returns_true_post_defect4(
 
     Pre-2026-06-01 this returned ``False`` (the gate accepted only
     ``mapping_granularity == "per-test"``), which made
-    ``novetest localization latest`` return ``run_not_analyzable`` for
+    ``novetest localization latest`` return ``run-not-analyzable`` for
     cargo / go / jest runs. Per ``history/2026-06-01-localization-
     phase4-modes-and-cargo-defect-cascade.md`` §"Defect 4" the gate
     now matches the dispatcher's contract."""

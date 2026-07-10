@@ -186,7 +186,7 @@ def _build_full_fixture(*, with_regression: bool = True, with_localization: bool
             per_stage_reasons={
                 "coverage": None if with_coverage else "missing-derived-facts",
                 "regression": None if with_regression else "no-comparable-baseline",
-                "localization": None if with_localization else "no_coverage",
+                "localization": None if with_localization else "no-coverage",
                 "replay": "replay_not_run",
             },
         ),
@@ -321,7 +321,7 @@ class TestCitations:
                 "reason_per_stage": {
                     "coverage": "missing-derived-facts",
                     "regression": "no-comparable-baseline",
-                    "localization": "no_coverage",
+                    "localization": "no-coverage",
                 },
                 "run_reference": fx.ref_target.run_id,
             },

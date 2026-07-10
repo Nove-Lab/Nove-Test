@@ -94,7 +94,7 @@ def _make_outcome(*, with_replay: bool) -> TestOutcome:
         per_stage_reasons={
             "coverage": "missing-derived-facts",
             "regression": "no-comparable-baseline",
-            "localization": "no_coverage",
+            "localization": "no-coverage",
             "replay": replay_reason,
         },
     )

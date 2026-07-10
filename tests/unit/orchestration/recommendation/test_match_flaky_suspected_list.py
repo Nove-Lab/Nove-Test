@@ -72,7 +72,7 @@ def _eligibility(replay: str = "available") -> StageEligibility:
         per_stage_reasons={
             "coverage": "missing-derived-facts",
             "regression": "no-comparable-baseline",
-            "localization": "no_coverage",
+            "localization": "no-coverage",
             "replay": None if replay == "available" else "replay_not_run",
         },
     )

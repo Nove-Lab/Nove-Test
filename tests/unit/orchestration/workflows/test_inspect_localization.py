@@ -4,7 +4,7 @@ Companion to ``test_inspect.py`` and ``test_inspect_regression.py``:
 those files cover the Coverage section + container shape and the
 Regression-section composition respectively. This file pins the
 Localization-section wiring (``_resolve_inspect_localization``):
-cache-only read via ``get_localization_findings``, the missing_derived_facts
+cache-only read via ``get_localization_findings``, the missing-derived-facts
 fallback, and the sub_reports marker flip.
 
 ``inspect`` NEVER calls ``derive_localization_findings`` — it is a
@@ -253,7 +253,7 @@ def test_cache_hit_projects_fact_set_and_available_sub_report(
 def test_cache_miss_on_analyzable_run_surfaces_missing_derived_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cache miss (``LocalizationUnavailable(reason="missing_derived_facts")``):
+    """Cache miss (``LocalizationUnavailable(reason="missing-derived-facts")``):
     ``kind=="unavailable"``, sub_report=="unavailable"."""
 
     entry = _make_entry()
@@ -283,18 +283,18 @@ def test_cache_miss_on_run_with_no_failed_tests_still_missing_derived_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cache-only path: even a run whose tests all pass (so the engine
-    would return ``no_failed_tests`` if derived) returns
-    ``missing_derived_facts`` from the cache-only read — the cache path
+    would return ``no-failed-tests`` if derived) returns
+    ``missing-derived-facts`` from the cache-only read — the cache path
     never inspects test results, only the presence of the cache file.
 
-    This verifies the invariant: ``no_failed_tests`` and ``no_coverage``
+    This verifies the invariant: ``no-failed-tests`` and ``no-coverage``
     reasons can ONLY come from ``derive_localization_findings``, never
     from ``get_localization_findings``."""
 
     entry = _make_entry()
     ref = entry.run_record.run_reference
     # Simulate what get_localization_findings returns for a cache miss:
-    # always missing_derived_facts regardless of test/coverage state.
+    # always missing-derived-facts regardless of test/coverage state.
     unavailable = LocalizationUnavailable(
         run_reference=ref,
         reason=REASON_MISSING_DERIVED_FACTS,
@@ -305,8 +305,8 @@ def test_cache_miss_on_run_with_no_failed_tests_still_missing_derived_facts(
     view = build_inspect_view(object(), _RUN_ID)  # type: ignore[arg-type]
     assert view is not None
     loc_outcome = view.to_dict()["localization_outcome"]
-    # Even though the run would yield no_failed_tests at derive time,
-    # the cache-only read always surfaces missing_derived_facts.
+    # Even though the run would yield no-failed-tests at derive time,
+    # the cache-only read always surfaces missing-derived-facts.
     assert loc_outcome["reason"] == REASON_MISSING_DERIVED_FACTS
     assert loc_outcome["kind"] == "unavailable"
 
@@ -335,7 +335,7 @@ def test_tombstoned_run_without_cached_findings_projects_missing_derived_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A tombstoned run with no cached findings → ``kind=="unavailable"``,
-    ``reason=="missing_derived_facts"`` (cache was never written before tombstone)."""
+    ``reason=="missing-derived-facts"`` (cache was never written before tombstone)."""
 
     entry = _make_entry(tombstoned_at=999)
     ref = entry.run_record.run_reference
@@ -470,7 +470,7 @@ def test_sub_reports_localization_flips_consistently(
     assert view is not None
     assert view.to_dict()["sub_reports"]["localization"] == "available"
 
-    # Case 2: unavailable (missing_derived_facts) → "unavailable"
+    # Case 2: unavailable (missing-derived-facts) → "unavailable"
     _patch_all_seams(
         monkeypatch,
         entry=entry,
@@ -484,7 +484,7 @@ def test_sub_reports_localization_flips_consistently(
     assert view is not None
     assert view.to_dict()["sub_reports"]["localization"] == "unavailable"
 
-    # Case 3: unavailable (run_not_analyzable) → "unavailable"
+    # Case 3: unavailable (run-not-analyzable) → "unavailable"
     _patch_all_seams(
         monkeypatch,
         entry=entry,

@@ -61,7 +61,7 @@ def test_localization_unavailable(
             "localization_outcome": {
                 "kind": "unavailable",
                 "run_reference": ref(),
-                "reason": "no_failed_tests",
+                "reason": "no-failed-tests",
                 "detail": "run has no failed test results",
             }
         },

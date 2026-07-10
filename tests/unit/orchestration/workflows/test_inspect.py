@@ -122,7 +122,7 @@ def _patch_memory(
 
     monkeypatch.setattr(inspect_module, "compare_runs", must_not_be_called)
 
-    # Localization section — default to unavailable (missing_derived_facts) so
+    # Localization section — default to unavailable (missing-derived-facts) so
     # existing Coverage-section tests stay focused and don't hit the filesystem.
     monkeypatch.setattr(
         inspect_module,

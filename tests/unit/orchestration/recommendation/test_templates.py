@@ -137,13 +137,13 @@ class TestSummaryTemplates:
             "unavailable_stages": ["coverage", "localization"],
             "reason_per_stage": {
                 "coverage": "missing-derived-facts",
-                "localization": "no_coverage",
+                "localization": "no-coverage",
             },
             "run_reference": "01RUN0000000000000000000A",
         }
         out = render_summary(CATEGORY_UNAVAILABLE_ANALYSIS, slots)
         assert "coverage (missing-derived-facts)" in out
-        assert "localization (no_coverage)" in out
+        assert "localization (no-coverage)" in out
 
     def test_all_green_renders_counts(self) -> None:
         slots = {

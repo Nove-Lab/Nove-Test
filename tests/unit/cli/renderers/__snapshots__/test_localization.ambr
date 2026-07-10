@@ -8,5 +8,5 @@
   '''
 # ---
 # name: test_localization_unavailable
-  '— unavailable (no_failed_tests) · run_id=01TESTRUN000000000000000000'
+  '— unavailable (no-failed-tests) · run_id=01TESTRUN000000000000000000'
 # ---

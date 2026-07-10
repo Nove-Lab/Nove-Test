@@ -5,7 +5,7 @@
   
     coverage      — unavailable (missing-derived-facts)
     regression    ✓ clean · regressed=0 fixed=0 still_failing=0
-    localization  — unavailable (no_failed_tests)
+    localization  — unavailable (no-failed-tests)
     replay        ? unavailable (missing-derived-facts)
   '''
 # ---

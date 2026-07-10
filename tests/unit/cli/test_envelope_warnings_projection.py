@@ -167,7 +167,7 @@ class _FakeStageEligibility:
             "per_stage_reasons": {
                 "coverage": None,
                 "regression": "no-comparable-baseline",
-                "localization": "no_failed_tests",
+                "localization": "no-failed-tests",
                 "replay": "replay_not_run",
             },
         }

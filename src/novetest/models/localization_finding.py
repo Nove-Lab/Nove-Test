@@ -58,8 +58,18 @@ LOCALIZATION_MODES: frozenset[str] = frozenset(
 LOCALIZATION_CONFIDENCES: frozenset[str] = frozenset({"high", "medium", "low"})
 
 
-# Formula enum — design-of-record §1.
-FORMULAS: frozenset[str] = frozenset({"ochiai", "op2", "dstar2", "tarantula"})
+# Formula names — design-of-record §1. THE single source of truth for the
+# four-formula name set (W2/S29, ANA-19): the ordered tuple is the canonical
+# definition every replica consumes — ``derive.py``'s per-entry score maps
+# iterate it, ``localization/sbfl/__init__.py`` re-exports it, and the
+# membership-validation ``FORMULAS`` below is derived from it. Adding or
+# removing a formula happens HERE (plus the dispatch mapping in
+# ``derive.py::_compute_all_formula_scores``, whose keys are pinned equal to
+# this tuple by ``tests/unit/localization/test_formula_names_ssot.py``).
+FORMULA_NAMES: tuple[str, ...] = ("ochiai", "op2", "dstar2", "tarantula")
+
+# Formula enum — membership-validation view of ``FORMULA_NAMES``.
+FORMULAS: frozenset[str] = frozenset(FORMULA_NAMES)
 
 
 # CodeLocation kind — design-of-record §3 ("Output shape"). ``branch`` is

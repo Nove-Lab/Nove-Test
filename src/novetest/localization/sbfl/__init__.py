@@ -10,6 +10,9 @@ Public surface for ``localization/sbfl/``:
   scores. Design-of-record §1 mandates all four are computed in parallel
   and persisted; the formula choice for ranking is a presentation
   decision (default: Ochiai).
+- ``FORMULA_NAMES`` — the canonical ordered name tuple for the four
+  formulas, re-exported from its single source of truth in
+  ``novetest.models.localization_finding`` (W2/S29, ANA-19).
 
 The count-vector computation (``ef`` / ``ep`` / ``nf`` / ``np_`` from
 spectra + test outcomes) lives in ``localization.derive``; each formula
@@ -25,9 +28,11 @@ from novetest.localization.sbfl.spectra import (
     build_spectra,
 )
 from novetest.localization.sbfl.tarantula import tarantula
+from novetest.models.localization_finding import FORMULA_NAMES
 
 
 __all__ = [
+    "FORMULA_NAMES",
     "Spectra",
     "SpectraBuildError",
     "build_spectra",

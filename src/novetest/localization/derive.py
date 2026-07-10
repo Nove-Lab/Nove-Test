@@ -69,6 +69,7 @@ from novetest.memory.store import (
 from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.localization_finding import (
+    FORMULA_NAMES,
     CodeLocation,
     EvidenceCitation,
     LocalizationEntry,
@@ -303,7 +304,7 @@ def _derive_per_test(
                 formula=formula,
                 alternate_scores={
                     name: candidate.scores[name]
-                    for name in ("ochiai", "op2", "dstar2", "tarantula")
+                    for name in FORMULA_NAMES
                     if name != formula
                 },
                 related_failed_tests=candidate.related_failed_tests,
@@ -315,7 +316,7 @@ def _derive_per_test(
         )
 
     alternate_available = tuple(
-        sorted(name for name in ("ochiai", "op2", "dstar2", "tarantula") if name != formula)
+        sorted(name for name in FORMULA_NAMES if name != formula)
     )
 
     # ``confidence: high`` because the per-test path is the strong SBFL
@@ -429,12 +430,23 @@ def _derive_aggregate(
             continue
         if tr.node_id not in failed_test_ids:
             continue
+        # Warning wording mirrors the W1/S7 split in
+        # ``failure_proximity.derive_failure_proximity`` — the pre-split
+        # single message ("failure_reference empty or unresolvable")
+        # conflated two distinct causes. Format stays
+        # ``"<node_id>: <reason>"`` per the localization interface
+        # contract. (S29 rider — this path was S7-forbidden surface.)
+        if not tr.failure_reference:
+            parse_warnings.append(f"{tr.node_id}: failure_reference is empty")
+            continue
         failure_text = resolve_failure_text(
             store, record.run_reference.run_id, record.engine_name, tr.failure_reference
         )
         if not failure_text:
             parse_warnings.append(
-                f"{tr.node_id}: failure_reference empty or unresolvable"
+                f"{tr.node_id}: failure_reference did not resolve to failure"
+                " text (log file missing or unreadable, or engine not"
+                " supported)"
             )
             continue
         tuples = parse_failure_log(record.engine_name, failure_text)
@@ -501,7 +513,7 @@ def _derive_aggregate(
             [1 + _REGRESSION_BOOST_ALPHA if f in changed_files else 1.0 for f in all_files],
             dtype=np.float64,
         )
-        for formula_name in ("ochiai", "op2", "dstar2", "tarantula"):
+        for formula_name in FORMULA_NAMES:
             scores[formula_name] = scores[formula_name] * boost_mask
 
     # Step 5: sort, filter unsuspicious entries, normalize, rank, truncate.
@@ -509,7 +521,7 @@ def _derive_aggregate(
     for j, file_path in enumerate(all_files):
         per_formula = {
             name: float(scores[name][j])
-            for name in ("ochiai", "op2", "dstar2", "tarantula")
+            for name in FORMULA_NAMES
         }
         evidence_lines = tuple(
             sorted(file_to_evidence_lines.get(file_path, set()))
@@ -593,7 +605,7 @@ def _derive_aggregate(
                 formula=formula,
                 alternate_scores={
                     name: per_formula[name]
-                    for name in ("ochiai", "op2", "dstar2", "tarantula")
+                    for name in FORMULA_NAMES
                     if name != formula
                 },
                 related_failed_tests=related_sorted,
@@ -602,11 +614,7 @@ def _derive_aggregate(
         )
 
     alternate_available = tuple(
-        sorted(
-            name
-            for name in ("ochiai", "op2", "dstar2", "tarantula")
-            if name != formula
-        )
+        sorted(name for name in FORMULA_NAMES if name != formula)
     )
 
     metadata: dict[str, object] = {
@@ -769,7 +777,14 @@ def _compute_all_formula_scores(
         NDArray[np.int64], NDArray[np.int64], NDArray[np.int64], NDArray[np.int64]
     ],
 ) -> dict[str, NDArray[np.float64]]:
-    """Apply all four formulas to the count vectors; return per-location scores."""
+    """Apply all four formulas to the count vectors; return per-location scores.
+
+    The name→callable dispatch mapping below is the ONE deliberate
+    replica of ``models.localization_finding.FORMULA_NAMES`` (a names
+    tuple cannot carry the callables);
+    ``tests/unit/localization/test_formula_names_ssot.py`` pins the key
+    set + order equal to ``FORMULA_NAMES`` so the two cannot drift.
+    """
     ef, ep, nf, np_ = counts
     return {
         "ochiai": ochiai(ef, ep, nf, np_),

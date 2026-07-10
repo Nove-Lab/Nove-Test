@@ -12,28 +12,28 @@ the resulting 5-element ``KNOWN_REASONS``).
 
 When does each reason fire:
 
-- ``no_failed_tests``        — Run Record has 0 failed test results.
-- ``no_coverage``            — Run Record has failed tests but Coverage
+- ``no-failed-tests``        — Run Record has 0 failed test results.
+- ``no-coverage``            — Run Record has failed tests but Coverage
                                 Facts are unavailable, OR available with
                                 ``mapping_granularity != "per-test"``. In
                                 a follow-up slice the latter triggers the
                                 ``sbfl_aggregate`` mode; today it surfaces
                                 as Unavailable with an explanatory detail.
-- ``no_run_evidence``        — ``retrieve_run_evidence`` raises (no live
+- ``no-run-evidence``        — ``retrieve_run_evidence`` raises (no live
                                 and no tombstoned record for the ref).
-- ``missing_derived_facts``  — Cache empty: ``get_localization_findings``
+- ``missing-derived-facts``  — Cache empty: ``get_localization_findings``
                                 was called before
                                 ``derive_localization_findings`` produced
                                 facts for this run. Recoverable — the
                                 caller should ``derive``.
-- ``run_not_analyzable``     — Run is structurally non-derivable: the
+- ``run-not-analyzable``     — Run is structurally non-derivable: the
                                 Run Record is tombstoned, or its evidence
                                 is corrupted past use. NOT recoverable —
                                 this is the strict policy (the AI consumer
                                 "will spend tokens reasoning over noise"
                                 otherwise — strategy doc §5 + Regression
                                 precedent). Distinct from
-                                ``missing_derived_facts`` per the §X split.
+                                ``missing-derived-facts`` per the §X split.
 """
 
 from __future__ import annotations
@@ -49,14 +49,17 @@ from novetest.models.run_reference import RunReference
 # small; expand only when a new path through the engine genuinely needs to
 # be distinguishable to consumers.
 #
-# Underscore form matches the existing Localization convention (Regression
-# uses hyphenated forms; the two conventions stay independent).
+# Kebab-case, matching the coverage / regression / replay reason vocabulary
+# (W2/S29, ANA-09 — pre-wire-freeze alignment). ``missing-derived-facts`` is
+# deliberately the LITERAL same token those three engines use for the same
+# concept, so one matcher works across every engine's unavailable outcome in
+# a single ``inspect`` payload.
 # ---------------------------------------------------------------------------
-REASON_NO_FAILED_TESTS: Final[str] = "no_failed_tests"
-REASON_NO_COVERAGE: Final[str] = "no_coverage"
-REASON_NO_RUN_EVIDENCE: Final[str] = "no_run_evidence"
-REASON_MISSING_DERIVED_FACTS: Final[str] = "missing_derived_facts"
-REASON_RUN_NOT_ANALYZABLE: Final[str] = "run_not_analyzable"
+REASON_NO_FAILED_TESTS: Final[str] = "no-failed-tests"
+REASON_NO_COVERAGE: Final[str] = "no-coverage"
+REASON_NO_RUN_EVIDENCE: Final[str] = "no-run-evidence"
+REASON_MISSING_DERIVED_FACTS: Final[str] = "missing-derived-facts"
+REASON_RUN_NOT_ANALYZABLE: Final[str] = "run-not-analyzable"
 
 KNOWN_REASONS: frozenset[str] = frozenset(
     {

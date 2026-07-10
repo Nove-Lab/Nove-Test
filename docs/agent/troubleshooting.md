@@ -418,13 +418,15 @@ outcome block's `kind: "unavailable"` with a `reason`:
 }
 ```
 
-Reason-string conventions differ by engine:
+All engines share one hyphenated reason convention
+(`missing-derived-facts` is the literal same token wherever the concept
+appears):
 
 | Engine | Convention | Example reasons |
 |---|---|---|
 | coverage | hyphenated | `run-not-found`, `missing-native-payload`, `missing-derived-facts`, `native-payload-corrupt`, `incomparable-granularity` |
 | regression | hyphenated | `run-not-found`, `run-tombstoned`, `no-comparable-baseline`, `missing-derived-facts`, `engine-mismatch`, `target-mismatch` |
-| localization | underscored | `no_failed_tests`, `no_coverage`, `no_run_evidence`, `missing_derived_facts`, `run_not_analyzable` |
+| localization | hyphenated | `no-failed-tests`, `no-coverage`, `no-run-evidence`, `missing-derived-facts`, `run-not-analyzable` |
 
 `coverage show` returning `missing-derived-facts` means the run was
 produced without coverage — re-run with `novetest run --coverage` (or

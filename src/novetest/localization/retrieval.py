@@ -42,12 +42,12 @@ def get_localization_findings(
 
     Returns:
     - ``LocalizationFinding`` when ``localization_findings.json`` exists.
-    - ``LocalizationUnavailable(reason="missing_derived_facts",
+    - ``LocalizationUnavailable(reason="missing-derived-facts",
       detail="findings not yet derived")`` when the cache file is
       absent. The caller should invoke ``derive_localization_findings``
       to trigger derivation. (Per the decision §X split, this is the
       recoverable cache-empty case — distinct from
-      ``run_not_analyzable``, which is reserved for structurally non-
+      ``run-not-analyzable``, which is reserved for structurally non-
       derivable runs such as tombstoned records.)
     """
     raw = read_localization_findings_raw(store, run_reference.run_id)
@@ -78,7 +78,7 @@ def check_localization_availability(
     or its absence (see ``design/implementation-plan/localization-strategy.md``
     §2). Pre-2026-06-01 this function rejected non-per-test coverage,
     which made ``novetest localization latest`` return
-    ``run_not_analyzable`` for cargo / go / jest runs and for any
+    ``run-not-analyzable`` for cargo / go / jest runs and for any
     coverage-less run — even though the explicit ``<run_id>`` path
     handled them correctly via the mode dispatcher.
 

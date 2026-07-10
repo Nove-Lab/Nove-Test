@@ -94,7 +94,7 @@ class TestStageEligibility:
             per_stage_reasons={
                 "coverage": "missing-derived-facts",
                 "regression": None,
-                "localization": "no_coverage",
+                "localization": "no-coverage",
                 "replay": "replay_not_run",
             },
         )

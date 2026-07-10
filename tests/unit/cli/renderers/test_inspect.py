@@ -42,7 +42,7 @@ def test_inspect_mixed_sub_reports(
             "localization_outcome": {
                 "kind": "unavailable",
                 "run_reference": ref(),
-                "reason": "no_failed_tests",
+                "reason": "no-failed-tests",
                 "detail": "run has no failed test results",
             },
             "replay_outcome": {

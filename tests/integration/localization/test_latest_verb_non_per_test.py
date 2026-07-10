@@ -2,7 +2,7 @@
 
 Closes Defect 4 (carry-forward from 2026-06-01 cycle): the ``latest``
 discoverability path used to gate on per-test coverage only, which made
-``novetest localization latest`` return ``run_not_analyzable`` for cargo
+``novetest localization latest`` return ``run-not-analyzable`` for cargo
 / go / jest aggregate-coverage runs AND for coverage-less runs — even
 though the explicit ``<run_id>`` path handled them correctly via the
 3-mode dispatcher in ``derive_localization_findings``.
@@ -87,7 +87,7 @@ async def test_latest_verb_returns_aggregate_finding_for_cargo_fixture(
     with ``mode == "sbfl_aggregate"``.
 
     Pre-Defect-4 this would have returned
-    ``LocalizationUnavailable(reason="run_not_analyzable")`` because
+    ``LocalizationUnavailable(reason="run-not-analyzable")`` because
     cargo's aggregate-granularity coverage failed the per-test-only
     gate. The ranking check itself (arithmetic.rs ranked #1) is owned
     by ``test_aggregate_mode_e2e.py``; here we only assert the
@@ -134,7 +134,7 @@ async def test_latest_verb_returns_failure_proximity_finding_for_no_coverage_fix
     with ``mode == "failure_proximity"``.
 
     Pre-Defect-4 this would have returned
-    ``LocalizationUnavailable(reason="run_not_analyzable")`` because no
+    ``LocalizationUnavailable(reason="run-not-analyzable")`` because no
     coverage at all failed the per-test-only gate. The ranking check
     itself (statistics.py picked up from the failure trace) is owned by
     ``test_failure_proximity_e2e.py``; here we only assert the

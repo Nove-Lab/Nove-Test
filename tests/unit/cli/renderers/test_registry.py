@@ -61,7 +61,7 @@ def test_warnings_appended_after_body(
             "localization_outcome": {
                 "kind": "unavailable",
                 "run_reference": ref(),
-                "reason": "no_failed_tests",
+                "reason": "no-failed-tests",
                 "detail": "",
             }
         },

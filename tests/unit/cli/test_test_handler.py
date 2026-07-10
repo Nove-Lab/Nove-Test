@@ -53,7 +53,7 @@ def _make_outcome(*, status: str, recommendations: list[Recommendation] | None =
         per_stage_reasons={
             "coverage": None,
             "regression": None,
-            "localization": "no_failed_tests",
+            "localization": "no-failed-tests",
             "replay": "replay_not_run",
         },
     )

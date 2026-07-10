@@ -183,7 +183,7 @@ def test_resolve_latest_walks_past_passing_only_to_first_with_failed_tests(
         ),
     )
 
-    # Middle: failing test, no coverage → check fails (no_coverage path).
+    # Middle: failing test, no coverage → check fails (no-coverage path).
     failing_no_cov_ref = RunReference(
         run_id="01MIDFAILNOCOV00000000000002", created_at=_TS_MID
     )
@@ -199,7 +199,7 @@ def test_resolve_latest_walks_past_passing_only_to_first_with_failed_tests(
         ),
     )
 
-    # Newest: passing only + coverage → check fails (no_failed_tests path).
+    # Newest: passing only + coverage → check fails (no-failed-tests path).
     passing_only_ref = RunReference(
         run_id="01NEWPASSONLY0000000000000003", created_at=_TS_NEW
     )

@@ -225,7 +225,7 @@ NOVETEST_OUTPUT=json novetest inspect 01KVYRJJJ75ZRHC05GNKYRK99S
                                          "still_failing": 0, "total_target_tests": 3, "...": "..." },
                             "test_transitions": [ { "node_id": "...", "category": "still_passing", "...": "..." } ],
                             "...": "..." },
-    "localization_outcome": { "kind": "unavailable", "reason": "missing_derived_facts",
+    "localization_outcome": { "kind": "unavailable", "reason": "missing-derived-facts",
                               "detail": "findings not yet derived", "run_reference": { "...": "..." } },
     "replay_outcome":     { "kind": "unavailable", "reason": "missing-derived-facts",
                             "detail": "no replay attempt has been made for this run", "...": "..." },
@@ -241,10 +241,10 @@ NOVETEST_OUTPUT=json novetest inspect 01KVYRJJJ75ZRHC05GNKYRK99S
 ```
 
 - `kind == "fact-set"` → the data is present (coverage/regression here).
-- `kind == "unavailable"` → carries `reason` + `detail`. NOTE the reason
-  spelling differs by engine: coverage/regression/replay use **hyphens**
-  (`missing-derived-facts`), localization uses **underscores**
-  (`missing_derived_facts`).
+- `kind == "unavailable"` → carries `reason` + `detail`. Reason spelling
+  is **hyphenated** across all engines — `missing-derived-facts` is the
+  literal same token from coverage, regression, replay, AND
+  localization, so one matcher covers every sub-report.
 - `data.sub_reports` is the quick availability map (mirrors
   `stage_eligibility`, minus the SBFL-mode detail).
 - A stale/unknown `run_id` → `errors[].code == "not-found"`, exit **2**.

@@ -308,7 +308,7 @@ def test_localization_run_fake_run_id_returns_not_found(
 
 
 # ---------------------------------------------------------------------------
-# Case (4): Tombstoned run → run_not_analyzable, ok=true, exit 0
+# Case (4): Tombstoned run → run-not-analyzable, ok=true, exit 0
 # ---------------------------------------------------------------------------
 
 
@@ -320,7 +320,7 @@ def test_localization_run_tombstoned_run_surfaces_run_not_analyzable(
     stub_history: None,
 ) -> None:
     """A tombstoned run: the engine returns ``LocalizationUnavailable``
-    with ``reason=="run_not_analyzable"``. The CLI projects it as
+    with ``reason=="run-not-analyzable"``. The CLI projects it as
     ``kind=="unavailable"``, ``ok: true``, exit 0."""
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
@@ -346,7 +346,7 @@ def test_localization_run_tombstoned_run_surfaces_run_not_analyzable(
 
 
 # ---------------------------------------------------------------------------
-# Case (5): No failed tests → no_failed_tests, ok=true, exit 0
+# Case (5): No failed tests → no-failed-tests, ok=true, exit 0
 # ---------------------------------------------------------------------------
 
 
@@ -357,7 +357,7 @@ def test_localization_run_no_failed_tests_surfaces_unavailable(
     stub_store: object,
     stub_history: None,
 ) -> None:
-    """A run with no failed tests: the engine returns ``no_failed_tests``."""
+    """A run with no failed tests: the engine returns ``no-failed-tests``."""
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
     monkeypatch.setattr(
@@ -382,7 +382,7 @@ def test_localization_run_no_failed_tests_surfaces_unavailable(
 
 
 # ---------------------------------------------------------------------------
-# Case (6): Coverage missing → no_coverage, ok=true, exit 0
+# Case (6): Coverage missing → no-coverage, ok=true, exit 0
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +393,7 @@ def test_localization_run_no_coverage_surfaces_unavailable(
     stub_store: object,
     stub_history: None,
 ) -> None:
-    """A run without per-test coverage: the engine returns ``no_coverage``."""
+    """A run without per-test coverage: the engine returns ``no-coverage``."""
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
     monkeypatch.setattr(

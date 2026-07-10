@@ -340,15 +340,13 @@ facts.
 
 ## `localization` issues
 
-### `— unavailable (no_failed_tests)`
+### `— unavailable (no-failed-tests)`
 
 Expected on a green run — SBFL has nothing to rank when no test failed.
-(Localization reason strings use underscores, unlike coverage's
-hyphens.)
 
 **Fix.** None needed; this is the correct outcome.
 
-### `— unavailable (missing_derived_facts)`
+### `— unavailable (missing-derived-facts)`
 
 The run lacks the per-test data SBFL needs (most commonly: coverage was
 unavailable, so per-test attribution is missing).

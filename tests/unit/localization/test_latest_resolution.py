@@ -140,7 +140,7 @@ def _seed_unanalyzable_run(
     This helper now seeds the third case so the
     ``test_resolve_all_non_analyzable_returns_run_not_analyzable_with_count``
     and ``test_derive_latest_all_non_analyzable_returns_run_not_analyzable``
-    tests still exercise the "all candidates skipped → run_not_analyzable"
+    tests still exercise the "all candidates skipped → run-not-analyzable"
     code path the resolver guarantees.
     """
     record = make_record(
@@ -362,7 +362,7 @@ def test_derive_latest_all_non_analyzable_returns_run_not_analyzable(
     tmp_path: Path,
     make_record: Callable[..., RunRecord],
 ) -> None:
-    """Store has runs but none are analyzable → ``run_not_analyzable``
+    """Store has runs but none are analyzable → ``run-not-analyzable``
     propagates from the resolver (the §X-split narrowed semantic — the
     runs are structurally non-derivable from the localization POV)."""
     workspace = tmp_path / "ws"

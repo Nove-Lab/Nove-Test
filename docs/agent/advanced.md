@@ -453,10 +453,11 @@ Routing facts:
   full ranking before truncation.
 - Unavailable block has exactly 3 keys + `kind`: `run_reference`
   (nullable), `reason`, `detail`. Localization reasons are
-  **underscored**: `no_failed_tests`, `no_coverage`, `no_run_evidence`,
-  `missing_derived_facts`, `run_not_analyzable`. (A passing run via the
-  explicit verb → `no_failed_tests`; via `latest` →
-  `run_not_analyzable`.) Unavailable is `ok: true`, exit 0.
+  **hyphenated**, like every other engine's: `no-failed-tests`,
+  `no-coverage`, `no-run-evidence`, `missing-derived-facts`,
+  `run-not-analyzable`. (A passing run via the explicit verb →
+  `no-failed-tests`; via `latest` → `run-not-analyzable`.) Unavailable
+  is `ok: true`, exit 0.
 
 ### Cache-rederive warnings
 

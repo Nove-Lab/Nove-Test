@@ -378,9 +378,9 @@ always switch on `kind` first.
 `inspect` is cache-only — it never runs replay, so `replay_outcome.kind`
 is `"unavailable"` (`reason: "missing-derived-facts"`) until you have run
 `novetest replay <run_id>` for that id. When `kind == "unavailable"` the
-block carries `reason` and `detail`. Coverage/regression reason strings
-are **hyphenated** (`missing-derived-facts`); localization reasons are
-**underscored** (`no_failed_tests`, `missing_derived_facts`).
+block carries `reason` and `detail`. Reason strings are **hyphenated**
+across all engines — `missing-derived-facts` is the same token
+everywhere; localization adds e.g. `no-failed-tests`.
 
 Call `inspect` to read the raw coverage `summary`, walk SBFL `entries[]`,
 or audit a recommendation by following its citations. For a green run the

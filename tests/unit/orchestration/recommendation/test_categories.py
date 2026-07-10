@@ -123,7 +123,7 @@ def _all_unavailable_eligibility() -> StageEligibility:
         per_stage_reasons={
             "coverage": "missing-derived-facts",
             "regression": "no-comparable-baseline",
-            "localization": "no_coverage",
+            "localization": "no-coverage",
             "replay": "replay_not_run",
         },
     )

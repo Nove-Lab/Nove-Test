@@ -231,7 +231,7 @@ def _patch_seams(
 
     Default behaviours when ``*_result`` is None:
     - coverage: returns ``CoverageUnavailable(missing-derived-facts)``
-    - localization: returns ``LocalizationUnavailable(missing_derived_facts)``
+    - localization: returns ``LocalizationUnavailable(missing-derived-facts)``
     - regression: returns ``RegressionUnavailable(missing-derived-facts)``
 
     These defaults represent the "fresh run, nothing derived yet" baseline

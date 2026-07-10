@@ -560,3 +560,76 @@ def test_defect3_failure_trace_only_files_are_filtered_out(tmp_path: Path) -> No
         f"Expected no parse_warnings (file was parseable, just not in coverage); "
         f"got {parse_warnings!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Parse-warning wording (S29 rider — aligns with the W1/S7 split)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_warning_wording_distinguishes_empty_from_unresolvable(
+    tmp_path: Path,
+) -> None:
+    """S29 rider: the aggregate path's parse warnings use the same W1/S7
+    split wording as ``failure_proximity`` — a truly EMPTY
+    ``failure_reference`` and an UNRESOLVABLE log path produce distinct
+    reasons (the pre-split single message "failure_reference empty or
+    unresolvable" conflated them). Both keep the contract's
+    ``"<node_id>: <reason>"`` form."""
+    # Empty reference (pytest — inline-reference engine).
+    store, record, coverage = _make_setup(
+        tmp_path / "empty",
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_empty",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference=None,
+            ),
+        ),
+        covered_files=("src/foo.py",),
+    )
+    finding = _derive_aggregate(
+        store=store,
+        record=record,
+        coverage=coverage,
+        failed_test_ids=frozenset({"tests/t.py::t_empty"}),
+        regression_facts=None,
+        top_n=10,
+        formula="ochiai",
+    )
+    warnings = finding.metadata.get("parse_warnings")
+    assert isinstance(warnings, list) and len(warnings) == 1
+    assert warnings[0] == "tests/t.py::t_empty: failure_reference is empty"
+
+    # Unresolvable log path (cargo-test — logfile engine, file never written).
+    store2, record2, coverage2 = _make_setup(
+        tmp_path / "unres",
+        test_results=(
+            TestResult(
+                node_id="tests::t_gone",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="native/failures/gone.log",
+            ),
+        ),
+        covered_files=("src/lib.rs",),
+        engine_name="cargo-test",
+    )
+    finding2 = _derive_aggregate(
+        store=store2,
+        record=record2,
+        coverage=coverage2,
+        failed_test_ids=frozenset({"tests::t_gone"}),
+        regression_facts=None,
+        top_n=10,
+        formula="ochiai",
+    )
+    warnings2 = finding2.metadata.get("parse_warnings")
+    assert isinstance(warnings2, list) and len(warnings2) == 1
+    assert warnings2[0].startswith(
+        "tests::t_gone: failure_reference did not resolve to failure text"
+    )
+    # The conflated pre-split wording must be gone from BOTH branches.
+    assert "empty or unresolvable" not in warnings[0]
+    assert "empty or unresolvable" not in warnings2[0]

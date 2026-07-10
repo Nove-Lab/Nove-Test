@@ -198,7 +198,7 @@ def test_localization_latest_emits_fact_set_envelope(
 
 
 # ---------------------------------------------------------------------------
-# Case 2: Empty store → no_run_evidence, run_reference null, detail present
+# Case 2: Empty store → no-run-evidence, run_reference null, detail present
 # ---------------------------------------------------------------------------
 
 
@@ -209,7 +209,7 @@ def test_localization_latest_empty_store_surfaces_no_run_evidence(
     stub_store: object,
 ) -> None:
     """An empty store: ``derive_latest_localization`` returns
-    ``LocalizationUnavailable(reason="no_run_evidence")`` with
+    ``LocalizationUnavailable(reason="no-run-evidence")`` with
     ``run_reference=None``. The CLI surfaces ``kind: "unavailable"``,
     ``ok: true``, exit 0; ``run_reference`` is ``null`` on the wire."""
 
@@ -237,7 +237,7 @@ def test_localization_latest_empty_store_surfaces_no_run_evidence(
 
 
 # ---------------------------------------------------------------------------
-# Case 3: All-tombstoned → run_not_analyzable
+# Case 3: All-tombstoned → run-not-analyzable
 # ---------------------------------------------------------------------------
 
 
@@ -248,7 +248,7 @@ def test_localization_latest_all_tombstoned_surfaces_run_not_analyzable(
     stub_store: object,
 ) -> None:
     """When all runs in the store are tombstoned / non-analyzable:
-    ``derive_latest_localization`` returns ``run_not_analyzable``."""
+    ``derive_latest_localization`` returns ``run-not-analyzable``."""
 
     monkeypatch.setattr(
         app_module,

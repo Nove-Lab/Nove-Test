@@ -123,7 +123,7 @@ def _bundle(*, with_regression: bool, with_localization: bool, fail: bool,
         per_stage_reasons={
             "coverage": "missing-derived-facts",
             "regression": None if with_regression else "no-comparable-baseline",
-            "localization": None if with_localization else "no_coverage",
+            "localization": None if with_localization else "no-coverage",
             "replay": "replay_not_run",
         },
     )
