@@ -244,9 +244,11 @@ def _lines_str(slots: dict[str, Any]) -> str:
 def _unavailable_stages_str(slots: dict[str, Any]) -> str:
     """Render the brief §1 closed list of unavailable stages with reasons.
 
-    Format: ``"coverage (no_coverage_data), localization (run_not_analyzable)"``
-    — stable order matches ``StageEligibility.unavailable_stages()`` which
-    already returns them in the brief §1 order.
+    Format: ``"coverage (missing-native-payload), localization (run-not-analyzable)"``
+    — the reasons are the engines' own kebab-case ``unavailable.reason``
+    tokens, carried verbatim on ``per_stage_reasons``; stable order
+    matches ``StageEligibility.unavailable_stages()`` which already
+    returns them in the brief §1 order.
     """
 
     stages = slots.get("unavailable_stages") or []

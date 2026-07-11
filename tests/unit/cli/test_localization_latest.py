@@ -40,6 +40,7 @@ from novetest.models.localization_finding import (
     EvidenceCitation,
     LocalizationEntry,
 )
+from novetest.orchestration.workflows import localization as localization_workflow
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ def test_localization_latest_emits_fact_set_envelope(
         seen_stores.append(store)
         return _make_finding()
 
-    monkeypatch.setattr(app_module, "derive_latest_localization", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_latest_localization", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_latest()
@@ -214,7 +215,7 @@ def test_localization_latest_empty_store_surfaces_no_run_evidence(
     ``ok: true``, exit 0; ``run_reference`` is ``null`` on the wire."""
 
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: LocalizationUnavailable(
             run_reference=None,
@@ -251,7 +252,7 @@ def test_localization_latest_all_tombstoned_surfaces_run_not_analyzable(
     ``derive_latest_localization`` returns ``run-not-analyzable``."""
 
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: LocalizationUnavailable(
             run_reference=None,
@@ -293,7 +294,7 @@ def test_localization_latest_flags_forwarded_to_engine(
         seen_kwargs.append({"formula": formula, "top_n": top_n})
         return _make_finding(formula=formula, top_n=top_n)
 
-    monkeypatch.setattr(app_module, "derive_latest_localization", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_latest_localization", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_latest(formula="tarantula", top_n=5)
@@ -343,7 +344,7 @@ def test_localization_latest_uninitialized_workspace_exits_2(
             "derive_latest_localization called when no Project Store"
         )
 
-    monkeypatch.setattr(app_module, "derive_latest_localization", must_not_be_called)
+    monkeypatch.setattr(localization_workflow, "derive_latest_localization", must_not_be_called)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_latest()
@@ -354,15 +355,16 @@ def test_localization_latest_uninitialized_workspace_exits_2(
 
 # ---------------------------------------------------------------------------
 # Cache-rederived warning suite (latest verb, Defect 5 fix). The detection
-# + re-derive logic lives in the shared ``_rederive_if_cache_overrode_flags``
-# helper — these tests only confirm the latest-verb path wires up the
-# warning slot the same way as the explicit-run verb. The full six-scenario
-# matrix is covered in ``test_localization.py``.
+# + re-derive logic lives in the shared flag-override policy of
+# ``orchestration/workflows/localization.py`` (W2/S22) — these tests only
+# confirm the latest-verb path wires up the warning slot the same way as
+# the explicit-run verb. The full six-scenario matrix is covered in
+# ``test_localization.py``.
 #
-# Test pattern: ``derive_latest_localization`` is monkeypatched to return
-# the cached finding on the first (initial) call; the post-call
-# ``_rederive_if_cache_overrode_flags`` then unlinks the (fake) cache path
-# and re-invokes ``derive_localization_findings`` directly (NOT
+# Test pattern: ``derive_latest_localization`` is monkeypatched (at the
+# workflow module) to return the cached finding on the first (initial)
+# call; the policy then invalidates the (fake) cache and re-invokes
+# ``derive_localization_findings`` directly (NOT
 # ``derive_latest_localization`` — the run_reference is already resolved),
 # which is monkeypatched to return the fresh finding.
 # ---------------------------------------------------------------------------
@@ -373,19 +375,20 @@ _CACHE_WARN_CODE = "localization-cache-rederived"
 
 @pytest.fixture
 def stub_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Wire ``app_module.localization_findings_path`` onto a tmp_path file.
+    """Wire the workflow's ``invalidate_localization_findings`` onto a tmp file.
 
-    The post-Defect-5 invalidation calls ``localization_findings_path(...).
-    unlink(missing_ok=True)``. Unit tests don't have a real store on disk,
-    so this fixture redirects the path computation onto a real tmp file
-    that ``unlink`` can safely operate against.
+    The post-Defect-5 invalidation calls the Localization engine's public
+    ``invalidate_localization_findings(store, run_id)`` (missing-cache is
+    a no-op). Unit tests don't have a real store on disk, so this fixture
+    redirects the invalidation onto a real tmp file unlink whose
+    existence the tests assert against.
     """
     fake_cache = tmp_path / "fake_localization_findings.json"
     fake_cache.touch()
     monkeypatch.setattr(
-        app_module,
-        "localization_findings_path",
-        lambda *_a, **_k: fake_cache,
+        localization_workflow,
+        "invalidate_localization_findings",
+        lambda *_a, **_k: fake_cache.unlink(missing_ok=True),
     )
     return fake_cache
 
@@ -407,12 +410,12 @@ def test_localization_latest_rederives_on_explicit_formula_mismatch(
     cached_finding = _make_finding(formula="ochiai", top_n=10)
     fresh_finding = _make_finding(formula="dstar2", top_n=10)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: cached_finding,
     )
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: fresh_finding,
     )
@@ -454,7 +457,7 @@ def test_localization_latest_no_warning_on_match(
 
     matching = _make_finding(formula="tarantula", top_n=5)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: matching,
     )
@@ -480,7 +483,7 @@ def test_localization_latest_no_warning_when_outcome_unavailable(
     passed explicit flags."""
 
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_latest_localization",
         lambda _store, *, formula, top_n: LocalizationUnavailable(
             run_reference=None,
@@ -500,8 +503,8 @@ def test_localization_latest_no_warning_when_outcome_unavailable(
 
 # ---------------------------------------------------------------------------
 # Defect 7 fix (2026-06-08) — formula noop in ``failure_proximity`` mode
-# also applies to the ``latest`` verb (same shared
-# ``_rederive_if_cache_overrode_flags`` carve-out). The run-verb's
+# also applies to the ``latest`` verb (same shared flag-override-policy
+# carve-out in ``orchestration/workflows/localization.py``). The run-verb's
 # ``test_localization.py`` carries the full 5-case matrix; this single
 # mirror test pins the wire-level behavior on the latest verb so the
 # carve-out can't regress on one verb without breaking the other.
@@ -539,8 +542,8 @@ def test_localization_latest_failure_proximity_non_default_formula_emits_noop_wa
         fresh_calls.append(1)
         return finding
 
-    monkeypatch.setattr(app_module, "derive_latest_localization", fake_latest)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_fresh)
+    monkeypatch.setattr(localization_workflow, "derive_latest_localization", fake_latest)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_fresh)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_latest(formula="dstar2")

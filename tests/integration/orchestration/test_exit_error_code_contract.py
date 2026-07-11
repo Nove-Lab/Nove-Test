@@ -78,16 +78,20 @@ def test_errored_suite_test_is_a_user_result(
 
     Errored shape used here: pytest exit 5 (no tests collected — the
     fixture's only test module is removed, its ``tests/`` dir kept so the
-    pytest configuration stays detectable). Deliberately NOT the
-    collection-error shape: ``novetest test`` always executes with
-    coverage instrumentation, and pytest-cov writes no coverage JSON when
-    the session is interrupted during collection, so that shape aborts
-    inside the pytest adapter (``adapter-unparseable-output``, run-engine
-    surface) before any Run Record exists — recorded as a divergence in
-    the W1/S8 handoff, out of this slice's allowed surface. Exit 5 emits
-    both the JSON report AND the coverage files (verified empirically,
-    pytest 9.0.3 / pytest-cov 7.0.0), so the errored record flows through
-    the whole chain.
+    pytest configuration stays detectable). Exit 5 emits both the JSON
+    report AND the coverage files (verified empirically, pytest 9.0.3 /
+    pytest-cov 7.0.0), so the errored record flows through the whole
+    chain with coverage facts intact.
+
+    The other errored shape — a pytest collection error under coverage,
+    where pytest-cov writes no coverage JSON — ALSO persists an errored
+    record and exits 3 since W2/S15 (pre-S15 it aborted inside the pytest
+    adapter as exit 4 ``adapter-unparseable-output``; the boundary is now
+    gated on the subprocess return code). That shape's end-to-end
+    contract, including the omitted coverage artifacts, is pinned in
+    ``tests/integration/run/test_error_classification.py``; this test
+    keeps the coverage-bearing exit-5 variant so both errored shapes stay
+    covered.
     """
 
     init_result = run_cli_in(basic_workspace, ["init"])

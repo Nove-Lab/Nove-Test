@@ -2,7 +2,11 @@
 
 `compare <baseline> <target>` composes two engine calls — `compare_runs`
 (Regression) and `compare_coverage_facts` (Coverage) — into one envelope.
-Distinct from `regression compare` (Regression only) and `coverage diff`
+Since W2/S23 the synthesis lives in the `build_compare_view` workflow
+(`orchestration/workflows/compare.py`), so the engine seams are
+monkeypatched at that module; the CLI handler is transport-only
+(run_id resolution + envelope projection). Distinct from
+`regression compare` (Regression only) and `coverage diff`
 (Coverage only).
 """
 
@@ -21,6 +25,7 @@ from novetest.coverage.results import REASON_MISSING_DERIVED_FACTS
 from novetest.models import MemoryEntry, RunRecord, RunReference
 from novetest.models.coverage_fact_set import CoverageSummary
 from novetest.models.regression_fact_set import RegressionFactSet, RegressionSummary
+from novetest.orchestration.workflows import compare as compare_workflow
 from novetest.regression import (
     REASON_ENGINE_MISMATCH,
     REASON_RUN_TOMBSTONED,
@@ -158,10 +163,10 @@ def test_compare_emits_both_blocks_on_full_success(
     stub_history: None,
 ) -> None:
     monkeypatch.setattr(
-        app_module, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
+        compare_workflow, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
     )
     monkeypatch.setattr(
-        app_module, "compare_coverage_facts", lambda *_a, **_k: _make_coverage_delta()
+        compare_workflow, "compare_coverage_facts", lambda *_a, **_k: _make_coverage_delta()
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -199,7 +204,7 @@ def test_compare_with_only_baseline_coverage_emits_coverage_unavailable(
     `compare_coverage_facts` when one side lacks `coverage_facts.json`."""
 
     monkeypatch.setattr(
-        app_module, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
+        compare_workflow, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
     )
 
     def fake_coverage(
@@ -211,7 +216,7 @@ def test_compare_with_only_baseline_coverage_emits_coverage_unavailable(
             run_reference=target,
         )
 
-    monkeypatch.setattr(app_module, "compare_coverage_facts", fake_coverage)
+    monkeypatch.setattr(compare_workflow, "compare_coverage_facts", fake_coverage)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.compare_cmd(_BASELINE_ID, _TARGET_ID)
@@ -236,10 +241,10 @@ def test_compare_with_neither_side_coverage_still_emits_regression(
     `unavailable` block."""
 
     monkeypatch.setattr(
-        app_module, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
+        compare_workflow, "compare_runs", lambda *_a, **_k: _make_regression_fact_set()
     )
     monkeypatch.setattr(
-        app_module,
+        compare_workflow,
         "compare_coverage_facts",
         lambda _s, b, t: CoverageUnavailable(
             reason=REASON_MISSING_DERIVED_FACTS,
@@ -271,7 +276,7 @@ def test_compare_with_tombstoned_target_emits_regression_unavailable(
     target_ref = RunReference(run_id=_TARGET_ID, created_at=1)
 
     monkeypatch.setattr(
-        app_module,
+        compare_workflow,
         "compare_runs",
         lambda *_a, **_k: RegressionUnavailable(
             reason=REASON_RUN_TOMBSTONED,
@@ -281,7 +286,7 @@ def test_compare_with_tombstoned_target_emits_regression_unavailable(
         ),
     )
     monkeypatch.setattr(
-        app_module,
+        compare_workflow,
         "compare_coverage_facts",
         lambda _s, b, t: CoverageUnavailable(
             reason=REASON_MISSING_DERIVED_FACTS,
@@ -315,7 +320,7 @@ def test_compare_with_engine_mismatch_carries_both_unavailable_blocks(
     baseline_ref = RunReference(run_id=_BASELINE_ID, created_at=1)
     target_ref = RunReference(run_id=_TARGET_ID, created_at=1)
     monkeypatch.setattr(
-        app_module,
+        compare_workflow,
         "compare_runs",
         lambda *_a, **_k: RegressionUnavailable(
             reason=REASON_ENGINE_MISMATCH,
@@ -325,7 +330,7 @@ def test_compare_with_engine_mismatch_carries_both_unavailable_blocks(
         ),
     )
     monkeypatch.setattr(
-        app_module,
+        compare_workflow,
         "compare_coverage_facts",
         lambda _s, b, t: CoverageUnavailable(
             reason=REASON_MISSING_DERIVED_FACTS,
@@ -361,8 +366,8 @@ def test_compare_returns_not_found_for_fake_baseline_id(
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("engine called when baseline lookup failed")
 
-    monkeypatch.setattr(app_module, "compare_runs", must_not_be_called)
-    monkeypatch.setattr(app_module, "compare_coverage_facts", must_not_be_called)
+    monkeypatch.setattr(compare_workflow, "compare_runs", must_not_be_called)
+    monkeypatch.setattr(compare_workflow, "compare_coverage_facts", must_not_be_called)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.compare_cmd("fake-id", _TARGET_ID)

@@ -1,17 +1,19 @@
 """Unit tests for the ``novetest replay`` CLI envelope projection.
 
-Pins the pure ``_build_replay_envelope`` / ``_replay_outcome_payload``
-mapping in ``cli/app.py`` — the exit-code split (§5.3) and the wire shape
-(§1.5) — without spawning a subprocess. The end-to-end engine behaviour is
+Pins the pure ``_build_replay_envelope`` mapping in ``cli/app.py`` — the
+exit-code split (§5.3) — and the shared ``replay_outcome_payload`` wire
+shape (§1.5; single-sourced in ``orchestration/projection.py`` since
+W2/S23) without spawning a subprocess. The end-to-end engine behaviour is
 covered by ``tests/integration/replay/``.
 """
 
 from __future__ import annotations
 
-from novetest.cli.app import _build_replay_envelope, _replay_outcome_payload
+from novetest.cli.app import _build_replay_envelope
 from novetest.cli.output import EXIT_ENGINE_MISSING, EXIT_OK, EXIT_USAGE
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_reference import RunReference
+from novetest.orchestration.projection import replay_outcome_payload
 from novetest.replay import (
     REASON_CONTEXT_RECONSTRUCTION_FAILED,
     REASON_ENGINE_NOT_READY,
@@ -39,13 +41,13 @@ def _result(classification: str, **kw: object) -> ReplayResult:
 
 
 # ---------------------------------------------------------------------------
-# _replay_outcome_payload — wire shape
+# replay_outcome_payload — wire shape (shared projection)
 # ---------------------------------------------------------------------------
 
 
 def test_payload_for_result_is_replay_result_kind_without_run_reference() -> None:
     result = _result("inconsistent", test_id="tests/t.py::t")
-    payload = _replay_outcome_payload(result)
+    payload = replay_outcome_payload(result)
     assert payload["kind"] == "replay-result"
     assert payload["classification"] == "inconsistent"
     assert payload["reruns_total"] == 5
@@ -61,7 +63,7 @@ def test_payload_for_unavailable_is_unavailable_kind() -> None:
         reason=REASON_TOMBSTONED_ORIGINAL,
         detail="tombstoned",
     )
-    payload = _replay_outcome_payload(unavailable)
+    payload = replay_outcome_payload(unavailable)
     assert payload["kind"] == "unavailable"
     assert payload["reason"] == REASON_TOMBSTONED_ORIGINAL
     assert payload["detail"] == "tombstoned"

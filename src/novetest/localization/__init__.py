@@ -76,6 +76,7 @@ from novetest.localization.failure_proximity import (
     parse_failure_log,
     resolve_failure_text,
 )
+from novetest.localization.persistence import invalidate_localization_findings
 from novetest.localization.results import (
     KNOWN_REASONS,
     REASON_MISSING_DERIVED_FACTS,
@@ -128,6 +129,7 @@ __all__ = [
     "derive_latest_localization",
     "derive_localization_findings",
     "get_localization_findings",
+    "invalidate_localization_findings",
     "parse_failure_log",
     "resolve_failure_text",
     "resolve_latest_analyzable_run",

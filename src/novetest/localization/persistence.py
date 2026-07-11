@@ -38,6 +38,11 @@ def localization_findings_path(store: ProjectStore, run_id: str) -> Path:
     return localization_findings_dir(store, run_id) / LOCALIZATION_FINDINGS_FILENAME
 
 
+def invalidate_localization_findings(store: ProjectStore, run_id: str) -> None:
+    """Remove the persisted findings cache for ``run_id``; missing cache is a no-op."""
+    localization_findings_path(store, run_id).unlink(missing_ok=True)
+
+
 def write_localization_findings(
     store: ProjectStore, finding: LocalizationFinding
 ) -> Path:

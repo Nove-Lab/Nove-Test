@@ -33,6 +33,12 @@ from novetest.memory import (
 )
 from novetest.models import MemoryEntry, ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet
+from novetest.orchestration.projection import (
+    coverage_outcome_payload,
+    localization_outcome_payload,
+    regression_outcome_payload,
+    replay_outcome_payload,
+)
 from novetest.regression import (
     REASON_NO_COMPARABLE_BASELINE,
     RegressionFactSet,
@@ -86,12 +92,12 @@ class InspectView:
                 "summary_counts": dict(record.summary_counts),
                 "tombstoned": self.entry.tombstoned_at is not None,
             },
-            "coverage_outcome": _coverage_outcome_section(self.coverage_outcome),
-            "regression_outcome": _regression_outcome_section(self.regression_outcome),
-            "localization_outcome": _localization_outcome_section(
+            "coverage_outcome": coverage_outcome_payload(self.coverage_outcome),
+            "regression_outcome": regression_outcome_payload(self.regression_outcome),
+            "localization_outcome": localization_outcome_payload(
                 self.localization_outcome
             ),
-            "replay_outcome": _replay_outcome_section(self.replay_outcome),
+            "replay_outcome": replay_outcome_payload(self.replay_outcome),
             "sub_reports": {
                 "coverage": "available" if coverage_present else "unavailable",
                 "regression": "available" if regression_present else "unavailable",
@@ -198,121 +204,11 @@ def _resolve_inspect_localization(
     NEVER derives (no subprocess, no SBFL math), mirroring the Coverage
     section's ``get_coverage_facts`` behavior. A run that is analyzable but
     has not had ``novetest localization`` run against it therefore surfaces
-    ``LocalizationUnavailable(reason="missing_derived_facts")`` — the engine
+    ``LocalizationUnavailable(reason="missing-derived-facts")`` — the engine
     fills ``run_reference`` + the ``"findings not yet derived"`` detail when
-    the input ref resolves but the cache is empty. (The ``no_failed_tests`` /
-    ``no_coverage`` reasons only fire from ``derive_localization_findings``,
+    the input ref resolves but the cache is empty. (The ``no-failed-tests`` /
+    ``no-coverage`` reasons only fire from ``derive_localization_findings``,
     never from this cache-only path.)
     """
 
     return get_localization_findings(store, inspected.run_record.run_reference)
-
-
-def _coverage_outcome_section(
-    outcome: CoverageFactSet | CoverageUnavailable,
-) -> dict[str, object]:
-    """Project a Coverage outcome onto the frozen ``coverage_outcome`` shape.
-
-    Identical wire shape to ``cli/app.py::_coverage_outcome_payload`` — the
-    two cannot share a single function without an orchestration↔cli import
-    cycle, and the shape is frozen by
-    ``decisions/2026-05-16-coverage-outcome-envelope-shape.md`` so the
-    duplication carries no drift risk.
-    """
-
-    if isinstance(outcome, CoverageFactSet):
-        return {
-            "kind": "fact-set",
-            "run_reference": outcome.run_reference.to_dict(),
-            "mapping_granularity": outcome.mapping_granularity,
-            "summary": outcome.summary.to_dict(),
-        }
-    return {
-        "kind": "unavailable",
-        "run_reference": (
-            outcome.run_reference.to_dict()
-            if outcome.run_reference is not None
-            else None
-        ),
-        "reason": outcome.reason,
-        "detail": outcome.detail,
-    }
-
-
-def _regression_outcome_section(
-    outcome: RegressionFactSet | RegressionUnavailable,
-) -> dict[str, object]:
-    """Project a Regression outcome onto the working-draft ``regression_outcome`` shape.
-
-    Identical wire shape to ``cli/app.py::_regression_outcome_payload`` —
-    the same orchestration↔cli import-cycle reason the Coverage analog
-    duplicates its projection. Shape is the working draft per
-    ``decisions/2026-05-26-regression-facts-json-layout.md`` §C.2; PM
-    freezes it via a follow-up decision after Manual Test fields it. Once
-    frozen, drift risk is bounded.
-    """
-
-    if isinstance(outcome, RegressionFactSet):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        return {"kind": "fact-set", **body}
-    return {
-        "kind": "unavailable",
-        "baseline_run_reference": (
-            outcome.baseline_run_reference.to_dict()
-            if outcome.baseline_run_reference is not None
-            else None
-        ),
-        "target_run_reference": (
-            outcome.target_run_reference.to_dict()
-            if outcome.target_run_reference is not None
-            else None
-        ),
-        "reason": outcome.reason,
-        "detail": outcome.detail,
-    }
-
-
-def _localization_outcome_section(
-    outcome: LocalizationFinding | LocalizationUnavailable,
-) -> dict[str, object]:
-    """Project a Localization outcome onto the working-draft ``localization_outcome`` shape.
-
-    Identical wire shape to ``cli/app.py::_localization_outcome_payload`` —
-    the same orchestration↔cli import-cycle reason the Coverage / Regression
-    analogs duplicate their projections. ``fact-set`` carries the verbatim
-    ``LocalizationFinding.to_dict()`` with the top-level ``schema_version``
-    stripped; ``unavailable`` carries the 3-key
-    ``LocalizationUnavailable.to_dict()``. Shape is the working draft (the
-    finding shape itself is frozen by
-    ``decisions/2026-05-28-localization-finding-shape-v2.md``; PM freezes the
-    envelope projection via a follow-up decision after Manual Test fields it).
-    """
-
-    if isinstance(outcome, LocalizationFinding):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        return {"kind": "fact-set", **body}
-    return {"kind": "unavailable", **outcome.to_dict()}
-
-
-def _replay_outcome_section(
-    outcome: ReplayResult | ReplayUnavailable,
-) -> dict[str, object]:
-    """Project a Replay outcome onto the frozen ``replay_outcome`` shape.
-
-    Identical wire shape to ``cli/app.py::_replay_outcome_payload`` — the same
-    orchestration↔cli import-cycle reason the Coverage / Regression /
-    Localization analogs duplicate their projections. A ``ReplayResult``
-    surfaces as ``kind: "replay-result"`` with the full classification block
-    (the original ``run_reference`` is omitted from the inner block — the
-    inspect view already carries it at the top level); a ``ReplayUnavailable``
-    surfaces as the 3-key ``kind: "unavailable"`` block.
-    """
-
-    if isinstance(outcome, ReplayResult):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        body.pop("run_reference", None)
-        return {"kind": "replay-result", **body}
-    return {"kind": "unavailable", **outcome.to_dict()}

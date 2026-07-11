@@ -26,21 +26,14 @@ from novetest.cli.output import (
     run_status_to_ok_exit,
 )
 from novetest.coverage import (
-    CoverageUnavailable,
     compare_coverage_facts,
     get_coverage_facts,
 )
-from novetest.coverage.compare import CoverageDelta
 from novetest.localization import (
     DEFAULT_FORMULA,
     DEFAULT_TOP_N,
     FORMULAS,
-    LocalizationFinding,
-    LocalizationUnavailable,
-    derive_latest_localization,
-    derive_localization_findings,
 )
-from novetest.localization.persistence import localization_findings_path
 from novetest.memory import (
     ProjectStore,
     ProjectStoreCorruptError,
@@ -51,7 +44,6 @@ from novetest.memory import (
     retrieve_run_evidence,
 )
 from novetest.models import ReplayResult, RunReference
-from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.orchestration.anchor_resolution import (
     EngineAmbiguousError,
     WorkspaceEngineUndetectedError,
@@ -59,18 +51,28 @@ from novetest.orchestration.anchor_resolution import (
 )
 from novetest.orchestration.onboarding.command_surface import describe_command_surface
 from novetest.orchestration.onboarding.identity import report_cli_identity
+from novetest.orchestration.projection import (
+    coverage_delta_payload,
+    coverage_outcome_payload,
+    localization_outcome_payload,
+    regression_outcome_payload,
+    replay_outcome_payload,
+)
 from novetest.orchestration.workflows import (
+    CacheRederivedAudit,
     InitEngineAmbiguous,
     InitNoEngineDetected,
+    LocalizationAudit,
+    build_compare_view,
     build_inspect_view,
     build_status_view,
+    derive_latest_localization_with_flag_policy,
+    derive_localization_with_flag_policy,
     initialize_project_workspace,
     run_target_in_store,
     test_target_in_store,
 )
 from novetest.regression import (
-    RegressionFactSet,
-    RegressionUnavailable,
     compare_runs,
     derive_latest_regression,
 )
@@ -719,42 +721,12 @@ def run_cmd(
 
     data: dict[str, Any] = {"memory_entry": entry.to_dict()}
     if outcome.coverage_outcome is not None:
-        data["coverage_outcome"] = _coverage_outcome_payload(outcome.coverage_outcome)
+        data["coverage_outcome"] = coverage_outcome_payload(outcome.coverage_outcome)
     envelope_warnings = _adapter_to_envelope_warnings(outcome.warnings)
     _emit_and_exit(
         Envelope(command="run", ok=ok, data=data, warnings=envelope_warnings),
         exit_code,
     )
-
-
-def _coverage_outcome_payload(
-    outcome: CoverageFactSet | CoverageUnavailable,
-) -> dict[str, Any]:
-    """Project a Coverage derive outcome onto the envelope wire shape.
-
-    Two ``kind`` values discriminate at parse time: ``fact-set`` carries
-    the granularity + summary, ``unavailable`` carries the reason + detail.
-    The ``run_reference`` block is present in both (None only when the
-    Run Reference itself could not be resolved — which cannot happen on
-    this code path because we just persisted the record).
-    """
-    if isinstance(outcome, CoverageFactSet):
-        return {
-            "kind": "fact-set",
-            "run_reference": outcome.run_reference.to_dict(),
-            "mapping_granularity": outcome.mapping_granularity,
-            "summary": outcome.summary.to_dict(),
-        }
-    return {
-        "kind": "unavailable",
-        "run_reference": (
-            outcome.run_reference.to_dict()
-            if outcome.run_reference is not None
-            else None
-        ),
-        "reason": outcome.reason,
-        "detail": outcome.detail,
-    }
 
 
 @app.command
@@ -1010,7 +982,7 @@ def coverage_show(run_id: str) -> None:
         Envelope(
             command="coverage.show",
             ok=True,
-            data={"coverage_outcome": _coverage_outcome_payload(outcome)},
+            data={"coverage_outcome": coverage_outcome_payload(outcome)},
         ),
         EXIT_OK,
     )
@@ -1033,40 +1005,10 @@ def coverage_diff(baseline_run_id: str, target_run_id: str) -> None:
         Envelope(
             command="coverage.diff",
             ok=True,
-            data={"coverage_delta": _coverage_delta_payload(outcome)},
+            data={"coverage_delta": coverage_delta_payload(outcome)},
         ),
         EXIT_OK,
     )
-
-
-def _coverage_delta_payload(
-    outcome: CoverageDelta | CoverageUnavailable,
-) -> dict[str, Any]:
-    """Project a Coverage compare outcome onto the envelope wire shape.
-
-    Two ``kind`` values discriminate at parse time: ``delta`` carries the
-    full delta payload (baseline + target references, both summaries, file
-    adds/removes, per-file deltas), ``unavailable`` carries the propagated
-    reason + detail from whichever side lacked derived facts. The persisted
-    ``schema_version`` is intentionally stripped on the wire (envelope
-    versioning lives at the top-level ``schema`` field, not inside
-    individual data blocks — same convention the ``coverage_outcome``
-    projection follows for ``fact-set``).
-    """
-    if isinstance(outcome, CoverageDelta):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        return {"kind": "delta", **body}
-    return {
-        "kind": "unavailable",
-        "run_reference": (
-            outcome.run_reference.to_dict()
-            if outcome.run_reference is not None
-            else None
-        ),
-        "reason": outcome.reason,
-        "detail": outcome.detail,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1107,7 +1049,7 @@ def regression_compare(baseline_run_id: str, target_run_id: str) -> None:
         Envelope(
             command="regression.compare",
             ok=True,
-            data={"regression_outcome": _regression_outcome_payload(outcome)},
+            data={"regression_outcome": regression_outcome_payload(outcome)},
         ),
         EXIT_OK,
     )
@@ -1131,7 +1073,7 @@ def regression_latest() -> None:
         Envelope(
             command="regression.latest",
             ok=True,
-            data={"regression_outcome": _regression_outcome_payload(outcome)},
+            data={"regression_outcome": regression_outcome_payload(outcome)},
         ),
         EXIT_OK,
     )
@@ -1141,72 +1083,24 @@ def regression_latest() -> None:
 def compare_cmd(baseline_run_id: str, target_run_id: str) -> None:
     """Composed Regression + Coverage view for a specific pair.
 
-    Emits both ``regression_outcome`` (from ``compare_runs``) and
-    ``coverage_delta`` (from ``compare_coverage_facts``) in the same
-    envelope. When either side lacks coverage facts, ``coverage_delta``
-    surfaces ``kind: "unavailable"`` with the propagated reason — the
-    same projection ``coverage diff`` emits. Distinct from
+    Thin transport over the ``build_compare_view`` workflow
+    (``orchestration/workflows/compare.py``), which emits both
+    ``regression_outcome`` (from ``compare_runs``) and ``coverage_delta``
+    (from ``compare_coverage_facts``) in the same envelope. When either
+    side lacks coverage facts, ``coverage_delta`` surfaces
+    ``kind: "unavailable"`` with the propagated reason — the same
+    projection ``coverage diff`` emits. Distinct from
     ``regression compare`` (which emits ``regression_outcome`` only).
     """
 
     store = _require_store("compare")
     baseline_ref = _resolve_run_reference(store, "compare", baseline_run_id)
     target_ref = _resolve_run_reference(store, "compare", target_run_id)
-    regression_outcome = compare_runs(store, baseline_ref, target_ref)
-    coverage_outcome = compare_coverage_facts(store, baseline_ref, target_ref)
+    view = build_compare_view(store, baseline_ref, target_ref)
     _emit_and_exit(
-        Envelope(
-            command="compare",
-            ok=True,
-            data={
-                "regression_outcome": _regression_outcome_payload(regression_outcome),
-                "coverage_delta": _coverage_delta_payload(coverage_outcome),
-            },
-        ),
+        Envelope(command="compare", ok=True, data=view.to_dict()),
         EXIT_OK,
     )
-
-
-def _regression_outcome_payload(
-    outcome: RegressionFactSet | RegressionUnavailable,
-) -> dict[str, Any]:
-    """Project a Regression outcome onto the envelope wire shape.
-
-    Working draft for this slice — the shape is **not** frozen yet. Per
-    ``decisions/2026-05-26-regression-facts-json-layout.md`` §C.2 cadence
-    PM freezes the wire shape AFTER Manual Test fields it; until then
-    consumers should pattern-match on ``kind`` only (the same advice the
-    two Coverage envelope shapes followed before their decisions landed).
-
-    Two ``kind`` values discriminate at parse time: ``fact-set`` carries
-    the full persisted body (verbatim ``RegressionFactSet.to_dict()`` with
-    ``schema_version`` stripped — envelope versioning lives at the top-
-    level ``schema`` field, not inside individual data blocks), and
-    ``unavailable`` carries both ``baseline_run_reference`` and
-    ``target_run_reference`` as **independently nullable** fields so the
-    consumer can tell which side was missing (richer than Coverage's
-    single-``run_reference`` Unavailable shape).
-    """
-
-    if isinstance(outcome, RegressionFactSet):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        return {"kind": "fact-set", **body}
-    return {
-        "kind": "unavailable",
-        "baseline_run_reference": (
-            outcome.baseline_run_reference.to_dict()
-            if outcome.baseline_run_reference is not None
-            else None
-        ),
-        "target_run_reference": (
-            outcome.target_run_reference.to_dict()
-            if outcome.target_run_reference is not None
-            else None
-        ),
-        "reason": outcome.reason,
-        "detail": outcome.detail,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1293,11 +1187,12 @@ def localization_run(
 
     Cache-invalidation policy (Defect 5 fix, 2026-06-01): when the engine
     serves from cache AND the user explicitly passed ``--formula`` /
-    ``--top-n`` differing from the cached values, the orchestration layer
-    invalidates the cache and re-derives at the requested flags
-    (``_rederive_if_cache_overrode_flags`` below). The audit signal
-    surfaces as the ``localization-cache-rederived`` envelope warning;
-    pre-Defect-5 the same condition surfaced as
+    ``--top-n`` differing from the cached values, the orchestration
+    workflow (``orchestration/workflows/localization.py``) invalidates
+    the cache and re-derives at the requested flags. The audit signal
+    surfaces as the ``localization-cache-rederived`` envelope warning
+    (built HERE from the workflow's audit structure — warning wording is
+    transport-owned); pre-Defect-5 the same condition surfaced as
     ``localization-cache-args-ignored`` and the stale cached result was
     returned. See task brief / history at
     ``agent-comms/history/2026-06-01-defect4-closed-and-defects-5-6-surfaced.md``
@@ -1311,22 +1206,20 @@ def localization_run(
     resolved_top_n = top_n if top_n is not None else DEFAULT_TOP_N
     _validate_localization_flags("localization", resolved_formula, resolved_top_n)
     ref = _resolve_run_reference(store, "localization", run_id)
-    outcome = derive_localization_findings(
-        store, ref, top_n=resolved_top_n, formula=resolved_formula
-    )
-    outcome, warning = _rederive_if_cache_overrode_flags(
-        store=store,
-        outcome=outcome,
-        resolved_formula=resolved_formula,
-        resolved_top_n=resolved_top_n,
+    outcome, audit = derive_localization_with_flag_policy(
+        store,
+        ref,
+        formula=resolved_formula,
+        top_n=resolved_top_n,
         formula_explicit=formula_explicit,
         top_n_explicit=top_n_explicit,
     )
+    warning = _localization_audit_warning(audit)
     _emit_and_exit(
         Envelope(
             command="localization",
             ok=True,
-            data={"localization_outcome": _localization_outcome_payload(outcome)},
+            data={"localization_outcome": localization_outcome_payload(outcome)},
             warnings=(warning,) if warning is not None else (),
         ),
         EXIT_OK,
@@ -1344,16 +1237,16 @@ def localization_latest(
     Composes the engine's ``derive_latest_localization`` end-to-end:
     newest-first walk of Run History → first run that passes the
     availability probe → ``derive_localization_findings``. An empty store
-    surfaces ``unavailable`` with reason ``no_run_evidence``; a store whose
-    runs are all non-analyzable surfaces ``run_not_analyzable``. Flag
+    surfaces ``unavailable`` with reason ``no-run-evidence``; a store whose
+    runs are all non-analyzable surfaces ``run-not-analyzable``. Flag
     validation mirrors the explicit-run verb.
 
     Cache-invalidation policy matches the explicit-run verb (Defect 5 fix):
     the ``None`` sentinel defaults let the handler distinguish "user
     explicitly passed this value" from "Cyclopts default in effect", and an
     explicit-flag mismatch against the cached findings triggers a re-derive
-    + ``localization-cache-rederived`` warning via
-    ``_rederive_if_cache_overrode_flags``.
+    + ``localization-cache-rederived`` warning via the shared
+    ``derive_latest_localization_with_flag_policy`` workflow.
     """
 
     store = _require_store("localization.latest")
@@ -1364,156 +1257,56 @@ def localization_latest(
     _validate_localization_flags(
         "localization.latest", resolved_formula, resolved_top_n
     )
-    outcome = derive_latest_localization(
-        store, formula=resolved_formula, top_n=resolved_top_n
-    )
-    outcome, warning = _rederive_if_cache_overrode_flags(
-        store=store,
-        outcome=outcome,
-        resolved_formula=resolved_formula,
-        resolved_top_n=resolved_top_n,
+    outcome, audit = derive_latest_localization_with_flag_policy(
+        store,
+        formula=resolved_formula,
+        top_n=resolved_top_n,
         formula_explicit=formula_explicit,
         top_n_explicit=top_n_explicit,
     )
+    warning = _localization_audit_warning(audit)
     _emit_and_exit(
         Envelope(
             command="localization.latest",
             ok=True,
-            data={"localization_outcome": _localization_outcome_payload(outcome)},
+            data={"localization_outcome": localization_outcome_payload(outcome)},
             warnings=(warning,) if warning is not None else (),
         ),
         EXIT_OK,
     )
 
 
-def _rederive_if_cache_overrode_flags(
-    *,
-    store: ProjectStore,
-    outcome: LocalizationFinding | LocalizationUnavailable,
-    resolved_formula: str,
-    resolved_top_n: int,
-    formula_explicit: bool,
-    top_n_explicit: bool,
-) -> tuple[
-    LocalizationFinding | LocalizationUnavailable,
-    EnvelopeWarning | None,
-]:
-    """Cache-invalidation policy gate (Defect 5 fix, 2026-06-01).
+def _localization_audit_warning(
+    audit: LocalizationAudit | None,
+) -> EnvelopeWarning | None:
+    """Project a localization workflow audit onto its ``EnvelopeWarning``.
 
-    Pre-Defect-5 behavior: when the engine served from cache while the user
-    explicitly passed ``--formula`` / ``--top-n`` differing from the cached
-    values, the CLI surfaced a ``localization-cache-args-ignored`` warning
-    AND returned the stale cached finding (so the AI agent saw a wire
-    envelope claiming ``formula: "ochiai"`` while their request said
-    ``--formula=op2``). The warning disclosed the bug; the behavior was
-    still wrong.
-
-    Post-Defect-5: same detection model — explicit-and-different becomes
-    the trigger — but instead of returning stale + warning, we INVALIDATE
-    the cache (unlink the on-disk ``localization_findings.json``) and
-    invoke ``derive_localization_findings`` again. The second call sees a
-    cache miss and runs the full pipeline at the requested flags,
-    persisting the fresh result. The audit signal is preserved via a new
-    warning code ``localization-cache-rederived`` whose details carry the
-    PREVIOUS cached (formula, top_n) pair plus the resolved request — so
-    AI agents know they paid the re-compute cost and what the cache used
-    to be.
-
-    Detection model — "peek-after-call" via the returned
-    ``LocalizationFinding``:
-
-    - A fresh derive (no prior cache) always returns a finding whose
-      ``formula`` / ``top_n`` match the values passed to the engine
-      (because the engine writes them straight onto the payload). So if
-      ``outcome.formula == resolved_formula`` AND
-      ``outcome.top_n == resolved_top_n``, either there was no prior
-      cache OR the prior cache's stored flags happened to match — both
-      cases require no re-derive.
-    - A cache hit returns the cached finding verbatim, so its
-      ``formula`` / ``top_n`` reflect the FLAGS the cache was originally
-      derived with. A mismatch on either field — combined with the user
-      having explicitly passed that flag — is the precise condition for
-      cache invalidation + re-derive.
-    - When the outcome is ``LocalizationUnavailable``, there's nothing
-      cached to honor (or the engine pre-empted with an error reason);
-      pass through.
-
-    Per scope §1 of the task brief, the ``*_explicit`` gating means a
-    defaulted flag that happens to differ from the cache produces NO
-    re-derive for that flag — the user did not ask for a specific value
-    so the cached choice stands.
-
-    The on-disk path layout is pinned by ``localization/persistence.py``;
-    we use the canonical ``localization_findings_path`` helper to compute
-    the file to unlink so the invalidation point stays load-bearing-
-    aligned with Memory's availability probe and the persistence layer's
-    write path.
+    The cache-override POLICY (Defect 5 detection + invalidation +
+    re-derive, Defect 7 formula-noop carve-out) lives in
+    ``orchestration/workflows/localization.py`` (W2/S22, ORC-07/XCT-02);
+    the workflow reports WHAT happened via an audit structure and this
+    transport-side mapper owns the wire wording: a
+    :class:`CacheRederivedAudit` becomes the
+    ``localization-cache-rederived`` warning, a :class:`FormulaNoopAudit`
+    becomes ``localization-formula-noop-in-mode``, and ``None`` (no
+    policy event) stays warning-free.
     """
-    if not isinstance(outcome, LocalizationFinding):
-        return outcome, None
-    cached_formula = outcome.formula
-    cached_top_n = outcome.top_n
-    formula_mismatch = formula_explicit and resolved_formula != cached_formula
-    top_n_mismatch = top_n_explicit and resolved_top_n != cached_top_n
-    if not (formula_mismatch or top_n_mismatch):
-        return outcome, None
-
-    # Defect 7 fix (2026-06-08): ``failure_proximity`` mode reports
-    # ``formula = "ochiai"`` as a structural placeholder regardless of
-    # ``--formula`` input (the mode runs a heuristic frequency count, not
-    # any SBFL formula — see ``localization/failure_proximity.py::
-    # _PLACEHOLDER_FORMULA``). A formula-mismatch against this placeholder
-    # is therefore a structural noop: re-deriving cannot resolve it
-    # (engine returns the same placeholder on every call), and the
-    # cache-rederived warning would keep firing on every user retry —
-    # an infinite warning loop visible to AI agents iterating on the
-    # ``--formula`` flag. Skip the re-derive and surface a distinct
-    # ``localization-formula-noop-in-mode`` warning so the AI consumer
-    # recognizes this as "structural noop, do not retry" rather than
-    # "fixable misconfig, retry with a different value".
-    #
-    # NOTE: a ``top_n`` mismatch in ``failure_proximity`` mode IS still
-    # meaningful (the entry-count of the heuristic ranking changes), so
-    # this carve-out only applies when ``formula_mismatch`` is the
-    # *sole* trigger. A failure_proximity run with ``top_n_mismatch``
-    # (whether or not formula also mismatches) still goes through the
-    # normal re-derive path so the user's top_n request takes effect;
-    # the cache-rederived warning's ``previous`` field discloses the
-    # formula placeholder transition without needing a second warning.
-    is_failure_proximity_formula_noop = (
-        outcome.mode == "failure_proximity"
-        and formula_mismatch
-        and not top_n_mismatch
-    )
-    if is_failure_proximity_formula_noop:
-        warning = _build_localization_formula_noop_warning(
-            requested_formula=resolved_formula,
-            returned_formula=cached_formula,
-            mode=outcome.mode,
+    if audit is None:
+        return None
+    if isinstance(audit, CacheRederivedAudit):
+        return _build_localization_cache_rederived_warning(
+            run_id=audit.run_id,
+            previous_cached_args=(audit.previous_formula, audit.previous_top_n),
+            resolved_formula=audit.requested_formula,
+            resolved_top_n=audit.requested_top_n,
+            formula_explicit=audit.formula_explicit,
+            top_n_explicit=audit.top_n_explicit,
         )
-        return outcome, warning
-
-    # Cache hit served stale-vs-explicit-flags. Invalidate the persisted
-    # findings file so the second derive call sees a cache miss and runs
-    # the full pipeline at the requested flags.
-    run_reference = outcome.run_reference
-    previous_cached_args = (cached_formula, cached_top_n)
-    localization_findings_path(store, run_reference.run_id).unlink(missing_ok=True)
-    fresh = derive_localization_findings(
-        store,
-        run_reference,
-        top_n=resolved_top_n,
-        formula=resolved_formula,
+    return _build_localization_formula_noop_warning(
+        requested_formula=audit.requested_formula,
+        returned_formula=audit.returned_formula,
+        mode=audit.mode,
     )
-    warning = _build_localization_cache_rederived_warning(
-        run_id=run_reference.run_id,
-        previous_cached_args=previous_cached_args,
-        resolved_formula=resolved_formula,
-        resolved_top_n=resolved_top_n,
-        formula_explicit=formula_explicit,
-        top_n_explicit=top_n_explicit,
-    )
-    return fresh, warning
 
 
 def _build_localization_cache_rederived_warning(
@@ -1527,9 +1320,11 @@ def _build_localization_cache_rederived_warning(
 ) -> EnvelopeWarning:
     """Format the ``localization-cache-rederived`` warning payload.
 
-    The caller (``_rederive_if_cache_overrode_flags``) has already
-    determined that a re-derive happened, so this helper always emits a
-    warning — its job is just payload construction. The ``details`` shape
+    The workflow policy (``orchestration/workflows/localization.py``) has
+    already determined that a re-derive happened — this helper is reached
+    only via ``_localization_audit_warning`` on a ``CacheRederivedAudit``,
+    so it always emits a warning; its job is just payload construction.
+    The ``details`` shape
     is the symmetric counterpart of the pre-Defect-5
     ``localization-cache-args-ignored`` warning: ``previous`` (what the
     cache held), ``requested`` (what the user asked for), ``cache_path``
@@ -1542,7 +1337,7 @@ def _build_localization_cache_rederived_warning(
     probe both reference the exact
     ``<store>/localization/findings/run_<id>/localization_findings.json``
     path. Hardcoding the template here avoids a redundant disk read and
-    keeps the orchestration layer self-contained.
+    keeps the transport-side warning construction self-contained.
     """
     prev_formula, prev_top_n = previous_cached_args
     cache_path = (
@@ -1580,13 +1375,13 @@ def _build_localization_formula_noop_warning(
 ) -> EnvelopeWarning:
     """Format the ``localization-formula-noop-in-mode`` warning payload.
 
-    Emitted by ``_rederive_if_cache_overrode_flags`` when the user passes
-    an explicit ``--formula`` that mismatches the cached/returned value
-    AND the engine's mode is one whose formula field is a structural
-    placeholder rather than a real selection (today: only
-    ``failure_proximity``, which always reports ``formula = "ochiai"``
-    regardless of input — see ``localization/failure_proximity.py::
-    _PLACEHOLDER_FORMULA``).
+    Emitted (via ``_localization_audit_warning`` on a ``FormulaNoopAudit``
+    from the workflow policy) when the user passes an explicit
+    ``--formula`` that mismatches the cached/returned value AND the
+    engine's mode is one whose formula field is a structural placeholder
+    rather than a real selection (today: only ``failure_proximity``,
+    which always reports ``formula = "ochiai"`` regardless of input —
+    see ``localization/failure_proximity.py::_PLACEHOLDER_FORMULA``).
 
     This warning is the AI-agent-facing signal that the requested
     ``--formula`` is a noop in the current mode: re-running with a
@@ -1620,32 +1415,6 @@ def _build_localization_formula_noop_warning(
             "mode": mode,
         },
     )
-
-
-def _localization_outcome_payload(
-    outcome: LocalizationFinding | LocalizationUnavailable,
-) -> dict[str, Any]:
-    """Project a Localization outcome onto the working-draft wire shape.
-
-    Working draft for this slice — PM freezes it via a follow-up decision
-    after Manual Test fields it (the 4th application of the ship →
-    field-test → freeze cadence Coverage and Regression followed). Two
-    ``kind`` values discriminate at parse time: ``fact-set`` carries the
-    full persisted body (verbatim ``LocalizationFinding.to_dict()`` with the
-    top-level ``schema_version`` stripped — envelope versioning lives at the
-    top-level ``schema`` field, not inside data blocks), and ``unavailable``
-    carries the 3-key ``LocalizationUnavailable.to_dict()`` (``run_reference``
-    / ``reason`` / ``detail``, all always present; ``run_reference`` is
-    ``null`` for the latest-resolution empty / non-analyzable cases). The
-    nested ``LocalizationEntry`` / ``CodeLocation`` / ``EvidenceCitation``
-    shapes round-trip verbatim — the projection's only job is to add ``kind``
-    and strip the top-level ``schema_version``.
-    """
-    if isinstance(outcome, LocalizationFinding):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        return {"kind": "fact-set", **body}
-    return {"kind": "unavailable", **outcome.to_dict()}
 
 
 # ---------------------------------------------------------------------------
@@ -1777,26 +1546,6 @@ def test_cmd(
 # ---------------------------------------------------------------------------
 
 
-def _replay_outcome_payload(
-    outcome: ReplayResult | ReplayUnavailable,
-) -> dict[str, Any]:
-    """Project a Replay outcome onto the frozen ``replay_outcome`` block.
-
-    Identical wire shape to ``workflows/inspect.py::_replay_outcome_section``
-    (the two cannot share without an orchestration↔cli import cycle). A
-    ``ReplayResult`` surfaces as ``kind: "replay-result"`` with the full
-    classification block (the original ``run_reference`` is dropped — the
-    envelope carries it as ``data.original_run_reference``); a
-    ``ReplayUnavailable`` surfaces as the 3-key ``kind: "unavailable"`` block.
-    """
-    if isinstance(outcome, ReplayResult):
-        body = outcome.to_dict()
-        body.pop("schema_version", None)
-        body.pop("run_reference", None)
-        return {"kind": "replay-result", **body}
-    return {"kind": "unavailable", **outcome.to_dict()}
-
-
 def _build_replay_envelope(
     original_ref: RunReference, outcome: ReplayResult | ReplayUnavailable
 ) -> tuple[Envelope, int]:
@@ -1814,7 +1563,7 @@ def _build_replay_envelope(
     """
     data: dict[str, Any] = {
         "original_run_reference": original_ref.to_dict(),
-        "replay_outcome": _replay_outcome_payload(outcome),
+        "replay_outcome": replay_outcome_payload(outcome),
     }
     if isinstance(outcome, ReplayResult):
         return Envelope(command="replay", ok=True, data=data), EXIT_OK

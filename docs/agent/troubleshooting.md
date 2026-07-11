@@ -457,6 +457,7 @@ for observability:
 | `ambiguous-project-layout` | xunit | Multiple candidate test projects. |
 | `coverlet-below-floor` | xunit | Coverlet below the 6.0.2 floor; coverage degraded to aggregate mode. |
 | `coverlet-absent` | xunit | `--coverage` requested but `coverlet.collector` not in the package graph; coverage not collected. |
+| `corrupt-run-record-skipped` | memory | A corrupt `record.json` was skipped during a history scan (`memory list` / `show` / `delete`). The message carries the corrupt file's absolute path verbatim; `details.path` holds the same path. Healthy runs still return. |
 
 ---
 

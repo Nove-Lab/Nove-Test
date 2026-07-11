@@ -1,10 +1,13 @@
 """Unit tests for the `novetest localization <run_id>` CLI handler.
 
 Covers the orchestration-to-envelope projection: store lookup → flag
-validation → run_reference lookup → engine call → envelope projection.
-The Localization engine seam (``derive_localization_findings``) and
-Memory's ``list_run_history`` are monkeypatched at the ``cli.app`` module
-so the unit tests never touch the filesystem.
+validation → run_reference lookup → workflow call → envelope projection.
+The Localization engine seam (``derive_localization_findings``) is
+monkeypatched at the ``orchestration/workflows/localization.py`` module
+(where the flag-override policy calls it since W2/S22); Memory's
+``list_run_history`` is monkeypatched at the ``cli.app`` module (the
+run_id lookup stayed transport-side). The unit tests never touch the
+filesystem.
 
 NOTE: These tests require ``localization_run`` to be registered in
 ``cli/app.py`` as ``localization_app.default``. If the handler is not yet
@@ -41,6 +44,7 @@ from novetest.models.localization_finding import (
     EvidenceCitation,
     LocalizationEntry,
 )
+from novetest.orchestration.workflows import localization as localization_workflow
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +221,7 @@ def test_localization_run_emits_fact_set_envelope(
     ) -> LocalizationFinding:
         return finding
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
@@ -262,7 +266,7 @@ def test_localization_run_cache_hit_preserves_derived_at(
 
     fixed_finding = _make_finding(derived_at=12345)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: fixed_finding,
     )
@@ -295,7 +299,7 @@ def test_localization_run_fake_run_id_returns_not_found(
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("derive_localization_findings must not be called")
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", must_not_be_called)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", must_not_be_called)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run("fake-run-id")
@@ -325,7 +329,7 @@ def test_localization_run_tombstoned_run_surfaces_run_not_analyzable(
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: LocalizationUnavailable(
             run_reference=ref,
@@ -361,7 +365,7 @@ def test_localization_run_no_failed_tests_surfaces_unavailable(
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: LocalizationUnavailable(
             run_reference=ref,
@@ -397,7 +401,7 @@ def test_localization_run_no_coverage_surfaces_unavailable(
 
     ref = RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: LocalizationUnavailable(
             run_reference=ref,
@@ -441,7 +445,7 @@ def test_localization_run_formula_flag_forwarded_to_engine(
         seen_formula.append(formula)
         return _make_finding(formula=formula)
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="op2")
@@ -476,7 +480,7 @@ def test_localization_run_bogus_formula_returns_invalid_flag(
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("derive_localization_findings called with bogus formula")
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", must_not_be_called)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", must_not_be_called)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="bogus")
@@ -509,7 +513,7 @@ def test_localization_run_top_n_flag_forwarded_to_engine(
         seen_top_n.append(top_n)
         return _make_finding(top_n=top_n)
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, top_n=3)
@@ -536,7 +540,7 @@ def test_localization_run_top_n_zero_returns_invalid_flag(
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("derive_localization_findings called with top_n=0")
 
-    monkeypatch.setattr(app_module, "derive_localization_findings", must_not_be_called)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", must_not_be_called)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, top_n=0)
@@ -557,13 +561,15 @@ def test_localization_run_top_n_zero_returns_invalid_flag(
 # at the requested flags, and surfaces a ``localization-cache-rederived``
 # warning carrying the previous (formula, top_n) for audit.
 #
-# Test pattern: monkeypatch ``derive_localization_findings`` with a
+# Test pattern: monkeypatch ``derive_localization_findings`` (at the
+# workflow module, where the policy lives since W2/S22) with a
 # side-effecting callable that returns the CACHED finding on first call,
-# the FRESH finding on subsequent calls. The CLI's first call hits the
-# cached payload; ``_rederive_if_cache_overrode_flags`` then unlinks the
-# (fake) cache path and re-calls the engine — that second call returns the
-# fresh finding. ``localization_findings_path`` is monkeypatched onto a
-# real ``tmp_path`` file so ``.unlink(missing_ok=True)`` is a real no-op.
+# the FRESH finding on subsequent calls. The workflow's first call hits
+# the cached payload; the flag-override policy then invalidates the
+# (fake) cache and re-calls the engine — that second call returns the
+# fresh finding. ``invalidate_localization_findings`` is monkeypatched
+# onto a real ``tmp_path`` file unlink so the invalidation side effect
+# stays observable (same missing_ok semantics as the real public API).
 # ---------------------------------------------------------------------------
 
 
@@ -572,22 +578,21 @@ _CACHE_WARN_CODE = "localization-cache-rederived"
 
 @pytest.fixture
 def stub_cache_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Wire ``app_module.localization_findings_path`` onto a tmp_path file.
+    """Wire the workflow's ``invalidate_localization_findings`` onto a tmp file.
 
-    The post-Defect-5 invalidation calls ``localization_findings_path(...).
-    unlink(missing_ok=True)``. Unit tests don't have a real store on disk,
-    so this fixture redirects the path computation onto a real tmp file
-    that ``unlink`` can safely operate against (idempotently after the
-    first call).
+    The post-Defect-5 invalidation calls the Localization engine's public
+    ``invalidate_localization_findings(store, run_id)`` (missing-cache is
+    a no-op). Unit tests don't have a real store on disk, so this fixture
+    redirects the invalidation onto a real tmp file unlink
+    (``missing_ok=True`` — idempotent after the first call) whose
+    existence the tests assert against.
     """
-    from pathlib import Path as _Path
-
     fake_cache = tmp_path / "fake_localization_findings.json"
     fake_cache.touch()
     monkeypatch.setattr(
-        app_module,
-        "localization_findings_path",
-        lambda *_a, **_k: fake_cache,
+        localization_workflow,
+        "invalidate_localization_findings",
+        lambda *_a, **_k: fake_cache.unlink(missing_ok=True),
     )
     return fake_cache
 
@@ -632,7 +637,7 @@ def test_localization_run_rederives_on_formula_only_mismatch(
     cached_finding = _make_finding(formula="ochiai", top_n=10)
     fresh_finding = _make_finding(formula="dstar2", top_n=10)
     fake_derive = _two_phase_derive(cached_finding, fresh_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="dstar2")
@@ -685,7 +690,7 @@ def test_localization_run_rederives_on_top_n_only_mismatch(
     cached_finding = _make_finding(formula="ochiai", top_n=10)
     fresh_finding = _make_finding(formula="ochiai", top_n=5)
     fake_derive = _two_phase_derive(cached_finding, fresh_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, top_n=5)
@@ -726,7 +731,7 @@ def test_localization_run_rederives_on_both_flag_mismatch(
     cached_finding = _make_finding(formula="ochiai", top_n=10)
     fresh_finding = _make_finding(formula="op2", top_n=3)
     fake_derive = _two_phase_derive(cached_finding, fresh_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="op2", top_n=3)
@@ -765,7 +770,7 @@ def test_localization_run_no_warning_when_request_matches_cache(
 
     matching_finding = _make_finding(formula="dstar2", top_n=5)
     fake_derive = _two_phase_derive(matching_finding, matching_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="dstar2", top_n=5)
@@ -794,7 +799,7 @@ def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
 
     cached_finding = _make_finding(formula="dstar2", top_n=3)
     fake_derive = _two_phase_derive(cached_finding, cached_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
@@ -829,7 +834,7 @@ def test_localization_run_no_warning_when_outcome_is_unavailable(
         detail="no failures",
     )
     monkeypatch.setattr(
-        app_module,
+        localization_workflow,
         "derive_localization_findings",
         lambda *_a, **_k: unavailable,
     )
@@ -857,10 +862,11 @@ def test_localization_run_no_warning_when_outcome_is_unavailable(
 # path treated this placeholder mismatch as a legitimate cache hit-vs-
 # explicit-flags collision and entered an infinite loop: every retry
 # unlinked the cache, re-derived, got the same placeholder back, and
-# emitted the same warning. Post-Defect-7, the CLI's
-# ``_rederive_if_cache_overrode_flags`` recognizes the placeholder
-# scenario and emits a single ``localization-formula-noop-in-mode``
-# warning WITHOUT triggering a re-derive — breaking the loop and
+# emitted the same warning. Post-Defect-7, the flag-override policy
+# (now in ``orchestration/workflows/localization.py``) recognizes the
+# placeholder scenario and reports a single
+# ``localization-formula-noop-in-mode`` warning (via the workflow's
+# ``FormulaNoopAudit``) WITHOUT triggering a re-derive — breaking the loop and
 # giving AI consumers a distinct "structural noop, do not retry"
 # signal instead of "fixable misconfig, retry".
 #
@@ -896,7 +902,7 @@ def test_localization_run_failure_proximity_default_formula_no_warning(
 
     finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
     fake_derive = _two_phase_derive(finding, finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
@@ -936,7 +942,7 @@ def test_localization_run_failure_proximity_non_default_formula_emits_noop_warni
 
     finding = _make_finding(formula="ochiai", top_n=10, mode="failure_proximity")
     fake_derive = _two_phase_derive(finding, finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="op2")
@@ -1003,7 +1009,7 @@ def test_localization_run_sbfl_default_formula_unchanged_behavior(
         formula="dstar2", top_n=7, mode="sbfl_per_test"
     )
     fake_derive = _two_phase_derive(cached_finding, cached_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
@@ -1039,7 +1045,7 @@ def test_localization_run_sbfl_non_default_formula_unchanged_behavior(
     cached_finding = _make_finding(formula="ochiai", top_n=10, mode="sbfl_per_test")
     fresh_finding = _make_finding(formula="op2", top_n=10, mode="sbfl_per_test")
     fake_derive = _two_phase_derive(cached_finding, fresh_finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="op2")
@@ -1100,7 +1106,7 @@ def test_localization_run_failure_proximity_non_default_formula_no_rederive_loop
     # implementation that calls twice would still pass the formula
     # assertions but FAIL the call-count + cache-existence checks below.
     fake_derive = _two_phase_derive(finding, finding)
-    monkeypatch.setattr(app_module, "derive_localization_findings", fake_derive)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID, formula="dstar2")
