@@ -4,7 +4,11 @@ Covers ``resolve_baseline_for_run``, ``resolve_latest_baseline``,
 ``derive_latest_regression``, and ``check_regression_availability`` against
 a real Project Store seeded via the same public ``store_run_evidence`` +
 ``delete_run_evidence`` seams the ``find_runs_for_target`` tests use. No
-mocking of Memory.
+mocking of Memory — with ONE deliberate exception: the XCT-07
+order-independence cases monkeypatch ``find_runs_for_target`` in the
+``compare`` namespace, because proving order-independence requires
+presenting adversarial candidate orderings a real (sorted) store cannot
+yield.
 
 - ``resolve_latest_baseline`` → 7 pure-series cases (empty, single,
   exact-two, reverse insertion order, three-runs, tombstoned-middle,
@@ -17,20 +21,35 @@ mocking of Memory.
 - ``check_regression_availability`` → 5 cases (unknown, no siblings, one
   sibling, all-siblings-tombstoned, tombstoned-input-with-live-sibling)
   + 2 engine-scoping cases.
+- XCT-07 / ANA-25 / ANA-26 (W2/S36) → 9 cases: composite-key
+  ``(created_at, run_id)`` tie-break (same-ms siblings orderable, pick =
+  closest predecessor, order-independent + repeated-run stable), honest
+  ``no-comparable-baseline`` detail (engine hint only when D5 filtering
+  actually excluded candidates), and probe/resolver parity.
 
 Engine scoping is D5 of
 ``agent-comms/decisions/2026-07-03-engine-selection-policy.md``: baseline /
 candidate selection for cross-run analyses filters by the target run's
 ``engine_name``; mixed-engine histories are legitimate (D3 transient
 ``--engine`` override) and must resolve to the nearest same-engine prior.
+
+Ordering convention (pinned verbatim in the W2/S36 task briefs, shared
+with Memory's storage-side sort tiebreak): total order on runs =
+lexicographic on the composite key ``(created_at, run_id)``; newest-first
+= descending on both components; "strictly older than target" =
+``(created_at, run_id) < (target.created_at, target.run_id)``; ``run_id``
+is a ULID string and plain string comparison is the tie component.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from itertools import permutations
 from pathlib import Path
 
-from novetest.memory.project_store import get_project_store_state
+import pytest
+
+from novetest.memory.project_store import ProjectStore, get_project_store_state
 from novetest.memory.store import delete_run_evidence
 from novetest.models.memory_entry import MemoryEntry
 from novetest.models.run_reference import RunReference
@@ -763,3 +782,319 @@ def test_check_same_engine_sibling_among_cross_engine_noise_returns_true(
         store, new_entry.run_record.run_reference
     )
     assert result is True
+
+
+# --- XCT-07 / ANA-25 / ANA-26: composite-key tie-break, honest detail, parity --
+#
+# Same-millisecond sibling runs are real (tight rerun loops — replay's
+# engine mints ULIDs back-to-back). The selector's order is the composite
+# key ``(created_at, run_id)``; the pick is the maximum key strictly below
+# the target's (the closest predecessor), computed by an order-independent
+# max-scan. Where a test needs a SPECIFIC candidate ordering (adversarial
+# shuffles, or a pinned newest-first head for ``resolve_latest_baseline``
+# among ties), it monkeypatches ``find_runs_for_target`` in the ``compare``
+# namespace instead of relying on filesystem enumeration order.
+
+
+def _fake_find_runs_factory(
+    presented: list[MemoryEntry],
+) -> Callable[..., list[MemoryEntry]]:
+    """Build a ``find_runs_for_target`` stand-in replaying ``presented``.
+
+    Mutate ``presented`` in place between calls to change the ordering the
+    selector sees. Signature mirrors the real seam (extra keywords accepted
+    and ignored).
+    """
+
+    def _fake(
+        _store: ProjectStore,
+        _target_expression: str,
+        *,
+        include_tombstoned: bool = False,
+        skipped: object = None,
+    ) -> list[MemoryEntry]:
+        return list(presented)
+
+    return _fake
+
+
+def test_baseline_for_run_same_ms_smaller_run_id_is_comparable(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """ANA-25 A/B honesty proof (predicate half): a sibling sharing the
+    target's ``created_at`` with a smaller ``run_id`` IS strictly older and
+    becomes the baseline. Pre-fix, the ``created_at >=`` skip made same-ms
+    siblings never comparable — reverting the predicate fails this test.
+    No ordering monkeypatch needed: the max-scan is order-independent."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    target_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_baseline_for_run(store, target_entry)
+    assert result is not None
+    assert result.run_id == "01TIEA"
+
+
+def test_baseline_for_run_same_ms_larger_run_id_is_not_comparable(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """The tie-break is a strict total order, not "any same-ms sibling":
+    probing the SMALLER-``run_id`` side of the tie finds nothing strictly
+    older, so no baseline resolves."""
+    target_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    assert resolve_baseline_for_run(store, target_entry) is None
+
+
+def test_baseline_for_run_tie_pick_is_order_independent(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tie-break determinism (the brief's headline case): same
+    ``created_at``, differing ``run_id``s, every candidate ordering (all 24
+    permutations), twice over → the identical pick each time: the closest
+    predecessor by composite key. Candidates for target ``(MID, 01TIEZ)``
+    are ``(OLD, 01AOLD)`` < ``(MID, 01TIEA)`` < ``(MID, 01TIEB)`` — the
+    pick is ``01TIEB``, never the older-ms run and never input-order
+    dependent."""
+    older = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01AOLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    tie_a = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    tie_b = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    target_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEZ", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+
+    presented: list[MemoryEntry] = []
+    monkeypatch.setattr(
+        "novetest.regression.compare.find_runs_for_target",
+        _fake_find_runs_factory(presented),
+    )
+    entries = [older, tie_a, tie_b, target_entry]
+    for _ in range(2):  # repeated-run stability
+        for perm in permutations(entries):
+            presented[:] = perm
+            result = resolve_baseline_for_run(store, target_entry)
+            assert result is not None
+            assert result.run_id == "01TIEB"
+
+
+def test_resolve_latest_two_same_ms_runs_now_compare(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ANA-25 A/B honesty proof (resolver half): two live same-ms siblings
+    on one target now yield a valid ``(baseline, target)`` pair. Pre-fix
+    this exact shape refused with ``no-comparable-baseline`` AND blamed the
+    engine filter in ``detail``. The head is pinned newest-first by
+    composite key via the monkeypatched source — the storage-side ordering
+    tiebreak ships in the parallel S36 memory slice, so this test must not
+    depend on filesystem enumeration order."""
+    tie_a = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    tie_b = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    monkeypatch.setattr(
+        "novetest.regression.compare.find_runs_for_target",
+        _fake_find_runs_factory([tie_b, tie_a]),  # newest-first
+    )
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, tuple)
+    baseline_ref, target_ref = result
+    assert baseline_ref.run_id == "01TIEA"
+    assert target_ref.run_id == "01TIEB"
+
+
+def test_resolve_latest_same_ms_tie_on_real_store_is_deterministic(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Real-store determinism, no ordering monkeypatch: series [tie, tie,
+    newer] — the head is unambiguous (unique newest ms) and the same-ms
+    pair sits among the candidates. Whatever order the store enumerates
+    the tie, the baseline is the composite-key maximum below the target
+    (``01TIEB``), stable across repeated resolution."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01NEWER", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    for _ in range(2):
+        result = resolve_latest_baseline(store, "tests/")
+        assert isinstance(result, tuple)
+        baseline_ref, target_ref = result
+        assert baseline_ref.run_id == "01TIEB"
+        assert target_ref.run_id == "01NEWER"
+
+
+def test_resolve_latest_no_strictly_older_sibling_detail_has_no_engine_hint(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ANA-25 detail honesty (negative case): the head entry has a live
+    sibling but none strictly older (same-ms with a LARGER ``run_id`` —
+    reachable only while the presented ordering drifts from the
+    composite-key convention) → plain ``detail=target_expression``.
+    Pre-fix this path emitted the misleading ``(engine=...)`` suffix even
+    though D5 filtering never excluded anything — there was nothing to
+    filter."""
+    tie_a = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    tie_b = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    monkeypatch.setattr(
+        "novetest.regression.compare.find_runs_for_target",
+        _fake_find_runs_factory([tie_a, tie_b]),  # head = smaller run_id
+    )
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "tests/"
+    assert "(engine=" not in (result.detail or "")
+
+
+def test_resolve_latest_same_ms_cross_engine_prior_keeps_engine_detail(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ANA-25 detail honesty (positive case): a strictly-older sibling
+    exists (same-ms, smaller ``run_id``) but is cross-engine — the D5
+    filter genuinely eliminated it, so the ``(engine=...)`` hint stays."""
+    cargo = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    target = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    monkeypatch.setattr(
+        "novetest.regression.compare.find_runs_for_target",
+        _fake_find_runs_factory([target, cargo]),  # newest-first
+    )
+    result = resolve_latest_baseline(store, "tests/")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "tests/ (engine=pytest)"
+
+
+def test_check_oldest_run_with_newer_sibling_returns_false(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """ANA-26 A/B divergence proof: the OLDEST run of a series has no
+    strictly-older sibling, so the probe must say ``False`` — in lockstep
+    with the resolver. The pre-fix any-sibling probe answered ``True``
+    here while derivation was guaranteed to refuse with
+    ``no-comparable-baseline`` (the false-positive ANA-26 documents);
+    reverting the delegation fails this test."""
+    old_entry = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01OLD", _TS_OLD),
+        target_expression="tests/",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01NEW", _TS_NEW),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    probe = check_regression_availability(
+        store, old_entry.run_record.run_reference
+    )
+    assert probe is False
+    # Parity: the probe's verdict IS the resolver's verdict.
+    assert resolve_baseline_for_run(store, old_entry) is None
+
+
+def test_check_same_ms_tie_parity_matches_resolver_both_directions(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Probe ⟺ resolver on the tie itself: the larger-``run_id`` side of a
+    same-ms pair has a baseline (``True``), the smaller side does not
+    (``False``) — and each probe answer equals
+    ``resolve_baseline_for_run(...) is not None`` for the same entry."""
+    tie_a = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEA", _TS_MID),
+        target_expression="tests/",
+    )
+    tie_b = seed_run_record(
+        initialized_store,
+        run_reference=_ref("01TIEB", _TS_MID),
+        target_expression="tests/",
+    )
+    store = get_project_store_state(initialized_store)
+    for entry, expected in ((tie_b, True), (tie_a, False)):
+        probe = check_regression_availability(
+            store, entry.run_record.run_reference
+        )
+        assert probe is expected
+        assert probe is (resolve_baseline_for_run(store, entry) is not None)

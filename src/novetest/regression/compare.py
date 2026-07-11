@@ -598,25 +598,41 @@ def _engine_version_drift(baseline: RunRecord, target: RunRecord) -> bool:
 # --- baseline resolution -----------------------------------------------------
 
 
+def _run_order_key(reference: RunReference) -> tuple[int, str]:
+    """Total order on runs: lexicographic on the composite ``(created_at, run_id)``.
+
+    XCT-07: ``created_at`` is epoch-ms, and same-millisecond sibling runs
+    are real (tight rerun loops). ``run_id`` is a ULID string; plain string
+    comparison is the tie component. "Strictly older than target" =
+    ``_run_order_key(sibling) < _run_order_key(target)`` — the pinned
+    cross-team ordering convention shared with Memory's newest-first sort.
+    """
+    return (reference.created_at, reference.run_id)
+
+
 def resolve_baseline_for_run(
     store: ProjectStore,
     target_entry: MemoryEntry,
 ) -> RunReference | None:
     """Return the newest comparable baseline for ``target_entry``, or ``None``.
 
-    "Comparable" = live (non-tombstoned), strictly older by ``created_at``,
-    same ``target_expression``, AND same ``engine_name``. The engine filter
-    is D5 of ``decisions/2026-07-03-engine-selection-policy.md``: cross-run
+    "Comparable" = live (non-tombstoned), strictly older on the composite
+    ``(created_at, run_id)`` key, same ``target_expression``, AND same
+    ``engine_name``. The tie component makes same-millisecond siblings
+    orderable (ANA-25): a sibling sharing the target's ``created_at`` with
+    a smaller ``run_id`` IS strictly older and is a valid baseline. The
+    engine filter is D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md``: cross-run
     analyses never cross an engine boundary, so a mixed-engine series
     (legitimate under D3's transient ``--engine`` override, e.g. a
     Rust+PyO3 root alternating cargo-test and pytest) resolves to the
     nearest same-engine prior instead of a guaranteed-mismatch neighbor.
 
-    This is the single shared selector behind ``resolve_latest_baseline``
-    and the Orchestration compositions (``inspect`` / ``status``) — the D5
-    filter lives here and nowhere else. ``compare_runs``'s
-    ``REASON_ENGINE_MISMATCH`` guard stays as defense-in-depth for
-    explicitly user-picked pairs.
+    This is the single shared selector behind ``resolve_latest_baseline``,
+    ``check_regression_availability``, and the Orchestration compositions
+    (``inspect`` / ``status``) — the comparability predicate lives here
+    and nowhere else. ``compare_runs``'s ``REASON_ENGINE_MISMATCH`` guard
+    stays as defense-in-depth for explicitly user-picked pairs.
 
     ``None`` means no such run exists (fresh target, single run, or no
     same-engine prior). Callers decide how to surface that — an
@@ -626,22 +642,25 @@ def resolve_baseline_for_run(
     ``REASON_RUN_TOMBSTONED`` per decision §C.1.
     """
     record = target_entry.run_record
+    target_key = _run_order_key(record.run_reference)
     siblings = find_runs_for_target(
         store, record.target_expression, include_tombstoned=False
     )
-    # Newest-first per Memory's ordering guarantee — the first survivor of
-    # both filters is the newest comparable baseline.
+    # Order-independent max-scan: the baseline is the maximum composite key
+    # strictly below the target's (the closest predecessor). We deliberately
+    # do NOT lean on Memory's newest-first ordering here — same-millisecond
+    # siblings made "first survivor wins" input-order sensitive (XCT-07).
+    best: RunReference | None = None
     for sibling in siblings:
         sibling_record = sibling.run_record
-        if (
-            sibling_record.run_reference.created_at
-            >= record.run_reference.created_at
-        ):
+        candidate = sibling_record.run_reference
+        if _run_order_key(candidate) >= target_key:
             continue
         if sibling_record.engine_name != record.engine_name:
             continue
-        return sibling_record.run_reference
-    return None
+        if best is None or _run_order_key(candidate) > _run_order_key(best):
+            best = candidate
+    return best
 
 
 def resolve_latest_baseline(
@@ -660,19 +679,27 @@ def resolve_latest_baseline(
     not a selection barrier).
 
     Tombstoned runs are excluded by default (Memory's
-    ``find_runs_for_target`` convention); Memory guarantees newest-first
-    ordering by ``created_at`` descending
-    (``src/novetest/memory/store.py:152``). The returned pair threads
-    directly into ``compare_runs(store, baseline, target)``.
+    ``find_runs_for_target`` convention). The target choice leans on
+    Memory's newest-first ordering (head entry = newest); baseline
+    selection itself is order-independent (composite-key max-scan inside
+    ``resolve_baseline_for_run``), so same-millisecond siblings cannot
+    change which baseline a given target resolves. The returned pair
+    threads directly into ``compare_runs(store, baseline, target)``.
 
     Unavailable cases (both ``REASON_NO_COMPARABLE_BASELINE``):
 
     - fewer than two live runs on the target →
       ``detail=target_expression`` (pre-D5 wording, preserved);
-    - older live runs exist but none share the target's engine →
+    - strictly-older live runs exist but none share the target's engine →
       ``detail="<target_expression> (engine=<engine_name>)"``, so the
       operator can see the D5 filter — not run scarcity — eliminated the
-      candidates.
+      candidates;
+    - two-plus live runs but none strictly older than the head entry on
+      the composite ``(created_at, run_id)`` key →
+      ``detail=target_expression`` — no engine hint, because engine
+      filtering played no part (ANA-25 honesty; defensive — only
+      reachable when Memory's newest-first ordering drifts from the
+      composite-key convention).
     """
     entries = find_runs_for_target(
         store, target_expression, include_tombstoned=False
@@ -685,12 +712,25 @@ def resolve_latest_baseline(
     target_entry = entries[0]
     baseline_ref = resolve_baseline_for_run(store, target_entry)
     if baseline_ref is None:
+        # Honest detail (ANA-25): the ``(engine=...)`` suffix is a D5 hint
+        # and must appear ONLY when engine filtering is what eliminated the
+        # candidates — i.e. a strictly-older live sibling exists (any such
+        # sibling is necessarily cross-engine here, or the selector would
+        # have returned it).
+        target_key = _run_order_key(target_entry.run_record.run_reference)
+        engine_filtered = any(
+            _run_order_key(entry.run_record.run_reference) < target_key
+            for entry in entries
+        )
+        detail = (
+            f"{target_expression} "
+            f"(engine={target_entry.run_record.engine_name})"
+            if engine_filtered
+            else target_expression
+        )
         return RegressionUnavailable(
             reason=REASON_NO_COMPARABLE_BASELINE,
-            detail=(
-                f"{target_expression} "
-                f"(engine={target_entry.run_record.engine_name})"
-            ),
+            detail=detail,
         )
     return baseline_ref, target_entry.run_record.run_reference
 

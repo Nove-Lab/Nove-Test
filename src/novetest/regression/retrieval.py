@@ -3,7 +3,8 @@
 Workflow (from ``design/workflows/regression.md``):
 
     get_regression_facts(run_reference_1, run_reference_2)  -> -
-    check_regression_availability(run_reference)            -> memory/find_runs_for_target
+    check_regression_availability(run_reference)            -> memory/retrieve_run_evidence
+                                                            -> compare/resolve_baseline_for_run
 
 ``get_regression_facts`` is a pure cache read: the canonical pair directory
 either exists with a parseable payload, or it doesn't. We do NOT resolve
@@ -19,8 +20,10 @@ detail="coverage-schema-stale")``. The caller re-derives.
 
 ``check_regression_availability`` returns a plain ``bool`` (not a
 discriminator) — the only failure mode is "no comparable prior", which is
-exactly what ``False`` means. Used by Orchestration eligibility evaluation
-(Phase 6) and Localization (Phase 4).
+exactly what ``False`` means. It has no in-repo call sites today (ANA-26:
+an earlier revision of this docstring claimed consumers that never
+existed); the API is kept as the eligibility seam for Orchestration's
+Phase-6 evaluation wiring.
 """
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ from novetest.coverage.compare import SCHEMA_VERSION as COVERAGE_DELTA_SCHEMA_VE
 from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import (
     RunEvidenceNotFoundError,
-    find_runs_for_target,
     retrieve_run_evidence,
 )
 from novetest.models.regression_fact_set import RegressionFactSet
@@ -99,16 +101,19 @@ def check_regression_availability(
     store: ProjectStore,
     run_reference: RunReference,
 ) -> bool:
-    """Return True iff a comparable prior (non-tombstoned) run exists.
+    """Return True iff ``resolve_baseline_for_run`` would find a baseline.
 
-    "Comparable" = "shares the same resolved ``target_expression`` AND the
-    same ``engine_name``". The target partition is ``find_runs_for_target``'s
-    rule; the engine filter is D5 of
-    ``decisions/2026-07-03-engine-selection-policy.md`` (cross-run analyses
-    never cross an engine boundary) — an eligibility probe that counted a
-    cross-engine sibling would say "available" for a comparison the engine
-    is guaranteed to refuse. Target-*type* compatibility stays deferred to
-    ``compare_runs`` (drift = warning, not a comparability barrier).
+    Delegates to ``resolve_baseline_for_run`` — the ONE definition of the
+    comparability predicate: live (non-tombstoned), strictly older on the
+    composite ``(created_at, run_id)`` key, same ``target_expression``,
+    same ``engine_name`` (D5 of
+    ``decisions/2026-07-03-engine-selection-policy.md``). ANA-26: a prior
+    any-sibling reimplementation here diverged from the resolver and
+    reported ``True`` for runs (e.g. the oldest of a series) whose actual
+    derivation is guaranteed to refuse with ``no-comparable-baseline``;
+    delegation keeps probe and resolver in lockstep by construction.
+    Target-*type* compatibility stays deferred to ``compare_runs`` (drift
+    = warning, not a comparability barrier).
 
     Behaviour:
     - Unknown ``run_reference`` (no live or tombstoned record) → ``False``.
@@ -116,27 +121,22 @@ def check_regression_availability(
       "not available", never as an error.
     - Tombstoned input ``run_reference`` → still computes availability against
       its historical ``target_expression``. A tombstone of the input does
-      not erase the question; we measure whether a comparable prior exists,
-      not whether the input itself is live.
-    - The input run is filtered out of the candidate set by ``run_id``, so
-      a target with only one run (the input) yields ``False``.
+      not erase the question (the selector ignores the input's own
+      tombstone state; ``compare_runs`` is where §C.1 fails hard).
+    - Strictly-older is composite-key order: a same-millisecond sibling
+      with a smaller ``run_id`` counts; newer-only siblings do not, and a
+      target with only one run (the input) yields ``False``.
     """
     try:
         entry = retrieve_run_evidence(store, run_reference)
     except RunEvidenceNotFoundError:
         return False
-    siblings = find_runs_for_target(
-        store,
-        entry.run_record.target_expression,
-        include_tombstoned=False,
-    )
-    comparable = [
-        e
-        for e in siblings
-        if e.run_record.run_reference.run_id != run_reference.run_id
-        and e.run_record.engine_name == entry.run_record.engine_name
-    ]
-    return len(comparable) >= 1
+    # Deferred import: ``compare`` imports ``get_regression_facts`` from
+    # this module at load time, so a module-level back-import would be a
+    # hard cycle (same posture as ``orchestration/workflows/test.py``).
+    from novetest.regression.compare import resolve_baseline_for_run
+
+    return resolve_baseline_for_run(store, entry) is not None
 
 
 def _coverage_change_is_stale(coverage_change: Any) -> bool:
