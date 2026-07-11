@@ -105,10 +105,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from novetest.coverage import _summary
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
-    CoverageSummary,
     FileCoverage,
 )
 from novetest.models.run_reference import RunReference
@@ -218,7 +218,7 @@ def parse_jacoco_xml(
 
     # Deterministic on-disk output (matches LCOV's sort).
     files.sort(key=lambda f: f.file_path)
-    summary = _aggregate_summary(files)
+    summary = _summary.aggregate_summary(files)
 
     metadata: dict[str, Any] = {
         "coverage_format": "jacoco-xml",
@@ -309,11 +309,11 @@ def _build_file_coverage(
         for branch_index in range(mb):
             missing_branches.append((nr, cb + branch_index))
 
-    summary = _build_file_summary(
-        executed_lines=executed_lines,
-        missing_lines=missing_lines,
-        executed_branches=executed_branches,
-        missing_branches=missing_branches,
+    summary = _summary.summary_from_counts(
+        num_statements=len(executed_lines) + len(missing_lines),
+        covered_statements=len(executed_lines),
+        num_branches=len(executed_branches) + len(missing_branches),
+        covered_branches=len(executed_branches),
     )
 
     return FileCoverage(
@@ -325,61 +325,6 @@ def _build_file_coverage(
         missing_branches=tuple(missing_branches),
         summary=summary,
         line_contexts={},
-    )
-
-
-def _build_file_summary(
-    *,
-    executed_lines: list[int],
-    missing_lines: list[int],
-    executed_branches: list[tuple[int, int]],
-    missing_branches: list[tuple[int, int]],
-) -> CoverageSummary:
-    num_statements = len(executed_lines) + len(missing_lines)
-    covered_statements = len(executed_lines)
-    missing_count = len(missing_lines)
-    num_branches = len(executed_branches) + len(missing_branches)
-    covered_branches = len(executed_branches)
-    missing_branches_count = len(missing_branches)
-    percent_covered = (
-        round(100.0 * covered_statements / num_statements, 2)
-        if num_statements > 0
-        else 100.0
-    )
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_count,
-        excluded_statements=0,
-        num_branches=num_branches,
-        covered_branches=covered_branches,
-        missing_branches=missing_branches_count,
-        percent_covered=percent_covered,
-    )
-
-
-def _aggregate_summary(files: list[FileCoverage]) -> CoverageSummary:
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    missing_statements = sum(f.summary.missing_statements for f in files)
-    excluded_statements = sum(f.summary.excluded_statements for f in files)
-    num_branches = sum(f.summary.num_branches for f in files)
-    covered_branches = sum(f.summary.covered_branches for f in files)
-    missing_branches = sum(f.summary.missing_branches for f in files)
-    percent_covered = (
-        round(100.0 * covered_statements / num_statements, 2)
-        if num_statements > 0
-        else 100.0
-    )
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_statements,
-        excluded_statements=excluded_statements,
-        num_branches=num_branches,
-        covered_branches=covered_branches,
-        missing_branches=missing_branches,
-        percent_covered=percent_covered,
     )
 
 

@@ -36,7 +36,8 @@ Istanbul -> frozen-schema mapping decisions (see the handoff
 - ``percent_covered`` is computed (Istanbul JSON carries no summary block):
   ``100.0`` when there are no statements, else
   ``covered_statements / num_statements * 100`` rounded to 2 decimals
-  (matching jest's own ``% Stmts`` text-table convention).
+  (matching jest's own ``% Stmts`` text-table convention). Since W2/S33 the
+  computation lives in the shared :mod:`._summary` module (ANA-06).
 - ``file_path`` is made workspace-relative (decision 2026-05-15
   constraint #6) by relativizing the absolute Istanbul path against the
   Run's workspace root.
@@ -52,11 +53,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from novetest.coverage import _summary
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.utils.path_utils import to_workspace_relative_posix
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
-    CoverageSummary,
     FileCoverage,
 )
 from novetest.models.run_reference import RunReference
@@ -100,7 +101,7 @@ def parse_istanbul_json(
     # Sort by path for deterministic on-disk output (REQ-FOUND: deterministic
     # structured outputs for the same inputs).
     files.sort(key=lambda f: f.file_path)
-    summary = _aggregate_summary(files)
+    summary = _summary.aggregate_summary(files)
 
     return CoverageFactSet(
         run_reference=run_reference,
@@ -155,7 +156,10 @@ def _parse_istanbul_file(file_path: str, entry: dict[str, Any]) -> FileCoverage:
         # Locations (see module docstring).
         executed_branches=(),
         missing_branches=(),
-        summary=_statement_summary(num_statements, covered_statements),
+        summary=_summary.summary_from_counts(
+            num_statements=num_statements,
+            covered_statements=covered_statements,
+        ),
         line_contexts={},
     )
 
@@ -189,39 +193,6 @@ def _hit_count(file_path: str, idx: str, raw: Any) -> int:
             f"integer: {raw!r}"
         )
     return raw
-
-
-def _statement_summary(num_statements: int, covered_statements: int) -> CoverageSummary:
-    """Build a ``CoverageSummary`` from statement counts (zero branches)."""
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=num_statements - covered_statements,
-        excluded_statements=0,
-        num_branches=0,
-        covered_branches=0,
-        missing_branches=0,
-        percent_covered=_percent_covered(num_statements, covered_statements),
-    )
-
-
-def _aggregate_summary(files: list[FileCoverage]) -> CoverageSummary:
-    """Sum per-file statement counters into the top-level summary."""
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    return _statement_summary(num_statements, covered_statements)
-
-
-def _percent_covered(num_statements: int, covered_statements: int) -> float:
-    """Compute statement coverage percentage, rounded to 2 decimals.
-
-    Istanbul's ``coverage-final.json`` carries no summary block, so unlike
-    the coverage.py path we must compute this rather than echo an
-    engine-reported value. An empty file reports 100.0 (nothing to cover).
-    """
-    if num_statements == 0:
-        return 100.0
-    return round(covered_statements / num_statements * 100.0, 2)
 
 
 def _workspace_relative(abs_path: str, workspace_root: Path) -> str:

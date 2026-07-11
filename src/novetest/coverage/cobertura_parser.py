@@ -142,11 +142,11 @@ from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from novetest.coverage import _summary
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.utils.path_utils import relpath_or_drive_stripped
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
-    CoverageSummary,
     FileCoverage,
 )
 from novetest.models.run_reference import RunReference
@@ -264,7 +264,7 @@ def parse_cobertura_xml(
         files_by_path.update(document_files)
 
     files = sorted(files_by_path.values(), key=lambda f: f.file_path)
-    summary = _aggregate_summary(files)
+    summary = _summary.aggregate_summary(files)
 
     metadata: dict[str, Any] = {
         "coverage_format": "cobertura-xml",
@@ -358,7 +358,12 @@ def _build_class_file_coverage(
     executed_sorted = tuple(sorted(set(executed_lines)))
     missing_sorted = tuple(sorted(set(missing_lines)))
 
-    summary = _build_file_summary(executed_sorted, missing_sorted)
+    # Branches deferred per task brief §2.3 (v1 lines-only), so the
+    # summary carries statement counters only (zero branches).
+    summary = _summary.summary_from_counts(
+        num_statements=len(executed_sorted) + len(missing_sorted),
+        covered_statements=len(executed_sorted),
+    )
 
     return FileCoverage(
         file_path=rel_path,
@@ -400,7 +405,10 @@ def _merge_file_coverage(
         excluded_lines=(),
         executed_branches=(),
         missing_branches=(),
-        summary=_build_file_summary(executed_sorted, missing_sorted),
+        summary=_summary.summary_from_counts(
+            num_statements=len(executed_sorted) + len(missing_sorted),
+            covered_statements=len(executed_sorted),
+        ),
         line_contexts={},
     )
 
@@ -456,52 +464,6 @@ def _resolve_workspace_relative(
     # current cwd can't reach on the same drive.
     joined = source_dirs[0] / filename
     return relpath_or_drive_stripped(joined, workspace_root)
-
-
-def _build_file_summary(
-    executed_lines: tuple[int, ...], missing_lines: tuple[int, ...]
-) -> CoverageSummary:
-    num_statements = len(executed_lines) + len(missing_lines)
-    covered_statements = len(executed_lines)
-    missing_count = len(missing_lines)
-    percent_covered = (
-        round(100.0 * covered_statements / num_statements, 2)
-        if num_statements > 0
-        else 100.0
-    )
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_count,
-        excluded_statements=0,
-        # Branches deferred per task brief §2.3 (v1 lines-only).
-        num_branches=0,
-        covered_branches=0,
-        missing_branches=0,
-        percent_covered=percent_covered,
-    )
-
-
-def _aggregate_summary(files: list[FileCoverage]) -> CoverageSummary:
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    missing_statements = sum(f.summary.missing_statements for f in files)
-    excluded_statements = sum(f.summary.excluded_statements for f in files)
-    percent_covered = (
-        round(100.0 * covered_statements / num_statements, 2)
-        if num_statements > 0
-        else 100.0
-    )
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_statements,
-        excluded_statements=excluded_statements,
-        num_branches=0,
-        covered_branches=0,
-        missing_branches=0,
-        percent_covered=percent_covered,
-    )
 
 
 __all__ = ["parse_cobertura_xml"]

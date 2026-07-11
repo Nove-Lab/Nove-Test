@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "run_reference": {
+    "schema_version": 1,
+    "run_id": "01PARITYLCOV000000000000FACT",
+    "created_at": 1700000000000
+  },
+  "engine_name": "cargo-test",
+  "ecosystem": "rust",
+  "mapping_granularity": "aggregate",
+  "summary": {
+    "num_statements": 5,
+    "covered_statements": 3,
+    "missing_statements": 2,
+    "excluded_statements": 0,
+    "num_branches": 2,
+    "covered_branches": 1,
+    "missing_branches": 1,
+    "percent_covered": 60.0
+  },
+  "files": [
+    {
+      "file_path": "src/branchy.rs",
+      "executed_lines": [
+        4
+      ],
+      "missing_lines": [
+        5
+      ],
+      "excluded_lines": [],
+      "executed_branches": [
+        [
+          4,
+          0
+        ]
+      ],
+      "missing_branches": [
+        [
+          4,
+          1
+        ]
+      ],
+      "summary": {
+        "num_statements": 2,
+        "covered_statements": 1,
+        "missing_statements": 1,
+        "excluded_statements": 0,
+        "num_branches": 2,
+        "covered_branches": 1,
+        "missing_branches": 1,
+        "percent_covered": 50.0
+      },
+      "line_contexts": {}
+    },
+    {
+      "file_path": "src/lib.rs",
+      "executed_lines": [
+        1,
+        2
+      ],
+      "missing_lines": [
+        3
+      ],
+      "excluded_lines": [],
+      "executed_branches": [],
+      "missing_branches": [],
+      "summary": {
+        "num_statements": 3,
+        "covered_statements": 2,
+        "missing_statements": 1,
+        "excluded_statements": 0,
+        "num_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+        "percent_covered": 66.67
+      },
+      "line_contexts": {}
+    }
+  ],
+  "derived_at": 1700000002000,
+  "metadata": {
+    "coverage_format": "lcov",
+    "branch_arc_semantics": "lcov-line-index"
+  }
+}

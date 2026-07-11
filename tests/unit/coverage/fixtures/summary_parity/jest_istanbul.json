@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "run_reference": {
+    "schema_version": 1,
+    "run_id": "01PARITYISTANBUL00000000FACT",
+    "created_at": 1700000000000
+  },
+  "engine_name": "jest",
+  "ecosystem": "javascript-typescript",
+  "mapping_granularity": "aggregate",
+  "summary": {
+    "num_statements": 4,
+    "covered_statements": 3,
+    "missing_statements": 1,
+    "excluded_statements": 0,
+    "num_branches": 0,
+    "covered_branches": 0,
+    "missing_branches": 0,
+    "percent_covered": 75.0
+  },
+  "files": [
+    {
+      "file_path": "src/calc.js",
+      "executed_lines": [
+        1
+      ],
+      "missing_lines": [
+        5
+      ],
+      "excluded_lines": [],
+      "executed_branches": [],
+      "missing_branches": [],
+      "summary": {
+        "num_statements": 3,
+        "covered_statements": 2,
+        "missing_statements": 1,
+        "excluded_statements": 0,
+        "num_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+        "percent_covered": 66.67
+      },
+      "line_contexts": {}
+    },
+    {
+      "file_path": "src/util.js",
+      "executed_lines": [
+        1
+      ],
+      "missing_lines": [],
+      "excluded_lines": [],
+      "executed_branches": [],
+      "missing_branches": [],
+      "summary": {
+        "num_statements": 1,
+        "covered_statements": 1,
+        "missing_statements": 0,
+        "excluded_statements": 0,
+        "num_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+        "percent_covered": 100.0
+      },
+      "line_contexts": {}
+    }
+  ],
+  "derived_at": 1700000002000,
+  "metadata": {
+    "coverage_format": "istanbul",
+    "branch_mapping": "omitted"
+  }
+}

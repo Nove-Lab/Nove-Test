@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "run_reference": {
+    "schema_version": 1,
+    "run_id": "01PARITYJACOCO0000000000FACT",
+    "created_at": 1700000000000
+  },
+  "engine_name": "junit",
+  "ecosystem": "java",
+  "mapping_granularity": "aggregate",
+  "summary": {
+    "num_statements": 6,
+    "covered_statements": 4,
+    "missing_statements": 2,
+    "excluded_statements": 0,
+    "num_branches": 2,
+    "covered_branches": 1,
+    "missing_branches": 1,
+    "percent_covered": 66.67
+  },
+  "files": [
+    {
+      "file_path": "src/main/java/com/example/Calculator.java",
+      "executed_lines": [
+        3,
+        7,
+        13
+      ],
+      "missing_lines": [
+        10
+      ],
+      "excluded_lines": [],
+      "executed_branches": [
+        [
+          13,
+          0
+        ]
+      ],
+      "missing_branches": [
+        [
+          13,
+          1
+        ]
+      ],
+      "summary": {
+        "num_statements": 4,
+        "covered_statements": 3,
+        "missing_statements": 1,
+        "excluded_statements": 0,
+        "num_branches": 2,
+        "covered_branches": 1,
+        "missing_branches": 1,
+        "percent_covered": 75.0
+      },
+      "line_contexts": {}
+    },
+    {
+      "file_path": "src/main/java/com/example/util/Helper.java",
+      "executed_lines": [
+        1
+      ],
+      "missing_lines": [
+        2
+      ],
+      "excluded_lines": [],
+      "executed_branches": [],
+      "missing_branches": [],
+      "summary": {
+        "num_statements": 2,
+        "covered_statements": 1,
+        "missing_statements": 1,
+        "excluded_statements": 0,
+        "num_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+        "percent_covered": 50.0
+      },
+      "line_contexts": {}
+    }
+  ],
+  "derived_at": 1700000002000,
+  "metadata": {
+    "coverage_format": "jacoco-xml",
+    "branch_arc_semantics": "jacoco-line-counter-index",
+    "jacoco_xml_paths": [
+      "<TMP>/jacoco.xml"
+    ]
+  }
+}

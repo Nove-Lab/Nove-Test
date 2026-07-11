@@ -25,6 +25,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+from novetest.coverage import _summary
 from novetest.coverage.cobertura_parser import parse_cobertura_xml
 from novetest.coverage.istanbul_parser import parse_istanbul_json
 from novetest.coverage.jacoco_parser import parse_jacoco_xml
@@ -41,7 +42,6 @@ from novetest.memory.project_store import ProjectStore
 from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
-    CoverageSummary,
     FileCoverage,
 )
 from novetest.models.run_record import RunRecord
@@ -474,42 +474,15 @@ def _derive_xunit_cobertura(
 
     if len(surviving_files) != len(raw_fact_set.files):
         # Partial survival — rebuild with filtered files + recomputed
-        # summary so downstream consumers see a consistent fact set.
+        # summary (shared sum-of-parts roll-up, W2/S33) so downstream
+        # consumers see a consistent fact set without re-parsing the XML.
         fact_set = replace(
             raw_fact_set,
             files=surviving_files,
-            summary=_aggregate_file_summary(surviving_files),
+            summary=_summary.aggregate_summary(surviving_files),
         )
     else:
         fact_set = raw_fact_set
 
     write_coverage_facts(store, fact_set)
     return fact_set
-
-
-def _aggregate_file_summary(files: tuple[FileCoverage, ...]) -> CoverageSummary:
-    """Recompute a top-level ``CoverageSummary`` after dropping files.
-
-    Mirrors ``cobertura_parser._aggregate_summary`` — kept here so
-    ``derive`` can rebuild the summary without re-parsing the XML when
-    §2.4 drops unresolvable files.
-    """
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    missing_statements = sum(f.summary.missing_statements for f in files)
-    excluded_statements = sum(f.summary.excluded_statements for f in files)
-    percent_covered = (
-        round(100.0 * covered_statements / num_statements, 2)
-        if num_statements > 0
-        else 100.0
-    )
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_statements,
-        excluded_statements=excluded_statements,
-        num_branches=0,
-        covered_branches=0,
-        missing_branches=0,
-        percent_covered=percent_covered,
-    )

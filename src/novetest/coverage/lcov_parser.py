@@ -117,11 +117,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from novetest.coverage import _summary
 from novetest.coverage.parser import CoverageJsonParseError
 from novetest.utils.path_utils import relpath_or_drive_stripped
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
-    CoverageSummary,
     FileCoverage,
 )
 from novetest.models.run_reference import RunReference
@@ -190,7 +190,7 @@ def parse_lcov(
     # Deterministic on-disk output (REQ-FOUND: deterministic structured
     # outputs for the same inputs). Sort by workspace-relative path.
     files.sort(key=lambda f: f.file_path)
-    summary = _aggregate_summary(files)
+    summary = _summary.aggregate_summary(files)
 
     metadata: dict[str, Any] = {
         "coverage_format": "lcov",
@@ -404,15 +404,11 @@ def _build_file_coverage(
         _build_branch_pairs(block, file_path)
     )
 
-    summary = CoverageSummary(
+    summary = _summary.summary_from_counts(
         num_statements=da_total,
         covered_statements=da_hit,
-        missing_statements=da_total - da_hit,
-        excluded_statements=0,
         num_branches=branch_total,
         covered_branches=branch_hit,
-        missing_branches=branch_total - branch_hit,
-        percent_covered=_percent_covered(da_total, da_hit),
     )
 
     return FileCoverage(
@@ -487,34 +483,6 @@ def _build_branch_pairs(
     return tuple(executed), tuple(missing), branch_total, branch_hit
 
 
-def _aggregate_summary(files: list[FileCoverage]) -> CoverageSummary:
-    """Sum per-file counters into the top-level ``CoverageSummary``."""
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    num_branches = sum(f.summary.num_branches for f in files)
-    covered_branches = sum(f.summary.covered_branches for f in files)
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=num_statements - covered_statements,
-        excluded_statements=0,
-        num_branches=num_branches,
-        covered_branches=covered_branches,
-        missing_branches=num_branches - covered_branches,
-        percent_covered=_percent_covered(num_statements, covered_statements),
-    )
-
-
-def _percent_covered(num: int, covered: int) -> float:
-    """Compute statement coverage percentage, rounded to 2 decimals.
-
-    LCOV (like Istanbul) carries no top-level percent_covered we can
-    echo, so we compute it. An empty file reports 100.0 (nothing to
-    cover) — same convention as ``istanbul_parser``.
-    """
-    if num == 0:
-        return 100.0
-    return round(covered / num * 100.0, 2)
 
 
 def _workspace_relative(
@@ -564,3 +532,4 @@ def _workspace_relative(
             f"{abs_path} -> {relpath}"
         )
         return relpath
+

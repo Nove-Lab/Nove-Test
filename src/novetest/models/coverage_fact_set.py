@@ -43,9 +43,33 @@ class CoverageSummary:
     """Aggregate coverage counters across every file in a Fact Set.
 
     Field names mirror coverage.py's ``totals`` block so the mapping is
-    auditable for the pytest path. ``percent_covered`` is the engine-reported
-    value (rounded by the native engine); we do not recompute it to avoid
-    drift between this and what the native CLI reports.
+    auditable for the pytest path. For the pytest path, ``percent_covered``
+    is the engine-reported value (rounded by coverage.py itself); we do not
+    recompute it to avoid drift between this and what the native CLI
+    reports. The other native parsers compute it via
+    ``coverage/_summary.py`` (single home of the empty->100.0 convention)
+    because their payloads carry no comparable totals block.
+
+    ``num_statements`` basis varies by native format (ANA-04 — contract
+    documented W2/S33, 2026-07-11; per-parser values deliberately
+    UNCHANGED):
+
+    - coverage.py (pytest): coverage.py's own ``num_statements`` totals,
+      echoed verbatim (coverage.py counts executable lines as its
+      "statements").
+    - istanbul (jest): true STATEMENT count from ``statementMap`` — the
+      only parser with sub-line statement granularity. A line holding
+      several statements counts each, so ``num_statements`` MAY exceed
+      ``len(executed_lines) + len(missing_lines)`` for a file.
+    - lcov (cargo-test), jacoco (junit), cobertura (xunit): executable-LINE
+      count as the statement approximation (these formats report line, not
+      statement, granularity — matching coverage.py's statement~=line
+      convention). For these, per-file ``num_statements ==
+      len(executed_lines) + len(missing_lines)`` holds.
+
+    Consumers MUST NOT assume the ``num_statements ==
+    len(executed_lines) + len(missing_lines)`` invariant across engines —
+    it does not hold for jest.
     """
 
     CURRENT_SCHEMA_VERSION: ClassVar[int] = SCHEMA_VERSION
