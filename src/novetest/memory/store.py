@@ -153,7 +153,15 @@ def list_run_history(
         _entry_from_resolved(store, resolved)
         for resolved in _iter_all_records(store, skipped=skipped)
     ]
-    entries.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
+    # XCT-07: composite sort key (created_at, run_id) — the ULID string breaks
+    # same-millisecond ties, so ordering never depends on FS enumeration order.
+    entries.sort(
+        key=lambda e: (
+            e.run_record.run_reference.created_at,
+            e.run_record.run_reference.run_id,
+        ),
+        reverse=True,
+    )
     return entries
 
 
@@ -166,7 +174,8 @@ def find_runs_for_target(
 ) -> list[MemoryEntry]:
     """Return Memory Entries whose ``RunRecord.target_expression`` matches.
 
-    Newest-first by ``RunReference.created_at`` descending. Tombstoned runs
+    Newest-first by ``(created_at, run_id)`` descending (the XCT-07 composite
+    key; the ULID string breaks same-millisecond ties). Tombstoned runs
     are excluded by default; callers wanting full history (audit / debugging)
     opt in via ``include_tombstoned=True``. Returns an empty list when no run
     matches (not an error). Unparseable records are skipped, not fatal —
@@ -183,7 +192,15 @@ def find_runs_for_target(
         if resolved.tombstoned and not include_tombstoned:
             continue
         entries.append(_entry_from_resolved(store, resolved))
-    entries.sort(key=lambda e: e.run_record.run_reference.created_at, reverse=True)
+    # XCT-07: same composite key as `list_run_history` — one ordering
+    # convention across both scan interfaces.
+    entries.sort(
+        key=lambda e: (
+            e.run_record.run_reference.created_at,
+            e.run_record.run_reference.run_id,
+        ),
+        reverse=True,
+    )
     return entries
 
 

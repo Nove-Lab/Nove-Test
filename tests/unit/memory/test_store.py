@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import pytest
 
+from novetest.memory import store as store_module
 from novetest.memory.project_store import (
     STORE_METADATA_FILENAME,
     ProjectStore,
@@ -516,6 +519,142 @@ def test_find_runs_for_target_returns_both_when_target_types_differ(
     assert {e.entry_id for e in result} == {"01FILE", "01PKG"}
     target_types = {e.run_record.target_type for e in result}
     assert target_types == {"file", "package"}
+
+
+# --- ordering determinism (XCT-07 / S36) --------------------------------------
+#
+# Pinned cross-team convention (S36; verbatim in the memory and regression
+# briefs): total order on runs = lexicographic on the composite key
+# ``(created_at, run_id)``; newest-first = descending on both components;
+# ``run_id`` is a ULID string and plain string comparison is the tie component.
+#
+# The permutation tests monkeypatch ``_iter_all_records`` to feed the REAL
+# resolved records in EVERY possible pre-sort order, so they cannot silently
+# depend on filesystem enumeration order — pre-fix, Python's stable sort
+# preserved rglob order among same-millisecond siblings, which is
+# host-dependent (XCT-07).
+
+
+def _resolved_records(store: ProjectStore) -> list[store_module._ResolvedRecord]:
+    """Materialize the store's real resolved records once, for permutation."""
+    return list(store_module._iter_all_records(store))
+
+
+def _iteration_feeding(
+    records: Sequence[store_module._ResolvedRecord],
+) -> Callable[..., Iterator[store_module._ResolvedRecord]]:
+    """An ``_iter_all_records`` stand-in yielding ``records`` in the given order."""
+
+    def fake(
+        _store: ProjectStore, *, skipped: list[SkippedRecord] | None = None
+    ) -> Iterator[store_module._ResolvedRecord]:
+        return iter(records)
+
+    return fake
+
+
+def test_list_history_same_ms_ties_break_on_run_id_for_every_iteration_order(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three same-millisecond siblings order run_id-descending no matter what
+    order the scan yields them in; the older run sorts last even though its
+    run_id string is the largest (created_at stays the primary component).
+    """
+    for run_id in ("01TIEB", "01TIEA", "01TIEC"):
+        store_run_evidence(store, _record(run_id=run_id, created_at=TS_2026_05_13))
+    store_run_evidence(store, _record(run_id="01ZOLD", created_at=TS_2024_01_02))
+    records = _resolved_records(store)
+    assert len(records) == 4
+
+    for permutation in itertools.permutations(records):
+        monkeypatch.setattr(
+            store_module, "_iter_all_records", _iteration_feeding(permutation)
+        )
+        entries = list_run_history(store)
+        assert [e.entry_id for e in entries] == [
+            "01TIEC",
+            "01TIEB",
+            "01TIEA",
+            "01ZOLD",
+        ], (
+            "order broke for pre-sort permutation "
+            f"{[r.record.run_reference.run_id for r in permutation]}"
+        )
+
+
+def test_find_runs_same_ms_ties_break_on_run_id_for_every_iteration_order(
+    store: ProjectStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`find_runs_for_target` applies the identical composite key after its
+    target filter: same-ms matches order run_id-descending for every pre-sort
+    permutation, the same-ms non-matching sibling stays excluded, and the
+    older match sorts last despite the largest run_id string.
+    """
+    target = "tests/test_shared.py"
+    for run_id in ("01TIEB", "01TIEA", "01TIEC"):
+        store_run_evidence(
+            store,
+            _record(run_id=run_id, created_at=TS_2026_05_13, target_expression=target),
+        )
+    store_run_evidence(
+        store,
+        _record(
+            run_id="01MISS",
+            created_at=TS_2026_05_13,
+            target_expression="tests/other.py",
+        ),
+    )
+    store_run_evidence(
+        store,
+        _record(run_id="01ZOLD", created_at=TS_2024_01_02, target_expression=target),
+    )
+    records = _resolved_records(store)
+    assert len(records) == 5
+
+    for permutation in itertools.permutations(records):
+        monkeypatch.setattr(
+            store_module, "_iter_all_records", _iteration_feeding(permutation)
+        )
+        entries = find_runs_for_target(store, target)
+        assert [e.entry_id for e in entries] == [
+            "01TIEC",
+            "01TIEB",
+            "01TIEA",
+            "01ZOLD",
+        ], (
+            "order broke for pre-sort permutation "
+            f"{[r.record.run_reference.run_id for r in permutation]}"
+        )
+
+
+def test_list_history_same_ms_on_disk_is_run_id_descending(
+    store: ProjectStore,
+) -> None:
+    """End-to-end pin through the real rglob scan: insertion order is
+    scrambled, and the composite key — not FS or insertion order — decides
+    the same-millisecond tie.
+    """
+    for run_id in ("01SIBB", "01SIBC", "01SIBA"):
+        store_run_evidence(store, _record(run_id=run_id, created_at=TS_2026_05_13))
+
+    entries = list_run_history(store)
+
+    assert [e.entry_id for e in entries] == ["01SIBC", "01SIBB", "01SIBA"]
+
+
+def test_find_runs_same_ms_on_disk_is_run_id_descending(
+    store: ProjectStore,
+) -> None:
+    target = "tests/test_shared.py"
+    for run_id in ("01SIBB", "01SIBC", "01SIBA"):
+        store_run_evidence(
+            store,
+            _record(run_id=run_id, created_at=TS_2026_05_13, target_expression=target),
+        )
+
+    entries = find_runs_for_target(store, target)
+
+    assert [e.entry_id for e in entries] == ["01SIBC", "01SIBB", "01SIBA"]
 
 
 # --- has_regression_facts ----------------------------------------------------
