@@ -423,7 +423,7 @@ exit 2:
           "score_raw": 1.0,
           "score_normalized": 1.0,
           "formula": "ochiai",
-          "alternate_scores": { "dstar2": 0.0, "op2": 1.0, "tarantula": 1.0 },
+          "alternate_scores": { "dstar2": 1.0, "op2": 1.0, "tarantula": 1.0 },
           "related_failed_tests": ["tests/test_arithmetic.py::test_subtract"],
           "evidence_citations": [ "… {kind: test_result|coverage_fact, run_reference, selector} …" ]
         },
@@ -446,8 +446,12 @@ Routing facts:
   `failure_proximity` the `formula` is a fixed placeholder `"ochiai"`
   and `alternate_scores_available` is `[]`).
 - All four formulas are always computed; `--formula` only selects which
-  drives `rank`/`score_raw`. `op2` is unbounded and can be negative;
-  `ochiai`/`tarantula` are [0,1].
+  drives `rank`/`score_raw`. Raw/alternate scores are **formula-native
+  scales — never compare across formulas**: `op2` is unbounded and can
+  be negative; `dstar2` is raw and unbounded above (a location covered
+  by every failing test and no passing test scores strictly above every
+  finite-denominator location — `subtract`'s `1.0` here); `ochiai`/
+  `tarantula` are [0,1].
 - `rank` is **dense** (ties share a rank); `tied_with` holds literal
   `"entry_index_<i>"` handles. `score_normalized` is min-max over the
   full ranking before truncation.

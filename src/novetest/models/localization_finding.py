@@ -214,8 +214,14 @@ class LocalizationEntry:
     ``score_normalized`` is min-max within the ENTIRE finding set, applied
     before top_n truncation (design-of-record §4).
 
-    ``alternate_scores`` carries the other three formulas' scores for the
-    SAME location so AI consumers can compare without re-deriving.
+    ``alternate_scores`` carries the other three formulas' RAW scores for
+    the SAME location. The scales are formula-native and NOT mutually
+    comparable (ANA-20): ``ochiai``/``tarantula`` are bounded [0, 1];
+    ``op2`` is unbounded and can be negative; ``dstar2`` is unbounded
+    above (its zero-denominator maximum-suspicion slots are mapped to a
+    finite per-fact-set ceiling — see ``localization/sbfl/dstar.py``).
+    Compare values across LOCATIONS under one formula without
+    re-deriving; never compare, average, or max values ACROSS formulas.
     """
 
     rank: int

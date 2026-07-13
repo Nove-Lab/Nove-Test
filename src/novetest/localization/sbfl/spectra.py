@@ -81,8 +81,21 @@ class SpectraBuildError(ValueError):
 def build_spectra(
     coverage_facts: CoverageFactSet,
     failed_test_ids: frozenset[str],
+    passed_test_ids: frozenset[str],
 ) -> Spectra:
     """Build the per-test spectra from ``coverage_facts.files[*].line_contexts``.
+
+    Outcome vocabulary (ANA-11, pinned S30): the caller supplies BOTH
+    outcome sets explicitly — ``failed_test_ids`` (the
+    ``models.FAIL_LIKE_OUTCOMES`` bucket: ``failed`` / ``errored``) and
+    ``passed_test_ids`` (strictly ``outcome == "passed"``). Tests
+    discovered in the coverage contexts that are in NEITHER set
+    (``skipped`` / ``xfailed`` / ``xpassed``, or nodeids the Run Record
+    does not attest at all) are EXCLUDED from the SBFL sample: they get
+    no matrix row and contribute to neither ``ef``/``nf`` nor
+    ``ep``/``np_``. The pre-S30 behavior inferred "not failed ⇒ passed",
+    so a covered ``xfailed``/``xpassed`` test inflated ``ep`` and
+    diluted suspicion in all four formulas.
 
     Two-pass:
 
@@ -90,10 +103,14 @@ def build_spectra(
        AND the set of (file, line) locations actually attested by the
        coverage. The discovered test set is the union of all per-line
        nodeids across all files (passing AND failing — passing tests are
-       needed to populate ``ep`` / ``np_``). The discovered location set
-       is every line with at least one nodeid in its context.
+       needed to populate ``ep`` / ``np_``), filtered to the two outcome
+       sets per the exclusion contract above. The discovered location
+       set is every line with at least one nodeid in its context (a
+       location stays a column even when every attesting test is
+       excluded — its counts are then all zero).
     2. Allocate the dense ``(len(tests), len(locations))`` uint8 matrix
-       and stamp 1s by replaying the contexts.
+       and stamp 1s by replaying the contexts (excluded nodeids are
+       skipped).
 
     The failed-test outcome vector is built by intersecting
     ``failed_test_ids`` with the discovered test set: failed tests that
@@ -101,7 +118,11 @@ def build_spectra(
     that never executed any covered code) are still recorded as rows
     with all-zero coverage so ``ef`` is correctly zero for them. To make
     that work, ``failed_test_ids`` outside the discovered union are
-    included as rows too.
+    included as rows too. ``passed_test_ids`` outside the discovered
+    union get NO row — an unattested passing test carries no per-line
+    evidence, and adding all-zero passing rows would shift ``np_`` for
+    every location. When every non-failed discovered test is excluded,
+    the sample degrades to failing rows only (``ep == np_ == 0``).
 
     Raises ``SpectraBuildError`` when every file's ``line_contexts`` is
     empty — the caller has already validated
@@ -132,10 +153,13 @@ def build_spectra(
             "FileCoverage.line_contexts is empty — cannot build spectra"
         )
 
-    # Include failed tests that the coverage never attested to (e.g.
-    # collection errors, tests that crashed before any covered code ran).
-    # They count as rows with all-zero coverage so ef stays correct.
-    all_test_ids = sorted(discovered_tests | set(failed_test_ids))
+    # Exclusion contract (ANA-11): keep only discovered tests with an
+    # attested failed/passed outcome; then include failed tests that the
+    # coverage never attested to (e.g. collection errors, tests that
+    # crashed before any covered code ran) — they count as rows with
+    # all-zero coverage so ef stays correct.
+    sampled_tests = discovered_tests & (failed_test_ids | passed_test_ids)
+    all_test_ids = sorted(sampled_tests | set(failed_test_ids))
     sorted_locations = sorted(discovered_locations)
 
     test_index = {tid: i for i, tid in enumerate(all_test_ids)}
@@ -146,13 +170,17 @@ def build_spectra(
     )
 
     # Pass 2: stamp 1s for every (test, location) pair attested.
+    # Excluded nodeids (skipped/xfailed/xpassed/unattested) have no row
+    # in ``test_index`` and are skipped.
     for file_cov in coverage_facts.files:
         for line, nodeids in file_cov.line_contexts.items():
             if not nodeids:
                 continue
             j = location_index[(file_cov.file_path, line)]
             for nodeid in nodeids:
-                i = test_index[nodeid]
+                i = test_index.get(nodeid)
+                if i is None:
+                    continue
                 matrix[i, j] = 1
 
     test_outcomes = np.array(

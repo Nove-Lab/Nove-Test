@@ -2,8 +2,15 @@
 
 ``ef - ep / (ep + np_ + 1)``
 
-Provably maximal under the single-bug assumption. Unbounded; min-max
-normalization at the engine level brings it into [0, 1] for output.
+Provably maximal under the single-bug assumption.
+
+Scale (ANA-20 honesty): the raw Op2 score is unbounded above (grows
+with ``ef``) and can be NEGATIVE — ``ef == 0`` with ``ep > 0`` yields
+``-ep / (ep + np_ + 1)`` in ``(-1, 0)``. The raw value is serialized
+AS-IS into ``LocalizationEntry.score_raw`` / ``alternate_scores`` — it
+is NOT brought into [0, 1] on the wire. Only the presentation formula's
+``score_normalized`` is min-max normalized at the engine level;
+alternates stay on this raw, formula-native scale.
 
 The ``+ 1`` in the denominator is the published Op2 form (avoids
 division-by-zero when a location is touched by zero tests).

@@ -556,3 +556,65 @@ def test_localization_failure_proximity_default_formula_no_warning(
         f"Default-formula failure_proximity should emit no warnings; got "
         f"{warnings!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# S30 — SBFL score correctness against the REAL per-test payload.
+# ---------------------------------------------------------------------------
+
+
+def test_per_test_context_nodeids_all_attested_by_run_record(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """S30/ANA-11 load-bearing assumption guard: every nodeid in the real
+    coverage.py per-test contexts matches a Run Record ``test_result``
+    node_id.
+
+    ``build_spectra`` now EXCLUDES discovered nodeids outside the
+    failed/passed outcome sets; if the pytest adapter's context ids ever
+    drifted from the normalizer's node_ids, real passing tests would be
+    silently dropped from the SBFL sample. This guard makes that drift
+    loud at the integration boundary.
+    """
+    from novetest.coverage.retrieval import get_coverage_facts
+    from novetest.memory.store import retrieve_run_evidence
+
+    store = seeded_workspace["store"]
+    run_reference = seeded_workspace["run_reference"]
+
+    entry = retrieve_run_evidence(store, run_reference)
+    record_node_ids = {tr.node_id for tr in entry.run_record.test_results}
+
+    coverage = get_coverage_facts(store, run_reference)
+    context_nodeids: set[str] = set()
+    for file_cov in coverage.files:
+        for nodeids in file_cov.line_contexts.values():
+            context_nodeids.update(nodeids)
+
+    assert context_nodeids, "per-test fixture must attest context nodeids"
+    unattested = context_nodeids - record_node_ids
+    assert not unattested, (
+        f"Coverage context nodeids missing from the Run Record: "
+        f"{sorted(unattested)!r} — the ANA-11 exclusion contract would "
+        f"silently drop these from the SBFL sample"
+    )
+
+
+def test_dstar2_alternate_score_is_positive_for_the_bug_symbol(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """S30/ANA-10 e2e pin: ``divide`` (covered by every failing test and no
+    passing test → D* denominator 0) carries a POSITIVE, finite
+    ``alternate_scores.dstar2`` on the real fixture. Pre-S30 this slot was
+    filled with 0.0 — minimum suspicion for the true bug site."""
+    import math
+
+    from novetest.models.localization_finding import LocalizationFinding
+
+    finding = seeded_workspace["finding"]
+    assert isinstance(finding, LocalizationFinding)
+    top = finding.entries[0]
+    assert top.code_location.symbol == "divide"
+    dstar2_score = top.alternate_scores["dstar2"]
+    assert dstar2_score > 0.0
+    assert math.isfinite(dstar2_score)

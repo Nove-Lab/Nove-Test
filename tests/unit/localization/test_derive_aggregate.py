@@ -633,3 +633,50 @@ def test_parse_warning_wording_distinguishes_empty_from_unresolvable(
     # The conflated pre-split wording must be gone from BOTH branches.
     assert "empty or unresolvable" not in warnings[0]
     assert "empty or unresolvable" not in warnings2[0]
+
+
+# ---------------------------------------------------------------------------
+# S30 / ANA-11 — aggregate side of the passing-definition contract:
+# ``total_passing`` counts strictly ``passed`` (via the shared
+# ``_passed_test_ids`` SSoT); skipped/xfailed/xpassed contribute to no
+# counter.
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_total_passing_excludes_xfailed_xpassed_skipped(
+    tmp_path: Path,
+) -> None:
+    """1 failing + 1 passed + 1 xpassed + 1 xfailed + 1 skipped: the Ochiai
+    denominator sees total_passing == 1, byte-identical to a run without
+    the excluded outcomes (1/sqrt(2), same as the happy-path pin)."""
+    store, record, coverage = _make_setup(
+        tmp_path,
+        test_results=(
+            TestResult(
+                node_id="tests/t.py::t_bug",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:5: AssertionError",
+            ),
+            TestResult(node_id="tests/t.py::t_ok", outcome="passed", duration_ms=1),
+            TestResult(node_id="tests/t.py::t_xp", outcome="xpassed", duration_ms=1),
+            TestResult(node_id="tests/t.py::t_xf", outcome="xfailed", duration_ms=1),
+            TestResult(node_id="tests/t.py::t_sk", outcome="skipped", duration_ms=1),
+        ),
+        covered_files=("src/foo.py",),
+    )
+    finding = _derive_aggregate(
+        store=store,
+        record=record,
+        coverage=coverage,
+        failed_test_ids=frozenset({"tests/t.py::t_bug"}),
+        regression_facts=None,
+        top_n=10,
+        formula="ochiai",
+    )
+    assert len(finding.entries) == 1
+    top = finding.entries[0]
+    # Ochiai = 1 / sqrt((1+0) * (1+ep)) with ep == total_passing == 1.
+    # Counting any excluded outcome as passing (ep == 2) would yield
+    # 1/sqrt(3) ≈ 0.577 instead.
+    assert top.score_raw == pytest.approx(1.0 / (2 ** 0.5))

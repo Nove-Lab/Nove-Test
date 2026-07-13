@@ -534,3 +534,311 @@ def test_per_test_metadata_survives_persistence_roundtrip(
     assert cached.mode == "sbfl_per_test"
     assert cached.metadata["changed_files_count"] is None
     assert cached.metadata["regression_reweighted"] is None
+
+
+# ---------------------------------------------------------------------------
+# S30 — SBFL score correctness: ANA-10 (dstar2 denominator-zero inversion),
+# ANA-11 (outcome-exclusion contract), passing-definition SSoT.
+# ---------------------------------------------------------------------------
+
+
+# All-fail run source for the ANA-10 scenario. ``bug``'s body is covered
+# by BOTH failing tests (ef=2, ep=0, nf=0 → D* denominator 0); ``noise``'s
+# body by only one (ef=1, nf=1 → finite D* = 1.0).
+_ALL_FAIL_SOURCE = (
+    "def bug(x):\n"          # line 1
+    "    return x - 1\n"     # line 2 — covered by BOTH failing tests
+    "\n"
+    "def noise(x):\n"        # line 4
+    "    return x\n"         # line 5 — covered by ONE failing test
+)
+
+
+def _seed_all_fail_project(
+    *,
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+) -> Path:
+    """Seed the ANA-10 all-fail run: 2 failing tests, ZERO passing tests."""
+    workspace = tmp_path / "ws"
+    source_file = workspace / "src" / "allfail.py"
+    write_python_module(source_file, _ALL_FAIL_SOURCE)
+    clear_resolver_cache()
+
+    test_results = (
+        TestResult(node_id="tests/test_af.py::test_one", outcome="failed", duration_ms=1),
+        TestResult(node_id="tests/test_af.py::test_two", outcome="failed", duration_ms=1),
+    )
+    record = make_record(test_results=test_results)
+    coverage = make_coverage(
+        files=(
+            make_file(
+                "src/allfail.py",
+                {
+                    2: (
+                        "tests/test_af.py::test_one",
+                        "tests/test_af.py::test_two",
+                    ),
+                    5: ("tests/test_af.py::test_one",),
+                },
+            ),
+        ),
+    )
+    seed_store(workspace, record=record, coverage=coverage)
+    return workspace
+
+
+def test_dstar2_all_fail_run_ranks_bug_above_noise(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-10 end-to-end: under ``--formula dstar2`` the true bug (covered
+    by every failing test, no passing test → denominator 0) ranks STRICTLY
+    ABOVE the finite-denominator noise line.
+
+    Pre-S30, the ``denom == 0 → 0.0`` fill scored ``bug`` at 0.0 and
+    ``noise`` at 1.0 — the exact ranking inversion of the finding. This
+    is the named ANA-10 A/B tripwire at the derive layer.
+    """
+    workspace = _seed_all_fail_project(
+        tmp_path=tmp_path,
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(workspace / ".novetest")
+    result = derive_localization_findings(store, default_ref, formula="dstar2")
+    assert isinstance(result, LocalizationFinding)
+    assert result.formula == "dstar2"
+
+    assert len(result.entries) >= 2
+    top = result.entries[0]
+    assert top.rank == 1
+    assert top.code_location.symbol == "bug"
+    # ceiling (max finite dstar2 = noise's 1.0) + ef^2 (4) = 5.0.
+    assert top.score_raw == pytest.approx(5.0)
+    noise_entry = next(
+        e for e in result.entries if e.code_location.symbol == "noise"
+    )
+    assert noise_entry.score_raw == pytest.approx(1.0)
+    assert top.score_raw > noise_entry.score_raw
+
+
+def test_dstar2_all_fail_run_persists_finite_json_floats(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-10 serialization constraint: the maximum-suspicion mapping stays
+    finite everywhere — ``score_raw``, ``score_normalized`` AND every
+    ``alternate_scores`` value — and the persisted JSON never carries the
+    non-standard ``Infinity`` / ``NaN`` tokens."""
+    import json
+    import math
+
+    workspace = _seed_all_fail_project(
+        tmp_path=tmp_path,
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(workspace / ".novetest")
+    result = derive_localization_findings(store, default_ref, formula="dstar2")
+    assert isinstance(result, LocalizationFinding)
+
+    for entry in result.entries:
+        assert math.isfinite(entry.score_raw)
+        assert math.isfinite(entry.score_normalized)
+        for name, value in entry.alternate_scores.items():
+            assert math.isfinite(value), f"{name} is not finite: {value!r}"
+    # Strict-JSON serialization succeeds (allow_nan=False rejects inf/nan)...
+    json.dumps(result.to_dict(), allow_nan=False)
+    # ...and the payload persisted by ``write_localization_findings`` has
+    # no Infinity/NaN token either.
+    raw = localization_findings_path(store, default_ref.run_id).read_text(
+        encoding="utf-8"
+    )
+    assert "Infinity" not in raw
+    assert "NaN" not in raw
+
+
+def test_covered_xpassed_test_does_not_dilute_per_test_suspicion(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-11 end-to-end: an ``xpassed`` test covering the buggy line is
+    EXCLUDED from the SBFL sample — it must not count as a passing
+    execution (``ep``) of the bug.
+
+    Pre-S30, ``build_spectra`` inferred "not failed ⇒ passed", so the
+    covered xpassed test inflated ``ep`` for the buggy line and Ochiai
+    dropped from 1.0 to 1/sqrt(2). This is the named ANA-11 A/B tripwire
+    at the derive layer.
+    """
+    workspace = tmp_path / "ws"
+    source_file = workspace / "src" / "calc.py"
+    write_python_module(source_file, _BUGGY_SOURCE)
+    clear_resolver_cache()
+
+    test_results = (
+        TestResult(node_id="tests/test_calc.py::test_safe", outcome="passed", duration_ms=1),
+        TestResult(node_id="tests/test_calc.py::test_buggy", outcome="failed", duration_ms=1),
+        TestResult(node_id="tests/test_calc.py::test_xpass", outcome="xpassed", duration_ms=1),
+    )
+    record = make_record(test_results=test_results)
+    coverage = make_coverage(
+        files=(
+            make_file(
+                "src/calc.py",
+                {
+                    1: ("tests/test_calc.py::test_safe",),
+                    2: ("tests/test_calc.py::test_safe",),
+                    # The xpassed test covers the buggy lines too.
+                    4: (
+                        "tests/test_calc.py::test_buggy",
+                        "tests/test_calc.py::test_xpass",
+                    ),
+                    5: (
+                        "tests/test_calc.py::test_buggy",
+                        "tests/test_calc.py::test_xpass",
+                    ),
+                },
+            ),
+        ),
+    )
+    seed_store(workspace, record=record, coverage=coverage)
+    store = get_project_store_state(workspace / ".novetest")
+    result = derive_localization_findings(store, default_ref)
+    assert isinstance(result, LocalizationFinding)
+
+    top = result.entries[0]
+    assert top.code_location.symbol == "buggy"
+    # ef=1, ep=0 (xpassed excluded), nf=0 → Ochiai 1/sqrt(1*1) = 1.0.
+    # With the pre-S30 inference ep=1 → 1/sqrt(2) ≈ 0.707.
+    assert top.score_raw == pytest.approx(1.0)
+    # The excluded test never surfaces as a related failed test either.
+    assert "tests/test_calc.py::test_xpass" not in top.related_failed_tests
+
+
+# ---------------------------------------------------------------------------
+# S30 — passing-definition SSoT: both SBFL modes draw the passing sample
+# from the ONE ``_passed_test_ids`` helper (strictly ``passed``).
+# ---------------------------------------------------------------------------
+
+
+def test_passed_outcomes_ssot_value_is_pinned() -> None:
+    """The Localization passing bucket is exactly ``{"passed"}`` — a future
+    vocabulary change must be a loud, deliberate edit to THIS line (and a
+    re-read of the ANA-11 exclusion contract)."""
+    assert derive._PASSED_OUTCOMES == frozenset({"passed"})
+
+
+def test_both_sbfl_modes_source_passing_from_the_shared_helper(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wiring pin: ``_derive_per_test`` AND ``_derive_aggregate`` both call
+    ``derive._passed_test_ids`` — re-inlining a local passing definition in
+    either mode (the pre-S30 divergence) fails this test loudly."""
+    calls: list[str] = []
+    real = derive._passed_test_ids
+
+    def _spy(record: RunRecord) -> frozenset[str]:
+        calls.append(record.run_reference.run_id)
+        return real(record)
+
+    monkeypatch.setattr(derive, "_passed_test_ids", _spy)
+
+    # Per-test mode.
+    per_test_ws = _seed_buggy_project(
+        tmp_path=tmp_path / "per_test",
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(per_test_ws / ".novetest")
+    result = derive_localization_findings(store, default_ref)
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_per_test"
+    assert calls, "per-test mode must resolve passing via _passed_test_ids"
+
+    # Aggregate mode.
+    calls.clear()
+    agg_ws = tmp_path / "aggregate" / "ws"
+    record = make_record(
+        test_results=(
+            TestResult(
+                node_id="tests/a.py::t",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:7: AssertionError",
+            ),
+            TestResult(node_id="tests/a.py::t_ok", outcome="passed", duration_ms=1),
+        ),
+    )
+    coverage = make_coverage(
+        files=(make_file("src/foo.py", {1: ()}),),
+        mapping_granularity="aggregate",
+    )
+    seed_store(agg_ws, record=record, coverage=coverage)
+    agg_store = get_project_store_state(agg_ws / ".novetest")
+    agg_result = derive_localization_findings(agg_store, default_ref)
+    assert isinstance(agg_result, LocalizationFinding)
+    assert agg_result.mode == "sbfl_aggregate"
+    assert calls, "aggregate mode must resolve passing via _passed_test_ids"
+
+
+def test_no_inline_passed_literal_comparison_in_sbfl_modules() -> None:
+    """Source guard: neither ``derive.py`` nor ``sbfl/spectra.py`` compares
+    an outcome against an inline ``"passed"`` literal — the ONLY home of
+    the passing definition is ``_PASSED_OUTCOMES`` / ``_passed_test_ids``
+    (mirrors the S25 FAIL_LIKE_OUTCOMES SSoT posture)."""
+    import ast
+
+    from novetest.localization.sbfl import spectra as spectra_module
+
+    for module in (derive, spectra_module):
+        module_file = module.__file__
+        assert module_file is not None
+        tree = ast.parse(Path(module_file).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            operands = [node.left, *node.comparators]
+            for operand in operands:
+                assert not (
+                    isinstance(operand, ast.Constant) and operand.value == "passed"
+                ), (
+                    f"{module.__name__} line {node.lineno}: inline 'passed' "
+                    "comparison — use the _passed_test_ids SSoT instead"
+                )

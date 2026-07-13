@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from novetest.localization.persistence import (
+    invalidate_localization_findings,
     localization_findings_dir,
     localization_findings_path,
     read_localization_findings_raw,
@@ -115,6 +116,18 @@ def test_write_then_read_round_trip(tmp_path: Path) -> None:
 def test_read_missing_returns_none(tmp_path: Path) -> None:
     store = create_project_store(tmp_path)
     assert read_localization_findings_raw(store, "no-such-run") is None
+
+
+def test_invalidate_removes_cache_and_missing_is_noop(tmp_path: Path) -> None:
+    """S22-close rider: direct unit pin for the pinned cross-boundary API
+    ``invalidate_localization_findings`` (the e2e rederive suite covers it
+    end-to-end; this pins the two-line contract locally)."""
+    store = create_project_store(tmp_path)
+    write_localization_findings(store, _finding())
+    invalidate_localization_findings(store, _REF.run_id)
+    assert read_localization_findings_raw(store, _REF.run_id) is None
+    # Missing cache is a no-op, not an error.
+    invalidate_localization_findings(store, _REF.run_id)
 
 
 def test_write_creates_parent_directory_on_demand(tmp_path: Path) -> None:

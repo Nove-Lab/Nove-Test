@@ -102,6 +102,28 @@ _EVIDENCE_LINE_CAP: int = 10
 # "did this test FAIL?" with no need for the 3-bucket pass/fail/skip distinction.
 _FAILED_OUTCOMES: frozenset[str] = FAIL_LIKE_OUTCOMES
 
+# Outcome bucket for "passed" — strictly ``passed``, nothing else (ANA-11,
+# pinned S30). The ONE home of Localization's passing definition; both SBFL
+# modes draw from ``_passed_test_ids`` below. Everything outside the two
+# buckets (``skipped`` / ``xfailed`` / ``xpassed``) is EXCLUDED from the
+# SBFL sample: it contributes to neither ``ep``/``np_`` nor ``ef``/``nf``.
+_PASSED_OUTCOMES: frozenset[str] = frozenset({"passed"})
+
+
+def _passed_test_ids(record: RunRecord) -> frozenset[str]:
+    """Node ids of strictly-passed tests — the SBFL passing sample.
+
+    Single source for BOTH modes: ``_derive_per_test`` threads this set
+    into ``build_spectra`` (per-test rows) and ``_derive_aggregate``
+    counts it as ``total_passing``. Pre-S30 the two modes diverged —
+    per-test inferred "not failed ⇒ passed" (counting covered
+    ``xfailed``/``xpassed`` as passing) while aggregate counted strictly
+    ``passed``.
+    """
+    return frozenset(
+        tr.node_id for tr in record.test_results if tr.outcome in _PASSED_OUTCOMES
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -239,7 +261,7 @@ def _derive_per_test(
     formula: str,
 ) -> LocalizationFinding:
     """Build the per-test SBFL finding. Caller has validated all preconditions."""
-    spectra = build_spectra(coverage, failed_test_ids)
+    spectra = build_spectra(coverage, failed_test_ids, _passed_test_ids(record))
     counts = _count_vectors(spectra)
     scores = _compute_all_formula_scores(counts)
 
@@ -387,7 +409,10 @@ def _derive_aggregate(
        attribution is unavailable.
     2. Build per-file counts:
        - ``ef`` = number of failing tests whose trace mentions the file.
-       - ``ep`` = total passing tests if file appears in aggregate coverage
+       - ``ep`` = total passing tests (strictly ``outcome == "passed"``
+                  via the shared ``_passed_test_ids`` SSoT — ANA-11;
+                  ``skipped``/``xfailed``/``xpassed`` contribute to no
+                  counter) if file appears in aggregate coverage
                   (i.e. ANY test executed code in this file), else 0.
                   This is the brief's "passing component approximated from
                   aggregate minus failing" — degenerated to "passing tests
@@ -482,9 +507,9 @@ def _derive_aggregate(
     all_files = sorted(covered_files)
 
     total_failing = len(failed_test_ids)
-    total_passing = sum(
-        1 for tr in record.test_results if tr.outcome == "passed"
-    )
+    # Strict passing definition via the shared ``_passed_test_ids`` SSoT
+    # (ANA-11) — same vocabulary as the per-test mode's spectra rows.
+    total_passing = len(_passed_test_ids(record))
 
     n = len(all_files)
     ef_array = np.zeros(n, dtype=np.int64)
