@@ -31,7 +31,7 @@ from novetest.coverage.results import (
     CoverageUnavailable,
 )
 from novetest.coverage.retrieval import get_coverage_facts
-from novetest.memory.project_store import ProjectStore
+from novetest.memory import ProjectStore
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
     CoverageSummary,

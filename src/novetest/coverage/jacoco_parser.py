@@ -55,11 +55,17 @@ Mapping decisions (junit → frozen-schema)
   default; ``--per-test-class`` (Surefire ``forkMode=perTestClass``) is
   an opt-in slow mode deferred to a future hardening cycle.
 
-- ``file_path`` is workspace-relative POSIX. The source root convention
-  is Maven/Gradle ``src/main/java/<package>/<sourcefile>``; we prepend
-  that prefix. For multi-module Maven projects (D2), the parser globs
-  every per-module ``target/site/jacoco/jacoco.xml`` under the
-  workspace root and prefixes each file's path with its module name
+- ``file_path`` is workspace-relative POSIX, COMPOSED (not read from
+  the XML — JaCoCo reports carry package/sourcefile names only, never
+  source roots) under the standard Maven/Gradle convention
+  ``src/main/java/<package>/<sourcefile>``. **v1 supports the standard
+  Maven/Gradle layout only; files outside it are dropped by derive's
+  disk-existence filter** (ANA-05, Gate-1 Q3-A — mirrors the Cobertura
+  branch; all-dropped → ``missing-native-payload`` with a
+  ``jacoco-sources-not-found`` detail discriminator). For multi-module
+  Maven projects (D2), the parser globs every per-module
+  ``target/site/jacoco/jacoco.xml`` under the workspace root and
+  prefixes each file's path with its module name
   (e.g. ``moduleA/src/main/java/com/example/Foo.java``).
 
 - ``line_contexts = {}`` always — aggregate granularity has no
@@ -142,7 +148,10 @@ def parse_jacoco_xml(
     ``file_path``. Used by ``derive._derive_junit_jacoco`` for
     multi-module Maven where each per-module XML's sources live under
     ``<module>/src/main/java/`` rather than the workspace's
-    ``src/main/java/``.
+    ``src/main/java/``. Paths are COMPOSED under that standard
+    Maven/Gradle layout — the v1 contract; the parser never checks the
+    disk. Files outside the standard layout are dropped downstream by
+    derive's disk-existence filter (ANA-05).
 
     Raises ``CoverageJsonParseError`` on any structural XML problem
     (matching the LCOV / coverage.py parsers' contract so
@@ -254,7 +263,9 @@ def _build_workspace_relative_path(
     JaCoCo's ``<package name="com/example">`` already uses forward
     slashes; we concatenate with the sourcefile name and prepend the
     Maven/Gradle source-set convention. Multi-module Maven prepends the
-    module name.
+    module name. v1 supports the standard ``src/main/java`` layout
+    only — composed paths for non-standard layouts point at files that
+    do not exist and are dropped by derive's existence filter (ANA-05).
     """
 
     body = (

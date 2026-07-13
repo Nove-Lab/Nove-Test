@@ -448,7 +448,7 @@ appears):
 
 | Engine | Convention | Example reasons |
 |---|---|---|
-| coverage | hyphenated | `run-not-found`, `missing-native-payload`, `missing-derived-facts`, `native-payload-corrupt` |
+| coverage | hyphenated | `run-not-found`, `missing-native-payload`, `missing-derived-facts`, `native-payload-corrupt`, `engine-mismatch` |
 | regression | hyphenated | `run-not-found`, `run-tombstoned`, `no-comparable-baseline`, `missing-derived-facts`, `engine-mismatch`, `target-mismatch` |
 | localization | hyphenated | `no-failed-tests`, `no-coverage`, `no-run-evidence`, `missing-derived-facts`, `run-not-analyzable` |
 

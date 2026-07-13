@@ -20,8 +20,11 @@ from novetest.coverage.results import (
     REASON_RUN_NOT_FOUND,
     CoverageUnavailable,
 )
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory import (
+    ProjectStore,
+    RunEvidenceNotFoundError,
+    retrieve_run_evidence,
+)
 from novetest.models.coverage_fact_set import CoverageFactSet
 from novetest.models.run_reference import RunReference
 

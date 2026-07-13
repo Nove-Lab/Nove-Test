@@ -44,8 +44,11 @@ from novetest.coverage.results import (
     REASON_RUN_NOT_FOUND,
     CoverageUnavailable,
 )
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory import (
+    ProjectStore,
+    RunEvidenceNotFoundError,
+    retrieve_run_evidence,
+)
 from novetest.models.coverage_fact_set import (
     CoverageFactSet,
     FileCoverage,
@@ -282,6 +285,16 @@ def _derive_junit_jacoco(
     module directory name relative to the workspace root, mirroring
     brief §6 D2 ratification.
 
+    ANA-05 (Gate-1 Q3-A): the parser COMPOSES workspace-relative paths
+    under the standard Maven/Gradle ``src/main/java`` layout — the v1
+    contract — and never checks the disk. Mirroring the Cobertura
+    branch's existence filter, derived ``FileCoverage`` entries whose
+    composed path does not exist on disk are silently dropped; if the
+    XML had files but NONE survive, this returns
+    ``CoverageUnavailable(missing-native-payload)`` with a
+    ``jacoco-sources-not-found`` discriminator in the detail string
+    (non-standard source layouts, or a source tree moved post-run).
+
     Same total-at-the-boundary contract as the LCOV / JSON paths:
     ``CoverageUnavailable(missing-native-payload)`` for absent /
     unregistered artifact, ``CoverageUnavailable(native-payload-corrupt)``
@@ -340,7 +353,7 @@ def _derive_junit_jacoco(
             )
 
     try:
-        fact_set = parse_jacoco_xml(
+        raw_fact_set = parse_jacoco_xml(
             xml_paths,
             run_reference=record.run_reference,
             engine_name=record.engine_name,
@@ -354,6 +367,48 @@ def _derive_junit_jacoco(
             detail=str(exc),
             run_reference=record.run_reference,
         )
+
+    # ANA-05: drop FileCoverage entries whose composed path doesn't
+    # exist on disk (paths are FABRICATED under the v1 standard
+    # Maven/Gradle ``src/main/java`` layout — see the parser docstring).
+    # Empty raw_fact_set.files (XML had no sourcefiles at all) is NOT a
+    # sources-not-found condition — it's a valid empty report. Mirrors
+    # the Cobertura branch's §2.4 filter below.
+    surviving_files: tuple[FileCoverage, ...] = tuple(
+        fc
+        for fc in raw_fact_set.files
+        if (workspace_root / fc.file_path).is_file()
+    )
+
+    if raw_fact_set.files and not surviving_files:
+        # XML had sourcefiles but NONE resolved to on-disk paths — the
+        # project uses a non-standard source layout, or the tree moved
+        # post-run.
+        return CoverageUnavailable(
+            reason=REASON_MISSING_NATIVE_PAYLOAD,
+            detail=(
+                f"JaCoCo XML at {primary_xml} described "
+                f"{len(raw_fact_set.files)} source files but NONE exist "
+                f"on disk under workspace {workspace_root} — has the "
+                f"project tree moved post-run, or does it use a "
+                f"non-standard source layout? v1 composes paths under "
+                f"the standard Maven/Gradle src/main/java layout only. "
+                f"(jacoco-sources-not-found)"
+            ),
+            run_reference=record.run_reference,
+        )
+
+    if len(surviving_files) != len(raw_fact_set.files):
+        # Partial survival — rebuild with filtered files + recomputed
+        # summary (shared sum-of-parts roll-up, W2/S33) so downstream
+        # consumers see a consistent fact set without re-parsing the XML.
+        fact_set = replace(
+            raw_fact_set,
+            files=surviving_files,
+            summary=_summary.aggregate_summary(surviving_files),
+        )
+    else:
+        fact_set = raw_fact_set
 
     write_coverage_facts(store, fact_set)
     return fact_set

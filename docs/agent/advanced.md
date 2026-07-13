@@ -184,7 +184,7 @@ Unavailable (run exists, ran without coverage) — still exit 0,
 
 Coverage reason strings are **hyphenated**: `run-not-found`,
 `missing-native-payload`, `missing-derived-facts`,
-`native-payload-corrupt`. A stale/unknown
+`native-payload-corrupt`, `engine-mismatch`. A stale/unknown
 `run_id` is different — `errors[0].code = "not-found"`, exit 2.
 
 ---
@@ -427,7 +427,7 @@ exit 2:
           "related_failed_tests": ["tests/test_arithmetic.py::test_subtract"],
           "evidence_citations": [ "… {kind: test_result|coverage_fact, run_reference, selector} …" ]
         },
-        "… 4 more entries (test_subtract tied at rank 1; add / test_add_* at rank 2, score 0.000) …"
+        "… 1 more entry (test_subtract tied at rank 1; zero-score locations — add / test_add_* here — are filtered out of per-test rankings entirely) …"
       ],
       "derived_at": 1782370298123,
       "metadata": { "changed_files_count": null, "regression_reweighted": null }
