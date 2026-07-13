@@ -6,9 +6,18 @@ Workflow (from ``design/workflows/regression.md``):
     check_regression_availability(run_reference)            -> memory/retrieve_run_evidence
                                                             -> compare/resolve_baseline_for_run
 
-``get_regression_facts`` is a pure cache read: the canonical pair directory
-either exists with a parseable payload, or it doesn't. We do NOT resolve
-Memory entries here — the caller (`compare_runs`) does that and surfaces
+``get_regression_facts`` is a total cache read: a missing pair directory,
+a corrupt payload (malformed JSON / non-dict), and a foreign
+``schema_version`` all surface as
+``RegressionUnavailable(reason=REASON_MISSING_DERIVED_FACTS)`` rather than
+raising (ANA-23 / W2-S37) — the cache is DERIVED, reproducible evidence,
+so a bad read is honestly "treat as missing and let ``compare_runs``
+re-derive and overwrite" (self-heal). Deliberate doctrine contrast with
+PRIMARY evidence (`record.json`), whose corruption is loud
+(``store-corrupt`` / exit 5) because it is irreplaceable. Only the
+ValueError family is totalized; ``OSError`` (true I/O failure, not
+corruption) still propagates loudly. We do NOT resolve Memory entries
+here — the caller (`compare_runs`) does that and surfaces
 ``REASON_RUN_NOT_FOUND`` / ``REASON_RUN_TOMBSTONED`` for its own reasons
 (tombstoning is fail-hard regardless of cache existence, per decision §C.1).
 
@@ -31,8 +40,8 @@ from __future__ import annotations
 from typing import Any
 
 from novetest.coverage.compare import SCHEMA_VERSION as COVERAGE_DELTA_SCHEMA_VERSION
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import (
+from novetest.memory import (
+    ProjectStore,
     RunEvidenceNotFoundError,
     retrieve_run_evidence,
 )
@@ -68,12 +77,27 @@ def get_regression_facts(
       detail="coverage-schema-stale")`` when the cached payload embeds a
       Coverage delta whose schema is older than ``CoverageDelta``'s
       current schema (decision §C.6).
+    - ``RegressionUnavailable(reason="missing-derived-facts",
+      detail="corrupt-cache: ...")`` when the cached payload is corrupt
+      (malformed JSON, non-dict payload) or carries a foreign
+      ``schema_version`` (ANA-23). Treated exactly like a missing cache:
+      ``compare_runs`` re-derives and overwrites the bad file (self-heal).
+
+    Only the ValueError family is totalized this way (JSONDecodeError is a
+    ValueError subclass; ``from_dict`` raises ValueError on schema / shape
+    violations). ``OSError`` — an I/O failure, not corruption — is NOT
+    caught and propagates loudly (mirrors the W2-S42 memory pin).
     """
-    raw = read_regression_facts_raw(
-        store,
-        baseline_run_reference.run_id,
-        target_run_reference.run_id,
-    )
+    try:
+        raw = read_regression_facts_raw(
+            store,
+            baseline_run_reference.run_id,
+            target_run_reference.run_id,
+        )
+    except ValueError as exc:
+        return _corrupt_cache_unavailable(
+            exc, baseline_run_reference, target_run_reference
+        )
     if raw is None:
         return RegressionUnavailable(
             reason=REASON_MISSING_DERIVED_FACTS,
@@ -94,7 +118,33 @@ def get_regression_facts(
             target_run_reference=target_run_reference,
         )
 
-    return RegressionFactSet.from_dict(raw)
+    try:
+        return RegressionFactSet.from_dict(raw)
+    except ValueError as exc:
+        return _corrupt_cache_unavailable(
+            exc, baseline_run_reference, target_run_reference
+        )
+
+
+def _corrupt_cache_unavailable(
+    exc: ValueError,
+    baseline_run_reference: RunReference,
+    target_run_reference: RunReference,
+) -> RegressionUnavailable:
+    """Map a corrupt / foreign-schema cache read onto ``missing-derived-facts``.
+
+    ANA-23 (W2-S37, Gate-1 Q4a): the cache is derived, reproducible data —
+    a payload we cannot parse is honestly equivalent to one that was never
+    written. Reason code stays the pinned ``missing-derived-facts`` (no new
+    codes); ``detail`` keeps the parse error operator-visible under the
+    free-text ``"corrupt-cache: "`` prefix.
+    """
+    return RegressionUnavailable(
+        reason=REASON_MISSING_DERIVED_FACTS,
+        detail=f"corrupt-cache: {exc}",
+        baseline_run_reference=baseline_run_reference,
+        target_run_reference=target_run_reference,
+    )
 
 
 def check_regression_availability(

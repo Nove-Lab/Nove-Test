@@ -29,8 +29,8 @@ from typing import Any
 
 from novetest.coverage.compare import CoverageDelta, compare_coverage_facts
 from novetest.coverage.results import CoverageUnavailable
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import (
+from novetest.memory import (
+    ProjectStore,
     RunEvidenceNotFoundError,
     find_runs_for_target,
     list_run_history,
@@ -87,10 +87,12 @@ def compare_runs(
     """Return regression facts comparing ``baseline`` to ``target``.
 
     Reads from cache when the canonical ``regression_facts.json`` exists
-    AND the embedded Coverage payload (if any) is current; otherwise
-    derives fresh facts and writes them. Tombstoned baseline OR target
-    short-circuits to ``REASON_RUN_TOMBSTONED`` regardless of cache state
-    (decision §C.1).
+    with a readable, current payload; otherwise derives fresh facts and
+    writes them. A corrupt or foreign-schema cache file counts as missing
+    (ANA-23) — the derive path overwrites it from the primary Run Records,
+    so a bad cache self-heals instead of crashing the compare. Tombstoned
+    baseline OR target short-circuits to ``REASON_RUN_TOMBSTONED``
+    regardless of cache state (decision §C.1).
     """
     # 1) Resolve both Memory entries; surface RunEvidenceNotFoundError as
     #    a clean unavailable. The detail field distinguishes which side
@@ -118,18 +120,21 @@ def compare_runs(
             target_run_reference=target_entry.run_record.run_reference,
         )
 
-    # 3) Cache lookup. ``get_regression_facts`` is a pure file read; on
-    #    "missing-derived-facts" we derive. Note: the coverage-schema-stale
-    #    sub-case also surfaces as REASON_MISSING_DERIVED_FACTS — same
-    #    re-derive path handles it.
+    # 3) Cache lookup. ``get_regression_facts`` is a TOTAL cache read
+    #    (ANA-23): missing pair dir, coverage-schema-stale, AND
+    #    corrupt / foreign-schema payloads all surface as
+    #    REASON_MISSING_DERIVED_FACTS — the derive fallback below then
+    #    overwrites the bad cache from the primary Run Records (self-heal).
+    #    Only OSError (I/O failure, not corruption) still propagates loudly.
     cached = get_regression_facts(
         store, baseline_run_reference, target_run_reference
     )
     if isinstance(cached, RegressionFactSet):
         return cached
     if cached.reason != REASON_MISSING_DERIVED_FACTS:
-        # Defensive: no other reason should surface from a pure file read
-        # today, but propagate cleanly if a future change adds one.
+        # Defensive: the totalized cache read only returns
+        # REASON_MISSING_DERIVED_FACTS today, but propagate cleanly if a
+        # future change adds another reason.
         return cached
 
     # 4) Derive (also writes to disk).
@@ -352,18 +357,56 @@ def _classify(baseline_bucket: str, target_bucket: str) -> str:
     return "newly_active"
 
 
+def _collapse_by_node_id(
+    test_results: tuple[TestResult, ...],
+) -> dict[str, TestResult]:
+    """Collapse a Run Record's results to one representative per ``node_id``.
+
+    Duplicate ``node_id``s are real (ANA-24): jest accepts the same title
+    twice inside one describe block, and the normalizer emits both results
+    under the identical ``file::describe::title`` node_id. A plain dict
+    comprehension silently kept the LAST occurrence — an order-dependent
+    verdict when the duplicates disagree. Pinned policy (W2-S37, Gate-1
+    Q4b), deterministic given the Run Record's fixed ``test_results`` order:
+
+    - a fail-like occurrence (membership per ``models.FAIL_LIKE_OUTCOMES``,
+      the S25 SSoT) beats any non-fail-like occurrence — a duplicated test
+      that failed even once keeps its failure visible;
+    - among occurrences of the SAME class (fail-like vs non-fail-like),
+      the last occurrence wins — identical to the previous last-wins
+      behavior whenever the duplicates agree.
+
+    Downstream counts stay dict-key-based: one transition (and one summary
+    increment) per ``node_id``, never per occurrence — so
+    ``total_baseline_tests`` / ``total_target_tests`` count distinct
+    ``node_id``s, not raw result rows.
+    """
+    by_id: dict[str, TestResult] = {}
+    for tr in test_results:
+        existing = by_id.get(tr.node_id)
+        if (
+            existing is None
+            or tr.outcome in FAIL_LIKE_OUTCOMES
+            or existing.outcome not in FAIL_LIKE_OUTCOMES
+        ):
+            by_id[tr.node_id] = tr
+    return by_id
+
+
 def _build_transitions(
     baseline_record: RunRecord, target_record: RunRecord
 ) -> tuple[tuple[TestTransition, ...], RegressionSummary, list[str]]:
     """Compute the per-test transitions, summary, and unknown-outcome warnings.
 
     Transitions are sorted by ``node_id`` ascending (decision §5 constraint
-    #3 — determinism is load-bearing for NFR-REG-001). Unknown outcome
+    #3 — determinism is load-bearing for NFR-REG-001). Duplicate
+    ``node_id``s within one side collapse to a single representative via
+    ``_collapse_by_node_id`` (fail-first policy, ANA-24). Unknown outcome
     warnings are deduplicated per ``(engine, raw)`` pair to avoid noisy
     repetition when the same unrecognized string appears across many tests.
     """
-    baseline_by_id = {tr.node_id: tr for tr in baseline_record.test_results}
-    target_by_id = {tr.node_id: tr for tr in target_record.test_results}
+    baseline_by_id = _collapse_by_node_id(baseline_record.test_results)
+    target_by_id = _collapse_by_node_id(target_record.test_results)
     all_node_ids = sorted(set(baseline_by_id) | set(target_by_id))
 
     transitions: list[TestTransition] = []
@@ -598,6 +641,17 @@ def _engine_version_drift(baseline: RunRecord, target: RunRecord) -> bool:
 # --- baseline resolution -----------------------------------------------------
 
 
+def _detail_target(target_expression: str) -> str:
+    """Render ``target_expression`` for a ``no-comparable-baseline`` detail.
+
+    A bare ``novetest test`` records an EMPTY target expression, which
+    would render an unreadable ``detail: ""`` on the refusal (W2-S37
+    S36-close rider). Substitute the pinned placeholder — free-text only;
+    the reason code and every non-empty expression are unchanged.
+    """
+    return target_expression or "(entire workspace)"
+
+
 def _run_order_key(reference: RunReference) -> tuple[int, str]:
     """Total order on runs: lexicographic on the composite ``(created_at, run_id)``.
 
@@ -700,6 +754,11 @@ def resolve_latest_baseline(
       filtering played no part (ANA-25 honesty; defensive — only
       reachable when Memory's newest-first ordering drifts from the
       composite-key convention).
+
+    In every case above, an EMPTY ``target_expression`` (a bare
+    ``novetest test`` over the whole workspace) renders as the
+    ``(entire workspace)`` placeholder instead of an unreadable ``""``
+    (W2-S37 rider; free-text only, reason codes unchanged).
     """
     entries = find_runs_for_target(
         store, target_expression, include_tombstoned=False
@@ -707,7 +766,7 @@ def resolve_latest_baseline(
     if len(entries) < 2:
         return RegressionUnavailable(
             reason=REASON_NO_COMPARABLE_BASELINE,
-            detail=target_expression,
+            detail=_detail_target(target_expression),
         )
     target_entry = entries[0]
     baseline_ref = resolve_baseline_for_run(store, target_entry)
@@ -723,10 +782,10 @@ def resolve_latest_baseline(
             for entry in entries
         )
         detail = (
-            f"{target_expression} "
+            f"{_detail_target(target_expression)} "
             f"(engine={target_entry.run_record.engine_name})"
             if engine_filtered
-            else target_expression
+            else _detail_target(target_expression)
         )
         return RegressionUnavailable(
             reason=REASON_NO_COMPARABLE_BASELINE,

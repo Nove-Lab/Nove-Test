@@ -14,6 +14,10 @@ Coverage:
   byte-identical ``to_dict()``.
 - Cache hit: ``derive_regression_facts`` not re-invoked.
 - Stale-coverage detection: re-derive on next call.
+- Corrupt / foreign-schema cache: self-heal via re-derive + overwrite;
+  OSError stays loud (ANA-23 / W2-S37).
+- Duplicate node_id collapse: fail-first representative, last-occurrence
+  within a class, dict-key-based counts (ANA-24 / W2-S37).
 """
 
 from __future__ import annotations
@@ -882,3 +886,252 @@ def test_derive_regression_facts_writes_to_disk(
     assert regression_facts_path(
         store, _REF_BASELINE.run_id, _REF_TARGET.run_id
     ).is_file()
+
+
+# --- ANA-23 / W2-S37: corrupt cache self-heals on compare ---------------------
+
+
+def test_malformed_cache_self_heals_on_compare(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """A corrupt ``regression_facts.json`` no longer crashes ``compare_runs``
+    (pre-S37: uncaught JSONDecodeError). The read totalizes to
+    missing-derived-facts, the derive fallback recomputes from the primary
+    Run Records, and the overwrite leaves a VALID cache behind (self-heal)."""
+    _seed_pair(
+        initialized_store,
+        seed_run_record,
+        {"tests/x.py::test_a": "passed"},
+        {"tests/x.py::test_a": "passed"},
+    )
+    store = get_project_store_state(initialized_store)
+    cache_path = regression_facts_path(
+        store, _REF_BASELINE.run_id, _REF_TARGET.run_id
+    )
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text('{"schema_version": 1, "trunc', encoding="utf-8")
+
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)  # must not raise
+    assert isinstance(result, RegressionFactSet)
+    assert result.summary.still_passing == 1
+
+    # The bad file was overwritten with a valid, current-schema payload.
+    rewritten = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert rewritten["schema_version"] == 1
+    assert RegressionFactSet.from_dict(rewritten) == result
+
+
+def test_foreign_schema_cache_self_heals_on_compare(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """A cache stamped with a future/foreign ``schema_version`` (e.g. a
+    downgrade scenario) is re-derived and overwritten at current schema —
+    never a crash, never a silent downgrade read (ANA-23)."""
+    _seed_pair(
+        initialized_store,
+        seed_run_record,
+        {"tests/x.py::test_a": "passed"},
+        {"tests/x.py::test_a": "failed"},
+    )
+    store = get_project_store_state(initialized_store)
+    # Populate a REAL cache first, then stamp it foreign.
+    initial = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(initial, RegressionFactSet)
+    cache_path = regression_facts_path(
+        store, _REF_BASELINE.run_id, _REF_TARGET.run_id
+    )
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 2
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)  # must not raise
+    assert isinstance(result, RegressionFactSet)
+    assert result.summary.regressed == 1
+    rewritten = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert rewritten["schema_version"] == 1
+
+
+def test_cache_oserror_propagates_loudly_through_compare(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin: only the ValueError family self-heals. An I/O failure on the
+    cache read is not corruption and must stay loud (W2-S42 pin mirror)."""
+    from novetest.regression import retrieval as retrieval_module
+
+    _seed_pair(
+        initialized_store,
+        seed_run_record,
+        {"tests/x.py::test_a": "passed"},
+        {"tests/x.py::test_a": "passed"},
+    )
+    store = get_project_store_state(initialized_store)
+
+    def _raise_oserror(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(
+        retrieval_module, "read_regression_facts_raw", _raise_oserror
+    )
+    with pytest.raises(OSError, match="disk unavailable"):
+        compare_runs(store, _REF_BASELINE, _REF_TARGET)
+
+
+# --- ANA-24 / W2-S37: duplicate node_id fail-first collapse -------------------
+
+_DUP_NODE = "tests/dup.test.js::suite::works"
+
+
+def _tr_full(
+    node_id: str,
+    outcome: str,
+    *,
+    duration_ms: int = 10,
+    failure_reference: str | None = None,
+) -> TestResult:
+    return TestResult(
+        node_id=node_id,
+        outcome=outcome,
+        duration_ms=duration_ms,
+        failure_reference=failure_reference,
+    )
+
+
+@pytest.mark.parametrize(
+    "target_dup_outcomes",
+    [("passed", "failed"), ("failed", "passed")],
+    ids=["pass-then-fail", "fail-then-pass"],
+)
+def test_duplicate_node_id_fail_first_on_target(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    target_dup_outcomes: tuple[str, str],
+) -> None:
+    """Pinned policy (Gate-1 Q4b): a fail-like occurrence beats a
+    non-fail-like one — in BOTH fixed record orders, so the verdict is no
+    longer order-dependent (pre-S37 last-wins flipped it)."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_BASELINE,
+        test_results=(_tr_full(_DUP_NODE, "passed"),),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_TARGET,
+        test_results=tuple(
+            _tr_full(_DUP_NODE, outcome) for outcome in target_dup_outcomes
+        ),
+    )
+    store = get_project_store_state(initialized_store)
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(result, RegressionFactSet)
+    t = _find_transition(result, _DUP_NODE)
+    assert t.target_outcome == "failed"
+    assert t.category == "regressed"
+    assert result.summary.regressed == 1
+
+
+@pytest.mark.parametrize(
+    "baseline_dup_outcomes",
+    [("passed", "failed"), ("failed", "passed")],
+    ids=["pass-then-fail", "fail-then-pass"],
+)
+def test_duplicate_node_id_fail_first_on_baseline(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+    baseline_dup_outcomes: tuple[str, str],
+) -> None:
+    """The collapse applies to BOTH sides — a baseline duplicate that failed
+    even once keeps the failure as its representative."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_BASELINE,
+        test_results=tuple(
+            _tr_full(_DUP_NODE, outcome) for outcome in baseline_dup_outcomes
+        ),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_TARGET,
+        test_results=(_tr_full(_DUP_NODE, "passed"),),
+    )
+    store = get_project_store_state(initialized_store)
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(result, RegressionFactSet)
+    t = _find_transition(result, _DUP_NODE)
+    assert t.baseline_outcome == "failed"
+    assert t.category == "fixed"
+    assert result.summary.fixed == 1
+
+
+def test_duplicate_node_id_same_class_keeps_last_occurrence(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Within one class the LAST occurrence wins — identical to the
+    pre-S37 last-wins collapse whenever duplicates agree, on both sides
+    (fail-like class on baseline, non-fail-like class on target)."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_BASELINE,
+        test_results=(
+            _tr_full(_DUP_NODE, "failed", failure_reference="ref-first"),
+            _tr_full(_DUP_NODE, "errored", failure_reference="ref-last"),
+        ),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_TARGET,
+        test_results=(
+            _tr_full(_DUP_NODE, "passed", duration_ms=1),
+            _tr_full(_DUP_NODE, "passed", duration_ms=2),
+        ),
+    )
+    store = get_project_store_state(initialized_store)
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(result, RegressionFactSet)
+    t = _find_transition(result, _DUP_NODE)
+    assert t.baseline_outcome == "errored"
+    assert t.baseline_failure_reference == "ref-last"
+    assert t.target_duration_ms == 2
+    assert t.category == "fixed"
+
+
+def test_duplicate_node_id_counts_once_per_node_id(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """Counts stay dict-key-based: one transition and one summary increment
+    per node_id — never per occurrence (documented ANA-24 posture)."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_BASELINE,
+        test_results=(
+            _tr_full(_DUP_NODE, "passed"),
+            _tr_full(_DUP_NODE, "failed"),
+            _tr_full("tests/other.test.js::suite::solo", "passed"),
+        ),
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_REF_TARGET,
+        test_results=(
+            _tr_full(_DUP_NODE, "passed"),
+            _tr_full("tests/other.test.js::suite::solo", "passed"),
+        ),
+    )
+    store = get_project_store_state(initialized_store)
+    result = compare_runs(store, _REF_BASELINE, _REF_TARGET)
+    assert isinstance(result, RegressionFactSet)
+    # 3 raw baseline rows collapse to 2 distinct node_ids.
+    assert result.summary.total_baseline_tests == 2
+    assert result.summary.total_target_tests == 2
+    assert result.summary.fixed == 1  # dup node: fail-like rep -> passed
+    assert result.summary.still_passing == 1
+    dup_transitions = [
+        t for t in result.test_transitions if t.node_id == _DUP_NODE
+    ]
+    assert len(dup_transitions) == 1

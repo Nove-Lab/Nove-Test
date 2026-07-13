@@ -26,6 +26,9 @@ yield.
   closest predecessor, order-independent + repeated-run stable), honest
   ``no-comparable-baseline`` detail (engine hint only when D5 filtering
   actually excluded candidates), and probe/resolver parity.
+- W2-S37 rider (S36-close) → 2 cases: empty ``target_expression`` (bare
+  ``novetest test``) renders the ``(entire workspace)`` placeholder in the
+  ``no-comparable-baseline`` detail, plain and engine-hinted forms.
 
 Engine scoping is D5 of
 ``agent-comms/decisions/2026-07-03-engine-selection-policy.md``: baseline /
@@ -1098,3 +1101,51 @@ def test_check_same_ms_tie_parity_matches_resolver_both_directions(
         )
         assert probe is expected
         assert probe is (resolve_baseline_for_run(store, entry) is not None)
+
+
+# --- W2-S37 rider (S36-close): empty target expression placeholder detail ----
+
+
+def test_resolve_latest_empty_target_renders_placeholder_detail(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """A bare ``novetest test`` records ``target_expression=""``; the
+    ``no-comparable-baseline`` refusal must render the pinned
+    ``(entire workspace)`` placeholder, not an unreadable ``detail: ""``."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01BARE", _TS_MID),
+        target_expression="",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_latest_baseline(store, "")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "(entire workspace)"
+
+
+def test_resolve_latest_empty_target_placeholder_keeps_engine_hint(
+    initialized_store: Path,
+    seed_run_record: Callable[..., MemoryEntry],
+) -> None:
+    """The placeholder composes with the ANA-25 D5 engine hint: an empty
+    expression whose only strictly-older sibling is cross-engine renders
+    ``(entire workspace) (engine=<name>)`` — never a leading bare space."""
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01BAREA", _TS_OLD),
+        target_expression="",
+        engine_name="cargo-test",
+        ecosystem="rust",
+    )
+    seed_run_record(
+        initialized_store,
+        run_reference=_ref("01BAREB", _TS_MID),
+        target_expression="",
+    )
+    store = get_project_store_state(initialized_store)
+    result = resolve_latest_baseline(store, "")
+    assert isinstance(result, RegressionUnavailable)
+    assert result.reason == REASON_NO_COMPARABLE_BASELINE
+    assert result.detail == "(entire workspace) (engine=pytest)"

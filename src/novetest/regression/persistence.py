@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from novetest.memory.project_store import ProjectStore
+from novetest.memory import ProjectStore
 from novetest.models.regression_fact_set import RegressionFactSet
 
 
