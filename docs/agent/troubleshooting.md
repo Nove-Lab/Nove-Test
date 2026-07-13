@@ -297,13 +297,36 @@ approval — it hard-wipes all runs/findings and re-initializes. (Contrast
 }
 ```
 
-**Cause.** `.novetest/store.json` is missing, malformed, or
-permission-blocked (`store-corrupt`); or a filesystem error interrupted
-`reset` (`store-wipe-failed`).
+**Cause.** Two distinct corruption classes share the code — the message's
+path tells them apart:
 
-**Recovery.** Do NOT auto-recover — destructive recovery
-(`rm -rf .novetest && novetest init`) permanently destroys history.
-Surface to the operator.
+- **Store metadata** — `.novetest/store.json` is missing, malformed, or
+  permission-blocked (`store-corrupt`); or a filesystem error interrupted
+  `reset` (`store-wipe-failed`).
+- **A single run record** — the `record.json` of the exact run you
+  addressed by `run_id` (`memory show` / `memory delete` / `coverage show`
+  / `coverage diff` / `regression compare` / `compare` / `localization` /
+  `replay`) is torn, hand-mangled, or written by a newer schema. The
+  message names the corrupt file's absolute path. This is NOT `not-found`:
+  the run exists, its storage is unreadable — re-running or picking another
+  id will not fix it. A record that turns corrupt mid-verb (between the
+  history scan and a targeted read) surfaces the same code and exit.
+
+Scan verbs are unaffected by the record class: `memory list` still exits 0,
+skips the bad record, and attaches one `corrupt-run-record-skipped` warning
+per skip (see the warning table).
+
+**Recovery.** Split by the class:
+
+- Path ends in `store.json` (or the code is `store-wipe-failed`): do NOT
+  auto-recover — destructive recovery (`rm -rf .novetest && novetest init`)
+  permanently destroys history. Surface to the operator.
+- Path ends in `record.json`: only that ONE run's evidence is affected —
+  every other run stays intact and listable. `memory delete` cannot
+  tombstone a corrupt record (tombstoning re-writes the parsed record), so
+  the recovery is manual: with operator approval, delete the named
+  `record.json`'s `run_<id>/` parent directory, then re-run the tests to
+  produce fresh evidence.
 
 ### `cli-error` (exit 1)
 
@@ -496,7 +519,7 @@ script does, once).
 | Exit 2, `invalid-flag` | Auto-recover: fix the value. |
 | Exit 2, `confirm-required` | Re-issue with `--confirm` ONLY with operator approval. |
 | Exit 2, `adapter-invalid-target` | Auto-recover: fix the malformed target expression (drop the leading dash / flag / metacharacter). |
-| Exit 5, `store-corrupt` / `store-wipe-failed` | Do NOT auto-recover. Surface (destructive recovery destroys data). |
+| Exit 5, `store-corrupt` / `store-wipe-failed` | If the message names a `record.json`: one corrupt run — surface; operator may delete just that `run_<id>/` dir and re-run. Otherwise (`store.json` / wipe): do NOT auto-recover — surface (destructive recovery destroys ALL history). |
 | Exit 4, `engine-missing` / `engine-misconfigured` | Auto-recover IF policy permits installs (use `data.engine_readiness.issues[]`). Else surface. |
 | Exit 4, `adapter-*` (except `adapter-invalid-target`, exit 2) | Surface (engine-level issue, not a Nove Test bug). |
 | Exit 1, `cli-error` | Surface with the envelope. Do not retry blindly. |

@@ -653,3 +653,29 @@ def test_sweep_failure_never_fails_the_verb(
     store = create_project_store(tmp_path)
 
     assert (store.path / STORE_METADATA_FILENAME).is_file()
+
+
+def test_public_sweep_staging_residue_reaps_and_keeps_non_staging(
+    tmp_path: Path,
+) -> None:
+    """S42 rider: the public wrapper (package-path export) keeps the MEM-03
+    contract — reaps staging dirs only, leaves everything else alone."""
+    from novetest.memory import sweep_staging_residue
+
+    residue = _plant_staging_residue(tmp_path)
+    keeper_dir = tmp_path / ".novetest-backup"
+    keeper_dir.mkdir()
+
+    sweep_staging_residue(tmp_path)
+
+    assert not residue.exists()
+    assert keeper_dir.is_dir()
+
+
+def test_public_sweep_staging_residue_never_raises_on_missing_parent(
+    tmp_path: Path,
+) -> None:
+    from novetest.memory import sweep_staging_residue
+
+    # Best-effort contract: a nonexistent workspace path is swallowed.
+    sweep_staging_residue(tmp_path / "does-not-exist")

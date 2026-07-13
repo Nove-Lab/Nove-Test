@@ -17,6 +17,7 @@ from novetest.memory.project_store import (
     create_project_store,
     get_project_store_state,
     locate_project_store,
+    sweep_staging_residue,
 )
 from novetest.memory.store import (
     RECORD_FILENAME,
@@ -53,4 +54,5 @@ __all__ = [
     "locate_project_store",
     "retrieve_run_evidence",
     "store_run_evidence",
+    "sweep_staging_residue",
 ]

@@ -27,8 +27,10 @@ through ``novetest.memory.__init__``). It is imported **lazily inside the
 function** so each call re-reads the current
 ``novetest.memory.project_store`` attribute (clean per-call monkeypatch
 isolation in unit tests). ``WipeReport`` is referenced only for typing,
-under ``TYPE_CHECKING``. ``locate_project_store`` stays on the package path
-(it is part of Memory's long-standing ``__init__`` surface).
+under ``TYPE_CHECKING``. ``locate_project_store`` and ``sweep_staging_residue``
+(the MEM-03 residue reaper, used on the uninitialized refusal path — S42
+rider) stay on the package path as part of Memory's public ``__init__``
+surface, imported with the same lazy posture.
 """
 
 from __future__ import annotations
@@ -91,7 +93,7 @@ async def reset_project_workspace(
     init workflow's explicit-``engine`` path and cannot fail.
     """
 
-    from novetest.memory import locate_project_store
+    from novetest.memory import locate_project_store, sweep_staging_residue
     from novetest.memory.project_store import (
         ProjectStoreNotFoundError,
         wipe_project_store,
@@ -99,6 +101,13 @@ async def reset_project_workspace(
 
     store = locate_project_store(workspace_path)
     if store is None:
+        # S42 rider (MEM-03 / MT 2026-07-10 Issue 1): a wipe whose rmtree
+        # failed leaves `.novetest.deleting.*` residue AND no store — the
+        # `reset --confirm` retry lands exactly here, where the wipe-entry
+        # sweep is unreachable. Reclaim best-effort (never raises) before
+        # refusing; the refusal contract (`uninitialized` / exit 2) is
+        # unchanged.
+        sweep_staging_residue(workspace_path)
         raise ProjectStoreNotFoundError(
             "No Project Store found in this directory or any ancestor; "
             "nothing to reset. Run `novetest init` to create one."

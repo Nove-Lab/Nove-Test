@@ -117,6 +117,45 @@ def test_reset_raises_when_no_store_and_never_wipes(
     assert call_log == ["locate"]  # refused before wipe
 
 
+def test_reset_not_found_sweeps_staging_residue_before_refusing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S42 rider (MEM-03 / MT 2026-07-10 Issue 1): the uninitialized refusal
+    path best-effort sweeps ``.novetest.deleting.*`` residue BEFORE raising —
+    the retry-after-failed-wipe lands exactly here, where the wipe-entry
+    sweep is unreachable. The refusal contract itself is unchanged."""
+
+    call_log: list[str] = []
+    swept: list[Path] = []
+
+    def fake_locate(_workspace: Path) -> Any:
+        call_log.append("locate")
+        return None
+
+    def fake_sweep(workspace_path: Path) -> None:
+        call_log.append("sweep")
+        swept.append(workspace_path)
+
+    def must_not_wipe(_store_path: Path) -> Any:
+        raise AssertionError("wipe_project_store called when no store present")
+
+    async def must_not_init(_workspace: Path, *, engine: Any = None) -> Any:
+        raise AssertionError("initialize_project_workspace called on refusal path")
+
+    monkeypatch.setattr(memory_pkg, "locate_project_store", fake_locate)
+    monkeypatch.setattr(memory_pkg, "sweep_staging_residue", fake_sweep)
+    monkeypatch.setattr(project_store_mod, "wipe_project_store", must_not_wipe)
+    monkeypatch.setattr(reset_module, "initialize_project_workspace", must_not_init)
+
+    with pytest.raises(ProjectStoreNotFoundError):
+        asyncio.run(reset_project_workspace(Path("/ws")))
+
+    # Sweep runs on the refusal path (after locate, before the raise), on the
+    # invocation workspace; the destructive collaborators never run.
+    assert call_log == ["locate", "sweep"]
+    assert swept == [Path("/ws")]
+
+
 def test_reset_carries_previous_pin_into_reinit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

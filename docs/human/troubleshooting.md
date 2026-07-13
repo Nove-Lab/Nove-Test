@@ -486,9 +486,17 @@ There is no ANSI color. The glyph palette
 
 ### `✗ <verb>  store-corrupt: …` (exit 5)
 
-`.novetest/store.json` is unreadable or malformed.
+Either `.novetest/store.json` is unreadable or malformed, or — when the
+message names a `record.json` — the single run you addressed by `run_id`
+has a corrupt record on disk (torn write, hand-edited JSON, or a record
+written by a newer novetest).
 
-**Fix.** Worst case:
+**Fix.** If the message names a `record.json`, delete just that run's
+directory (the `run_<id>/` folder containing the named file) and re-run
+your tests — the rest of your history is intact, and `memory list` keeps
+working either way (it skips the corrupt record with a warning).
+`memory delete` cannot tombstone a corrupt record, so the manual removal
+IS the cleanup path. For `store.json` corruption, worst case:
 
 ```bash
 rm -rf .novetest

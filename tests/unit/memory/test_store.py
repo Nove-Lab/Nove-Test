@@ -14,6 +14,7 @@ from novetest.memory import store as store_module
 from novetest.memory.project_store import (
     STORE_METADATA_FILENAME,
     ProjectStore,
+    ProjectStoreCorruptError,
     ProjectStoreNotFoundError,
     create_project_store,
 )
@@ -1084,19 +1085,37 @@ def test_corrupt_tombstoned_record_is_skipped_too(store: ProjectStore) -> None:
 
     assert [e.entry_id for e in entries] == ["01OK"]
     assert [s.path for s in skipped] == [tombstone_record]
+    # S42: tombstone dirs are `run_<id>`-named too — the skip carries the id.
+    assert skipped[0].run_id == "01GONE"
 
 
-def test_targeted_read_of_corrupt_run_stays_loud(store: ProjectStore) -> None:
-    # `retrieve_run_evidence` names ONE run — a parse failure must propagate
-    # (exception-type re-wrapping / exit-5 mapping is S42, not this slice).
+# --- S42 / XCT-03: typed corruption error on loud paths + run_id on skips -------
+#
+# `_read_record` wraps parse/shape failures in `ProjectStoreCorruptError`
+# (path-bearing message) so every residual loud path carries the typed
+# storage error the CLI maps to `store-corrupt` / exit 5. Scan skips gain
+# the `run_id` field so addressed lookup misses can recognize a corrupt
+# record (Q1 Option A). A/B: revert the `_read_record` wrap and the typed
+# tests below observe raw ValueErrors again.
+
+
+def test_targeted_read_of_corrupt_run_raises_typed_storage_error(
+    store: ProjectStore,
+) -> None:
+    # `retrieve_run_evidence` names ONE run — a parse failure must propagate,
+    # and since S42 it propagates TYPED with the corrupt file's path in the
+    # message (the exit-5 `store-corrupt` contract's raise side).
     torn = _record(run_id="01TORN", created_at=TS_2026_05_13)
-    _plant_torn_record(store, "01TORN", TS_2026_05_13)
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
 
-    with pytest.raises(ValueError):  # json.JSONDecodeError is a ValueError
+    with pytest.raises(ProjectStoreCorruptError) as exc_info:
         retrieve_run_evidence(store, torn.run_reference)
+    assert str(torn_path) in str(exc_info.value)
 
 
-def test_targeted_read_of_future_schema_run_stays_loud(store: ProjectStore) -> None:
+def test_targeted_read_of_future_schema_run_raises_typed_storage_error(
+    store: ProjectStore,
+) -> None:
     future = _record(run_id="01FUTURE", created_at=TS_2026_05_13)
     store_run_evidence(store, future)
     future_path = (
@@ -1107,5 +1126,73 @@ def test_targeted_read_of_future_schema_run_stays_loud(store: ProjectStore) -> N
     raw["schema_version"] = 2
     future_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unsupported"):
+    with pytest.raises(ProjectStoreCorruptError, match="Unsupported") as exc_info:
         retrieve_run_evidence(store, future.run_reference)
+    assert str(future_path) in str(exc_info.value)
+
+
+def test_targeted_read_of_corrupt_tombstoned_run_raises_typed_storage_error(
+    store: ProjectStore,
+) -> None:
+    gone = _record(run_id="01GONE", created_at=TS_2026_05_13)
+    store_run_evidence(store, gone)
+    delete_run_evidence(store, gone.run_reference)
+    tombstone_record = (
+        store.path / "memory" / "tombstones" / f"{RUN_DIR_PREFIX}01GONE" / RECORD_FILENAME
+    )
+    tombstone_record.write_text("not json at all", encoding="utf-8")
+
+    with pytest.raises(ProjectStoreCorruptError) as exc_info:
+        retrieve_run_evidence(store, gone.run_reference)
+    assert str(tombstone_record) in str(exc_info.value)
+
+
+def test_delete_of_corrupt_run_raises_typed_storage_error(
+    store: ProjectStore,
+) -> None:
+    # Tombstoning re-writes the PARSED record — a corrupt record cannot be
+    # tombstoned. The typed raise is what makes the CLI's exit-5 outcome
+    # (rather than a fake success or a cli-error) possible.
+    torn = _record(run_id="01TORN", created_at=TS_2026_05_13)
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    with pytest.raises(ProjectStoreCorruptError) as exc_info:
+        delete_run_evidence(store, torn.run_reference)
+    assert str(torn_path) in str(exc_info.value)
+    # Nothing was mutated: the (corrupt) record is still at its live location.
+    assert torn_path.is_file()
+
+
+def test_read_record_does_not_wrap_oserror(store: ProjectStore) -> None:
+    # Vanished-file semantics unchanged (S42 pins the wrap to parse/shape
+    # failures only): a missing file is an OSError, never `store-corrupt`.
+    with pytest.raises(FileNotFoundError):
+        store_module._read_record(store.path / "memory" / "nope" / RECORD_FILENAME)
+
+
+def test_skipped_record_carries_run_id_from_directory_name(
+    store: ProjectStore,
+) -> None:
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    skipped: list[SkippedRecord] = []
+    list_run_history(store, skipped=skipped)
+
+    assert [s.run_id for s in skipped] == ["01TORN"]
+    assert skipped[0].path == torn_path
+    # The typed wrap keeps the skip's error message path-bearing.
+    assert str(torn_path) in skipped[0].error
+
+
+def test_skipped_record_run_id_is_none_for_unparseable_directory(
+    store: ProjectStore,
+) -> None:
+    weird_dir = store.path / "memory" / "runs" / "2026" / "05" / "13" / "weird"
+    weird_dir.mkdir(parents=True)
+    (weird_dir / RECORD_FILENAME).write_text("not json", encoding="utf-8")
+
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+
+    assert entries == []
+    assert [s.run_id for s in skipped] == [None]

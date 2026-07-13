@@ -136,7 +136,7 @@ def test_show_emits_fact_set_when_facts_present(
 ) -> None:
     run_id = "01TESTTESTTESTTESTTESTTEST"
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store: [_make_memory_entry(run_id)]
+        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(run_id)]
     )
     seen_ref: list[RunReference] = []
 
@@ -172,7 +172,7 @@ def test_show_emits_unavailable_when_facts_missing(
     """
     run_id = "01TESTTESTTESTTESTTESTTEST"
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store: [_make_memory_entry(run_id)]
+        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(run_id)]
     )
 
     def fake_get(_store: Any, ref: RunReference) -> CoverageUnavailable:
@@ -204,7 +204,7 @@ def test_show_returns_not_found_for_unknown_run_id(
     stub_store: object,
 ) -> None:
     """Mirror the `memory show` not-found pattern: exit 2, structured envelope."""
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store: [])
+    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
 
     # If lookup fails, `get_coverage_facts` MUST NOT be called.
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
@@ -238,7 +238,7 @@ def test_diff_emits_delta_when_both_runs_have_facts(
     monkeypatch.setattr(
         app_module,
         "list_run_history",
-        lambda _store: [
+        lambda _store, skipped=None: [
             _make_memory_entry(baseline_id),
             _make_memory_entry(target_id),
         ],
@@ -296,7 +296,7 @@ def test_diff_emits_unavailable_when_one_side_lacks_facts(
     monkeypatch.setattr(
         app_module,
         "list_run_history",
-        lambda _store: [
+        lambda _store, skipped=None: [
             _make_memory_entry(baseline_id),
             _make_memory_entry(target_id),
         ],
@@ -335,7 +335,7 @@ def test_diff_returns_not_found_when_target_run_id_unknown(
     monkeypatch.setattr(
         app_module,
         "list_run_history",
-        lambda _store: [_make_memory_entry(baseline_id)],
+        lambda _store, skipped=None: [_make_memory_entry(baseline_id)],
     )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:

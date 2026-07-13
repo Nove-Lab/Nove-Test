@@ -30,6 +30,7 @@ from pathlib import Path
 from novetest.memory.project_store import (
     STORE_METADATA_FILENAME,
     ProjectStore,
+    ProjectStoreCorruptError,
     ProjectStoreNotFoundError,
 )
 from novetest.models.memory_entry import MemoryEntry
@@ -56,15 +57,19 @@ class SkippedRecord:
 
     ``path`` is the corrupt file itself (torn write, hand-mangled JSON, or a
     future-schema record), so an operator can locate it without grepping;
-    ``error`` is the parse failure's message. Scan interfaces
-    (``list_run_history`` / ``find_runs_for_target``) SKIP such records and
-    report them through an optional collector instead of letting one bad file
-    kill the whole history walk. Targeted reads (``retrieve_run_evidence``)
-    deliberately stay loud.
+    ``error`` is the parse failure's message. ``run_id`` is derived at skip
+    time from the ``run_<ulid>`` directory name (``None`` when the directory
+    does not carry the prefix), so run_id-addressed callers can recognize
+    that a lookup miss was really a corrupt record (S42 exit-5 escalation).
+    Scan interfaces (``list_run_history`` / ``find_runs_for_target``) SKIP
+    such records and report them through an optional collector instead of
+    letting one bad file kill the whole history walk. Targeted reads
+    (``retrieve_run_evidence``) deliberately stay loud.
     """
 
     path: Path
     error: str
+    run_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -363,8 +368,23 @@ def _iter_all_records(
 
 
 def _read_record(path: Path) -> RunRecord:
+    """Parse one ``record.json``; corruption raises the typed storage error.
+
+    Parse/shape failures — torn JSON, a wrong-shaped body, missing/mistyped
+    keys, a future ``schema_version`` — are wrapped in
+    ``ProjectStoreCorruptError`` with the corrupt file's path in the message
+    (XCT-03 / S42), so every loud targeted read carries the typed storage
+    error the CLI maps to ``store-corrupt`` / exit 5. ``OSError`` (file
+    vanished mid-read) deliberately stays unwrapped — vanished-file
+    semantics are unchanged.
+    """
     raw = path.read_text(encoding="utf-8")
-    return RunRecord.from_dict(json.loads(raw))
+    try:
+        return RunRecord.from_dict(json.loads(raw))
+    except (ValueError, TypeError, KeyError) as exc:
+        # json.JSONDecodeError is a ValueError; RunRecord.from_dict raises
+        # ValueError (incl. unsupported schema_version), TypeError, KeyError.
+        raise ProjectStoreCorruptError(f"Corrupt run record at {path}: {exc}") from exc
 
 
 def _read_record_isolated(
@@ -373,16 +393,26 @@ def _read_record_isolated(
     """``_read_record`` for scan paths: parse failures skip, never propagate.
 
     Catches exactly the failure classes a bad ``record.json`` produces —
-    ``json.JSONDecodeError``/``ValueError`` (torn JSON, future ``schema_version``,
-    missing/mistyped keys), ``TypeError`` (JSON body of the wrong shape), and
-    ``OSError`` (file vanished mid-scan, e.g. a concurrent tombstone rename).
-    Anything else is a bug and stays loud.
+    ``ProjectStoreCorruptError`` (the typed wrap ``_read_record`` puts around
+    torn JSON / wrong-shaped bodies / future ``schema_version`` since S42;
+    a ``RuntimeError``, so it needs its own entry in the tuple), ``OSError``
+    (file vanished mid-scan, e.g. a concurrent tombstone rename), and the
+    residual raw ``ValueError``/``TypeError`` classes that can still escape
+    unwrapped (e.g. ``UnicodeDecodeError`` from non-UTF-8 bytes at
+    ``read_text``). Anything else is a bug and stays loud.
     """
     try:
         return _read_record(path)
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, ProjectStoreCorruptError) as exc:
         if skipped is not None:
-            skipped.append(SkippedRecord(path=path, error=str(exc)))
+            dir_name = path.parent.name
+            run_id = (
+                dir_name[len(RUN_DIR_PREFIX):]
+                if dir_name.startswith(RUN_DIR_PREFIX)
+                and len(dir_name) > len(RUN_DIR_PREFIX)
+                else None
+            )
+            skipped.append(SkippedRecord(path=path, error=str(exc), run_id=run_id))
         return None
 
 

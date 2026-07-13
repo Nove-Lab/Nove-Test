@@ -161,6 +161,74 @@ def _uninitialized(command: str) -> Envelope:
     )
 
 
+def _store_corrupt_envelope(
+    command: str,
+    message: str,
+    warnings: tuple[EnvelopeWarning, ...] = (),
+) -> Envelope:
+    """The ``store-corrupt`` error envelope (emitted with ``EXIT_STORAGE``).
+
+    One shape for every storage-corruption surface: the workspace-resolution
+    seam (``_require_store``), ``init``/``reset``'s store readers, and the
+    S42 run-record corruption paths — residual loud targeted reads plus the
+    Q1-A addressed-lookup escalation. The message carries the corrupt file's
+    path verbatim (same operator doctrine as ``corrupt-run-record-skipped``).
+    """
+    return Envelope(
+        command=command,
+        ok=False,
+        errors=(EnvelopeError(code="store-corrupt", message=message),),
+        warnings=warnings,
+    )
+
+
+def _lookup_miss_exit(
+    command: str,
+    run_id: str,
+    skipped: list[SkippedRecord],
+    warnings: tuple[EnvelopeWarning, ...] = (),
+) -> NoReturn:
+    """Exit for a run_id-addressed lookup miss: ``not-found`` — unless corrupt.
+
+    Gate-1 Q1 Option A (S42 / XCT-03): when the miss is really a
+    corrupt-on-disk record (a ``SkippedRecord`` whose ``run_id`` matches the
+    requested id), ``not-found`` would be dishonest — the run EXISTS but its
+    storage is unreadable, and the "re-run / wrong id" remediation that
+    ``not-found`` steers agents toward cannot help. That case escalates to
+    ``store-corrupt`` / exit 5 with the skipped record's path-bearing error.
+    Genuinely-absent ids keep ``not-found`` / exit 2; list-scan verbs keep
+    S41's skip+warning behavior (this helper only fires on addressed misses).
+    """
+    corrupt = next((s for s in skipped if s.run_id == run_id), None)
+    if corrupt is not None:
+        # `error` is normally already path-bearing (the S42 typed wrap);
+        # the fallback keeps the path doctrine for raw skip classes
+        # (e.g. a UnicodeDecodeError message names no file).
+        message = (
+            corrupt.error
+            if str(corrupt.path) in corrupt.error
+            else f"Corrupt run record at {corrupt.path}: {corrupt.error}"
+        )
+        _emit_and_exit(
+            _store_corrupt_envelope(command, message, warnings=warnings),
+            EXIT_STORAGE,
+        )
+    _emit_and_exit(
+        Envelope(
+            command=command,
+            ok=False,
+            errors=(
+                EnvelopeError(
+                    code="not-found",
+                    message=f"No Memory Entry for run_id={run_id!r}",
+                ),
+            ),
+            warnings=warnings,
+        ),
+        EXIT_USAGE,
+    )
+
+
 def _require_store(command: str) -> ProjectStore:
     """Resolve the governing Project Store for a verb (anchored-pin D2 + D6).
 
@@ -172,14 +240,7 @@ def _require_store(command: str) -> ProjectStore:
     try:
         store = asyncio.run(resolve_workspace(Path.cwd()))
     except ProjectStoreCorruptError as exc:
-        _emit_and_exit(
-            Envelope(
-                command=command,
-                ok=False,
-                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
-            ),
-            EXIT_STORAGE,
-        )
+        _emit_and_exit(_store_corrupt_envelope(command, str(exc)), EXIT_STORAGE)
     except EngineAmbiguousError as exc:
         # D6 migration on a legacy pin-less store found no single engine
         # choice — the user must pin explicitly (re-pin in place).
@@ -439,14 +500,7 @@ def init(
             EXIT_USAGE,
         )
     except ProjectStoreCorruptError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="init",
-                ok=False,
-                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
-            ),
-            EXIT_STORAGE,
-        )
+        _emit_and_exit(_store_corrupt_envelope("init", str(exc)), EXIT_STORAGE)
 
     if isinstance(result, InitNoEngineDetected):
         _emit_and_exit(
@@ -585,14 +639,7 @@ def reset_cmd(
             EXIT_USAGE,
         )
     except ProjectStoreCorruptError as exc:
-        _emit_and_exit(
-            Envelope(
-                command="reset",
-                ok=False,
-                errors=(EnvelopeError(code="store-corrupt", message=str(exc)),),
-            ),
-            EXIT_STORAGE,
-        )
+        _emit_and_exit(_store_corrupt_envelope("reset", str(exc)), EXIT_STORAGE)
     except OSError as exc:
         _emit_and_exit(
             Envelope(
@@ -712,6 +759,11 @@ def run_cmd(
         # RunEngineError family (EngineNotReady / AdapterInvocation / the
         # structural fallback) maps to its structured exit here.
         _emit_and_exit(*_map_execution_exception("run", exc))
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (the workflow's post-persist refresh /
+        # coverage derive found the just-written record corrupt — TOCTOU):
+        # a storage failure, not a cli-error.
+        _emit_and_exit(_store_corrupt_envelope("run", str(exc)), EXIT_STORAGE)
 
     entry = outcome.memory_entry
     record = entry.run_record
@@ -733,7 +785,12 @@ def run_cmd(
 def status() -> None:
     """Summarize the current Project Store: latest run + sub-report availability."""
     store = _require_store("status")
-    view = build_status_view(store)
+    try:
+        view = build_status_view(store)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (the view's cache-only readers do targeted
+        # reads via retrieve_run_evidence — TOCTOU): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("status", str(exc)), EXIT_STORAGE)
     _emit_and_exit(
         Envelope(command="status", ok=True, data=view.to_dict()),
         EXIT_OK,
@@ -831,20 +888,9 @@ def memory_show(run_id: str) -> None:
         None,
     )
     if target is None:
-        _emit_and_exit(
-            Envelope(
-                command="memory.show",
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code="not-found",
-                        message=f"No Memory Entry for run_id={run_id!r}",
-                    ),
-                ),
-                warnings=warnings,
-            ),
-            EXIT_USAGE,
-        )
+        # Q1-A: a miss on an id the scan skipped-as-corrupt escalates to
+        # store-corrupt / exit 5; genuinely-absent ids stay not-found.
+        _lookup_miss_exit("memory.show", run_id, skipped, warnings=warnings)
     ref = target.run_record.run_reference
     try:
         entry = retrieve_run_evidence(store, ref)
@@ -857,6 +903,13 @@ def memory_show(run_id: str) -> None:
                 warnings=warnings,
             ),
             EXIT_USAGE,
+        )
+    except ProjectStoreCorruptError as exc:
+        # Residual loud path (scan hit, then the targeted read found the
+        # record corrupt — TOCTOU): typed storage error → exit 5.
+        _emit_and_exit(
+            _store_corrupt_envelope("memory.show", str(exc), warnings=warnings),
+            EXIT_STORAGE,
         )
     _emit_and_exit(
         Envelope(
@@ -881,20 +934,10 @@ def memory_delete(run_id: str) -> None:
         None,
     )
     if target is None:
-        _emit_and_exit(
-            Envelope(
-                command="memory.delete",
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code="not-found",
-                        message=f"No Memory Entry for run_id={run_id!r}",
-                    ),
-                ),
-                warnings=warnings,
-            ),
-            EXIT_USAGE,
-        )
+        # Q1-A: a corrupt record CANNOT be tombstoned (tombstoning re-writes
+        # the parsed record) — exit 5 with the path is the honest outcome;
+        # manual removal of the named run dir is the recovery (docs).
+        _lookup_miss_exit("memory.delete", run_id, skipped, warnings=warnings)
     ref = RunReference(
         run_id=target.run_record.run_reference.run_id,
         created_at=target.run_record.run_reference.created_at,
@@ -910,6 +953,13 @@ def memory_delete(run_id: str) -> None:
                 warnings=warnings,
             ),
             EXIT_USAGE,
+        )
+    except ProjectStoreCorruptError as exc:
+        # Residual loud path (record turned corrupt between scan and the
+        # tombstone's own targeted read — TOCTOU): exit 5, nothing mutated.
+        _emit_and_exit(
+            _store_corrupt_envelope("memory.delete", str(exc), warnings=warnings),
+            EXIT_STORAGE,
         )
     _emit_and_exit(
         Envelope(
@@ -940,28 +990,21 @@ def _resolve_run_reference(
     """Look up a Memory Entry by run_id and return its Run Reference.
 
     Mirrors the lookup pattern used by ``memory_show`` / ``memory_delete``
-    so coverage verbs surface the same ``not-found`` envelope (exit 2)
-    when callers pass a stale or fake run_id.
+    so run_id-addressed verbs surface the same ``not-found`` envelope
+    (exit 2) for stale or fake ids — and the same S42 ``store-corrupt``
+    escalation (exit 5) when the requested id names a corrupt-on-disk
+    record the isolated scan skipped (Gate-1 Q1 Option A). The ``skipped``
+    collector here feeds only that corrupt-match check — warnings stay
+    memory-verb-only (S41's deliberate transport choice).
     """
-    entries = list_run_history(store)
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
     target = next(
         (e for e in entries if e.run_record.run_reference.run_id == run_id),
         None,
     )
     if target is None:
-        _emit_and_exit(
-            Envelope(
-                command=command,
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code="not-found",
-                        message=f"No Memory Entry for run_id={run_id!r}",
-                    ),
-                ),
-            ),
-            EXIT_USAGE,
-        )
+        _lookup_miss_exit(command, run_id, skipped)
     return target.run_record.run_reference
 
 
@@ -977,7 +1020,12 @@ def coverage_show(run_id: str) -> None:
     """
     store = _require_store("coverage.show")
     ref = _resolve_run_reference(store, "coverage.show", run_id)
-    outcome = get_coverage_facts(store, ref)
+    try:
+        outcome = get_coverage_facts(store, ref)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (record corrupted between the lookup scan
+        # and the engine's targeted read — TOCTOU): storage error, exit 5.
+        _emit_and_exit(_store_corrupt_envelope("coverage.show", str(exc)), EXIT_STORAGE)
     _emit_and_exit(
         Envelope(
             command="coverage.show",
@@ -1000,7 +1048,11 @@ def coverage_diff(baseline_run_id: str, target_run_id: str) -> None:
     store = _require_store("coverage.diff")
     baseline_ref = _resolve_run_reference(store, "coverage.diff", baseline_run_id)
     target_ref = _resolve_run_reference(store, "coverage.diff", target_run_id)
-    outcome = compare_coverage_facts(store, baseline_ref, target_ref)
+    try:
+        outcome = compare_coverage_facts(store, baseline_ref, target_ref)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("coverage.diff", str(exc)), EXIT_STORAGE)
     _emit_and_exit(
         Envelope(
             command="coverage.diff",
@@ -1044,7 +1096,13 @@ def regression_compare(baseline_run_id: str, target_run_id: str) -> None:
     store = _require_store("regression.compare")
     baseline_ref = _resolve_run_reference(store, "regression.compare", baseline_run_id)
     target_ref = _resolve_run_reference(store, "regression.compare", target_run_id)
-    outcome = compare_runs(store, baseline_ref, target_ref)
+    try:
+        outcome = compare_runs(store, baseline_ref, target_ref)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(
+            _store_corrupt_envelope("regression.compare", str(exc)), EXIT_STORAGE
+        )
     _emit_and_exit(
         Envelope(
             command="regression.compare",
@@ -1068,7 +1126,13 @@ def regression_latest() -> None:
     """
 
     store = _require_store("regression.latest")
-    outcome = derive_latest_regression(store)
+    try:
+        outcome = derive_latest_regression(store)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(
+            _store_corrupt_envelope("regression.latest", str(exc)), EXIT_STORAGE
+        )
     _emit_and_exit(
         Envelope(
             command="regression.latest",
@@ -1096,7 +1160,11 @@ def compare_cmd(baseline_run_id: str, target_run_id: str) -> None:
     store = _require_store("compare")
     baseline_ref = _resolve_run_reference(store, "compare", baseline_run_id)
     target_ref = _resolve_run_reference(store, "compare", target_run_id)
-    view = build_compare_view(store, baseline_ref, target_ref)
+    try:
+        view = build_compare_view(store, baseline_ref, target_ref)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("compare", str(exc)), EXIT_STORAGE)
     _emit_and_exit(
         Envelope(command="compare", ok=True, data=view.to_dict()),
         EXIT_OK,
@@ -1206,14 +1274,18 @@ def localization_run(
     resolved_top_n = top_n if top_n is not None else DEFAULT_TOP_N
     _validate_localization_flags("localization", resolved_formula, resolved_top_n)
     ref = _resolve_run_reference(store, "localization", run_id)
-    outcome, audit = derive_localization_with_flag_policy(
-        store,
-        ref,
-        formula=resolved_formula,
-        top_n=resolved_top_n,
-        formula_explicit=formula_explicit,
-        top_n_explicit=top_n_explicit,
-    )
+    try:
+        outcome, audit = derive_localization_with_flag_policy(
+            store,
+            ref,
+            formula=resolved_formula,
+            top_n=resolved_top_n,
+            formula_explicit=formula_explicit,
+            top_n_explicit=top_n_explicit,
+        )
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("localization", str(exc)), EXIT_STORAGE)
     warning = _localization_audit_warning(audit)
     _emit_and_exit(
         Envelope(
@@ -1257,13 +1329,19 @@ def localization_latest(
     _validate_localization_flags(
         "localization.latest", resolved_formula, resolved_top_n
     )
-    outcome, audit = derive_latest_localization_with_flag_policy(
-        store,
-        formula=resolved_formula,
-        top_n=resolved_top_n,
-        formula_explicit=formula_explicit,
-        top_n_explicit=top_n_explicit,
-    )
+    try:
+        outcome, audit = derive_latest_localization_with_flag_policy(
+            store,
+            formula=resolved_formula,
+            top_n=resolved_top_n,
+            formula_explicit=formula_explicit,
+            top_n_explicit=top_n_explicit,
+        )
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(
+            _store_corrupt_envelope("localization.latest", str(exc)), EXIT_STORAGE
+        )
     warning = _localization_audit_warning(audit)
     _emit_and_exit(
         Envelope(
@@ -1441,7 +1519,11 @@ def inspect_cmd(run_id: str) -> None:
     (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
     """
     store = _require_store("inspect")
-    view = build_inspect_view(store, run_id)
+    try:
+        view = build_inspect_view(store, run_id)
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("inspect", str(exc)), EXIT_STORAGE)
     if view is None:
         _emit_and_exit(
             Envelope(
@@ -1536,6 +1618,10 @@ def test_cmd(
         # ORC-02/ORC-21: same shared mapping as run_cmd — the two verbs cannot
         # drift because they thread their own ``command`` through one helper.
         _emit_and_exit(*_map_execution_exception("test", exc))
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (a stage's targeted read / the post-stage
+        # refresh found a record corrupt — TOCTOU): storage failure, exit 5.
+        _emit_and_exit(_store_corrupt_envelope("test", str(exc)), EXIT_STORAGE)
 
     envelope, exit_code = build_test_envelope(outcome)
     _emit_and_exit(envelope, exit_code)
@@ -1615,9 +1701,13 @@ def replay_cmd(run_id: str, *, reruns: int = 1, timeout: float = 600.0) -> None:
     """
     store = _require_store("replay")
     original_ref = _resolve_run_reference(store, "replay", run_id)
-    outcome = asyncio.run(
-        replay_run(store, original_ref, reruns=reruns, timeout=timeout)
-    )
+    try:
+        outcome = asyncio.run(
+            replay_run(store, original_ref, reruns=reruns, timeout=timeout)
+        )
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (TOCTOU targeted read): exit 5.
+        _emit_and_exit(_store_corrupt_envelope("replay", str(exc)), EXIT_STORAGE)
     envelope, exit_code = _build_replay_envelope(original_ref, outcome)
     _emit_and_exit(envelope, exit_code)
 

@@ -462,6 +462,19 @@ def _sweep_staging_residue(parent: Path) -> None:
             continue
 
 
+def sweep_staging_residue(workspace_path: Path) -> None:
+    """Best-effort reap of orphaned ``.novetest.deleting.*`` trees (public).
+
+    Thin public wrapper over the MEM-03 entry sweep
+    (``_sweep_staging_residue``) with the same contract: strictly
+    best-effort, NEVER raises, and touches only directories carrying the
+    staging prefix directly under ``workspace_path``. Exists for non-memory
+    callers — the reset workflow's uninitialized refusal path (S42 rider)
+    reclaims residue through this instead of importing a private symbol.
+    """
+    _sweep_staging_residue(workspace_path)
+
+
 def _count_wipe_items(store_path: Path) -> dict[str, int]:
     """Return ``{envelope_key: count}`` for every category in ``_WIPE_COUNT_SOURCES``.
 

@@ -144,7 +144,7 @@ def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         app_module,
         "list_run_history",
-        lambda _store: [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)],
+        lambda _store, skipped=None: [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)],
     )
 
 
@@ -362,7 +362,7 @@ def test_regression_compare_returns_not_found_for_fake_baseline_id(
     BEFORE `compare_runs` is called — returns the not-found envelope with
     exit 2, mirroring `coverage diff`."""
 
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store: [])
+    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("compare_runs called when baseline lookup failed")
@@ -389,7 +389,7 @@ def test_regression_compare_returns_not_found_for_fake_target_id(
     for the engine call to fire."""
 
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store: [_make_memory_entry(_BASELINE_ID)]
+        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(_BASELINE_ID)]
     )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:

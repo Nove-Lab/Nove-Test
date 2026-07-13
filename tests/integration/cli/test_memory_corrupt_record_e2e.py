@@ -1,21 +1,31 @@
-"""Subprocess E2E for MEM-05 per-record isolation (W2/S41).
+"""Subprocess E2E for MEM-05 per-record isolation (W2/S41) + S42 exit-5.
 
 One torn (truncated) and one future-schema ``record.json`` are planted in a
 multi-run Project Store, then the verbs that walk Run History are exercised as
 real subprocesses:
 
 - ``novetest memory list``   → healthy runs + a path-bearing warning per skip
-- ``novetest memory show``   → healthy run readable; the corrupt run reports
-  ``not-found`` (its record no longer parses) with the warning attached
+  (UNCHANGED by S42: list-scan verbs keep exit 0 + skip + warning)
+- ``novetest memory show``   → healthy run readable; **the corrupt run's own
+  show escalates to ``store-corrupt`` / exit 5** (S42 Gate-1 Q1 Option A —
+  the run EXISTS but its storage is corrupt; the pre-S42 ``not-found`` steered
+  agents to remediation that cannot help), warning still attached
+- ``novetest memory delete`` → same escalation (a corrupt record cannot be
+  tombstoned; manual removal of the named run dir is the recovery)
+- ``novetest coverage show`` → same escalation on a non-memory addressed verb
+  (which pre-S42 gave ZERO corruption signal), warning-free by S41's design
+- genuinely-absent ids       → ``not-found`` / exit 2 UNCHANGED
 - ``novetest regression latest``  → baseline resolution survives the corrupt
   sibling (scan-level isolation, no CLI warning channel there by design)
 - ``novetest localization latest`` → latest-analyzable walk survives too
 
 Before the isolation landed, ONE bad record killed every one of these with an
-uncaught-exception ``cli-error`` envelope (exit 1) — the A/B proof for this
-file is reverting ``_iter_all_records``'s isolation and watching all of it die
-again. The warning code ``corrupt-run-record-skipped`` and its
-path-in-message contract are pinned here.
+uncaught-exception ``cli-error`` envelope (exit 1) — the S41 A/B proof is
+reverting ``_iter_all_records``'s isolation and watching all of it die again.
+The S42 A/B proof is reverting the ``_lookup_miss_exit`` corrupt-match check
+and watching the escalation tests report ``not-found`` again. The warning
+code ``corrupt-run-record-skipped`` and its path-in-message contract are
+pinned here.
 """
 
 from __future__ import annotations
@@ -141,26 +151,100 @@ def test_memory_show_of_healthy_run_survives_and_warns(isolated_cwd, run_cli) ->
     assert str(torn_path) in {w["details"]["path"] for w in _skip_warnings(envelope)}
 
 
-def test_memory_show_of_corrupt_run_reports_not_found_with_warning(
+def test_memory_show_of_corrupt_run_escalates_store_corrupt(
     isolated_cwd, run_cli
 ) -> None:
-    """The corrupt run's own show: no longer a cli-error crash (exit 1) but a
-    structured ``not-found`` (its record was skipped by the lookup scan) WITH
-    the path-bearing warning telling the operator exactly why.
+    """The corrupt run's own show (S42 Gate-1 Q1-A): ``store-corrupt`` /
+    exit 5 with the corrupt file's path in the error message — the run
+    EXISTS, so the pre-S42 ``not-found`` (exit 2) was dishonest. The
+    path-bearing warning stays attached (memory-verb warning channel
+    unchanged).
 
     The loud targeted-read path (``retrieve_run_evidence`` on a named
     reference) is pinned at the unit level in
-    ``tests/unit/memory/test_store.py``.
+    ``tests/unit/memory/test_store.py`` + ``tests/unit/cli/
+    test_store_corrupt_mapping.py``.
     """
     torn_path, _ = _seed_store_with_corruption(isolated_cwd)
 
     result = run_cli(["memory", "show", _TORN_REF.run_id, "--output", "json"])
 
-    assert result.returncode == 2, result.stderr
+    assert result.returncode == 5, result.stderr
     envelope = result.envelope()
     assert envelope["ok"] is False
-    assert envelope["errors"][0]["code"] == "not-found"
+    assert envelope["errors"][0]["code"] == "store-corrupt"
+    assert str(torn_path) in envelope["errors"][0]["message"]
     assert str(torn_path) in {w["details"]["path"] for w in _skip_warnings(envelope)}
+
+
+def test_memory_show_of_future_schema_run_escalates_store_corrupt(
+    isolated_cwd, run_cli
+) -> None:
+    """Both corruption classes escalate: the future-schema record is just as
+    unreadable as the torn one on an addressed lookup."""
+    _, future_path = _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["memory", "show", _FUTURE_REF.run_id, "--output", "json"])
+
+    assert result.returncode == 5, result.stderr
+    envelope = result.envelope()
+    assert envelope["errors"][0]["code"] == "store-corrupt"
+    assert str(future_path) in envelope["errors"][0]["message"]
+
+
+def test_memory_delete_of_corrupt_run_escalates_store_corrupt(
+    isolated_cwd, run_cli
+) -> None:
+    """``memory delete`` on a corrupt record CANNOT tombstone (tombstoning
+    re-writes the parsed record) — exit 5 with the path is the honest
+    outcome; the record stays on disk for manual recovery."""
+    torn_path, _ = _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["memory", "delete", _TORN_REF.run_id, "--output", "json"])
+
+    assert result.returncode == 5, result.stderr
+    envelope = result.envelope()
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["code"] == "store-corrupt"
+    assert str(torn_path) in envelope["errors"][0]["message"]
+    # Nothing was mutated — the corrupt record is still at its live location.
+    assert torn_path.is_file()
+
+
+def test_coverage_show_of_corrupt_run_escalates_store_corrupt(
+    isolated_cwd, run_cli
+) -> None:
+    """Q1-A on a non-memory addressed verb: pre-S42 this was a ``not-found``
+    with ZERO corruption signal (warnings are memory-verb-only by S41's
+    transport choice — which is unchanged: no warning here either, the
+    SIGNAL moves into the error itself)."""
+    torn_path, _ = _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["coverage", "show", _TORN_REF.run_id, "--output", "json"])
+
+    assert result.returncode == 5, result.stderr
+    envelope = result.envelope()
+    assert envelope["command"] == "coverage.show"
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["code"] == "store-corrupt"
+    assert str(torn_path) in envelope["errors"][0]["message"]
+    assert envelope["warnings"] == []
+
+
+def test_addressed_verbs_keep_not_found_for_genuinely_absent_id(
+    isolated_cwd, run_cli
+) -> None:
+    """UNCHANGED wire pin: an id that matches NO record (healthy or corrupt)
+    keeps ``not-found`` / exit 2 on both memory and non-memory addressed
+    verbs, even while corrupt skips exist in the store."""
+    _seed_store_with_corruption(isolated_cwd)
+    absent = "01ABSENT00000000000000000Z"
+
+    for args in (["memory", "show", absent], ["coverage", "show", absent]):
+        result = run_cli([*args, "--output", "json"])
+        assert result.returncode == 2, (args, result.stderr)
+        envelope = result.envelope()
+        assert envelope["errors"][0]["code"] == "not-found"
 
 
 def test_regression_latest_survives_corrupt_sibling(isolated_cwd, run_cli) -> None:

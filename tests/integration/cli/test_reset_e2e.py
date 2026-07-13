@@ -85,6 +85,29 @@ def test_reset_round_trip_wipes_runs_and_reinitializes(isolated_cwd, run_cli) ->
     assert status.envelope()["data"]["run_history_size"] == 0
 
 
+def test_reset_confirm_on_uninitialized_workspace_sweeps_staging_residue(
+    isolated_cwd, run_cli
+) -> None:
+    """S42 rider (MEM-03 / MT 2026-07-10 Issue 1): the retry-after-failed-wipe
+    path. A failed wipe leaves ``.novetest.deleting.*`` residue and NO store;
+    the ``reset --confirm`` retry used to refuse BEFORE any sweep could run,
+    leaking the residue forever. The refusal envelope is unchanged
+    (``uninitialized`` / exit 2) — but the residue is now reclaimed."""
+    residue = isolated_cwd / ".novetest.deleting.01LEAKEDRESIDUE"
+    (residue / "memory" / "runs").mkdir(parents=True)
+    (residue / "store.json").write_text("{}", encoding="utf-8")
+
+    result = run_cli(["reset", "--confirm", "--output", "json"])
+
+    assert result.returncode == 2, result.stderr
+    env = result.envelope()
+    assert env["ok"] is False
+    assert env["errors"][0]["code"] == "uninitialized"
+    assert not residue.exists()
+    # The refusal created nothing either — the workspace stays uninitialized.
+    assert not (isolated_cwd / ".novetest").exists()
+
+
 def test_reset_without_confirm_is_a_usage_error(isolated_cwd, run_cli) -> None:
     """``reset`` without ``--confirm`` refuses (exit 2) and does NOT wipe."""
     _seed_one_run(isolated_cwd)

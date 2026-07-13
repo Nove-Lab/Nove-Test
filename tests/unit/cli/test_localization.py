@@ -187,7 +187,7 @@ def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         app_module,
         "list_run_history",
-        lambda _store: [_make_memory_entry(_RUN_ID)],
+        lambda _store, skipped=None: [_make_memory_entry(_RUN_ID)],
     )
 
 
@@ -294,7 +294,7 @@ def test_localization_run_fake_run_id_returns_not_found(
     """A fake run_id short-circuits at ``_resolve_run_reference`` BEFORE the
     engine call fires — ``not-found`` envelope, exit 2."""
 
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store: [])
+    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("derive_localization_findings must not be called")
