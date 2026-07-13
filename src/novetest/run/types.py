@@ -137,6 +137,14 @@ class NativeResult:
     ``payload["warnings"]`` list each adapter still writes) is kept for
     one release cycle as the v1 bridge per the same decision; both
     channels are populated in steady state.
+
+    ``workspace_root`` is the workspace the engine executed in
+    (``TestTarget.workspace_path``, resolved). Transient normalization
+    input, NOT persisted: the jest normalizer uses it to rewrite the
+    absolute suite-file prefix of its synthesized node_ids to
+    workspace-relative POSIX form (RUN-13 / W2-S11). Adapters whose
+    native test identities are already workspace-stable (pytest, go,
+    junit, cargo, xunit) leave it ``None``.
     """
 
     engine_name: str
@@ -148,3 +156,4 @@ class NativeResult:
     engine_version: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
     warnings: tuple[AdapterWarning, ...] = ()
+    workspace_root: Path | None = None

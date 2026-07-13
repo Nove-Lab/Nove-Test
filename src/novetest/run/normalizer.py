@@ -12,6 +12,7 @@ adapter #5 / #6, when junit + xunit land).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from novetest.models import FAIL_LIKE_OUTCOMES, RunRecord, RunReference, TestResult
@@ -53,7 +54,9 @@ def normalize_native_result(
     if engine_name == "pytest":
         status, summary, test_results = _normalize_pytest_payload(native_result.payload)
     elif engine_name == "jest":
-        status, summary, test_results = _normalize_jest_payload(native_result.payload)
+        status, summary, test_results = _normalize_jest_payload(
+            native_result.payload, workspace_root=native_result.workspace_root
+        )
     elif engine_name == "go-test":
         status, summary, test_results = _normalize_gotest_payload(
             native_result.payload, returncode=native_result.returncode
@@ -218,18 +221,35 @@ def _aggregate_pytest_status(
 
 def _normalize_jest_payload(
     payload: Mapping[str, Any],
+    *,
+    workspace_root: Path | None,
 ) -> tuple[str, dict[str, int], tuple[TestResult, ...]]:
     """Normalize jest's ``--json`` output into a Run Record's components.
 
-    Jest's payload shape (stable since Jest 20):
+    Jest's payload shape (verified against jest 29.7.0's
+    ``--json --outputFile`` report):
     ``{success, numPassedTests, numFailedTests, numPendingTests,
        numTodoTests, numTotalTests, testResults: [{name, status,
-       testResults: [{ancestorTitles, title, fullName, status, duration,
-       failureMessages, location}]}]}``.
+       assertionResults: [{ancestorTitles, title, fullName, status,
+       duration, failureMessages, location}]}]}``.
 
-    Nodeids are synthesized as ``<relative file>::<ancestors>::<title>``
-    so they are stable, human-readable, and align with how the pytest
-    adapter shapes its nodeid string.
+    The TOP-LEVEL ``testResults`` key is the suite list; the per-suite
+    assertion entries live under ``assertionResults`` (jest's report
+    serializer renames the aggregated result's internal per-suite
+    ``testResults`` field on write). A per-suite ``testResults`` list is
+    read as a fallback so payloads carrying the internal (pre-serializer)
+    field name still normalize — reading ONLY the fallback key was the
+    W2-S11 bug (MT Issue 1): real jest reports never matched, and every
+    jest run persisted zero per-test results while the top-level
+    summary counts parsed fine.
+
+    Nodeids are synthesized as
+    ``<workspace-relative POSIX file>::<ancestors>::<title>`` so they
+    are stable cross-host (RUN-13), human-readable, and align with how
+    the pytest adapter shapes its nodeid string. ``workspace_root``
+    (``NativeResult.workspace_root``) anchors the relativization; when
+    it is absent or the suite file lies outside it, the raw suite path
+    is kept in POSIX separators.
     """
 
     summary = {
@@ -252,8 +272,13 @@ def _normalize_jest_payload(
         if not isinstance(suite, Mapping):
             continue
         suite_file = suite.get("name") or suite.get("testFilePath") or ""
-        suite_file_str = str(suite_file)
-        per_suite = suite.get("testResults")
+        suite_file_str = _jest_workspace_relative_posix(
+            str(suite_file), workspace_root
+        )
+        per_suite = suite.get("assertionResults")
+        if per_suite is None:
+            # Fallback: the internal (pre-serializer) per-suite field name.
+            per_suite = suite.get("testResults")
         if not isinstance(per_suite, list):
             continue
         for entry in per_suite:
@@ -263,6 +288,42 @@ def _normalize_jest_payload(
 
     status = _aggregate_jest_status(payload, tuple(flattened))
     return status, summary, tuple(flattened)
+
+
+def _jest_workspace_relative_posix(
+    suite_file: str, workspace_root: Path | None
+) -> str:
+    """Rewrite jest's absolute suite path to workspace-relative POSIX form.
+
+    jest's per-suite ``name`` / ``testFilePath`` is an ABSOLUTE path in
+    host-native separators (backslashes on Windows). node_ids must be
+    stable cross-host (RUN-13) and match the documented
+    ``<workspace-relative POSIX file>::…`` shape, so the prefix is
+    relativized against the workspace root and emitted with ``/``
+    separators on every platform. A suite file outside the workspace
+    root (not expected from jest, whose rootDir IS the workspace) — or a
+    missing root — keeps the raw path, still in POSIX separators, rather
+    than crashing.
+
+    Flavor pick: a backslash in the raw value means Windows separators
+    (jest never emits ``\\`` inside a path component on POSIX hosts), so
+    the string parses as `PureWindowsPath`; otherwise `PurePosixPath`.
+    ``workspace_root`` is rendered into the SAME flavor before
+    ``relative_to`` so canned payloads of either style resolve
+    identically on both host families.
+    """
+
+    windows_flavor = "\\" in suite_file
+    pure: PurePath = (
+        PureWindowsPath(suite_file) if windows_flavor else PurePosixPath(suite_file)
+    )
+    if workspace_root is not None:
+        root = str(workspace_root) if windows_flavor else workspace_root.as_posix()
+        try:
+            return pure.relative_to(root).as_posix()
+        except ValueError:
+            pass
+    return pure.as_posix()
 
 
 def _build_jest_test_result(suite_file: str, entry: Mapping[str, Any]) -> TestResult:

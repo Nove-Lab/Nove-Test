@@ -243,6 +243,11 @@ async def run_jest(
         started_at_ms=started_ms,
         completed_at_ms=completed_ms,
         engine_version=engine_version,
+        # The normalizer relativizes jest's absolute suite paths against
+        # this root when synthesizing node_ids (RUN-13). Resolved for the
+        # same reason `artifact_dir` is above: jest reports physical
+        # (symlink-resolved) paths, so the anchor must be physical too.
+        workspace_root=test_target.workspace_path.resolve(),
     )
 
 

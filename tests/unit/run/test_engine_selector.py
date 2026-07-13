@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from novetest.models import SUPPORTED_ENGINE_PAIRS
 from novetest.run import readiness as readiness_module
 from novetest.run.engine_selector import (
+    _ENGINE_MARKER_TABLE,
     detect_engine_candidates,
     list_supported_engine_pairs,
 )
@@ -29,6 +31,31 @@ def test_supported_pairs_cover_six_ecosystems() -> None:
     assert ("rust", "cargo-test") in pairs
     assert ("dotnet", "xunit") in pairs
     assert len(pairs) == 6
+
+
+def test_supported_pairs_are_the_models_ssot_object() -> None:
+    """S11 collapse (S43 routing (e)): run no longer derives its own pair
+    tuple — `list_supported_engine_pairs()` RETURNS the
+    `models.SUPPORTED_ENGINE_PAIRS` domain constant. Identity, not mere
+    equality, per the S25/S43 SSoT-consumer pattern: a re-forked local
+    copy breaks this loudly."""
+
+    assert list_supported_engine_pairs() is SUPPORTED_ENGINE_PAIRS
+
+
+def test_marker_table_derived_pairs_equal_models_ssot() -> None:
+    """`_ENGINE_MARKER_TABLE` stays the DETECTION source of truth
+    (markers + priority). Its (ecosystem, engine) projection must stay
+    exactly equal — order-sensitive, row order is the REQ-RUN-006
+    priority — to the models pair matrix, or detection and the supported
+    list drift apart. Run-side twin of the memory-owned guard in
+    `tests/unit/models/test_engine_matrix.py`."""
+
+    derived = tuple(
+        (ecosystem, engine_name)
+        for ecosystem, engine_name, _ in _ENGINE_MARKER_TABLE
+    )
+    assert derived == SUPPORTED_ENGINE_PAIRS
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,9 @@ from pathlib import Path
 import pytest
 
 from novetest.run.adapters.jest_adapter import run_jest
+from novetest.run.normalizer import normalize_native_result
 from novetest.run.target_resolver import resolve_test_target
+from novetest.run.types import NativeEngineContext
 
 
 FIXTURE_ROOT = (
@@ -62,3 +64,40 @@ async def test_jest_basic_runs_and_returns_passed_record(tmp_path: Path) -> None
     assert report_path.is_file()
     assert result.engine_version is not None
     assert result.engine_version.startswith("29.")
+
+
+async def test_jest_basic_normalizes_non_empty_workspace_relative_test_results(
+    tmp_path: Path,
+) -> None:
+    """W2-S11 pin for MT Issue 1: a REAL jest 29 report must survive
+    `normalize_native_result` with NON-EMPTY per-test results.
+
+    Pre-fix, the normalizer read the per-suite ``testResults`` key while
+    real reports nest assertions under ``assertionResults``, so every
+    jest run persisted ZERO per-test results — masked by the adapter-level
+    payload-count assertions above, which never inspect the normalized
+    record. This test closes exactly that gap, and pins the RUN-13
+    node_id shape: workspace-relative POSIX file prefix.
+    """
+
+    _require_node_and_local_jest()
+
+    target = resolve_test_target("__tests__/", FIXTURE_ROOT)
+    result = await run_jest(target, artifact_dir=tmp_path, timeout=120.0)
+    record = normalize_native_result(
+        result,
+        NativeEngineContext(
+            "javascript-typescript", "jest", result.engine_version
+        ),
+        target_expression=target.target_expression,
+        target_type=target.target_type,
+    )
+
+    assert record.status == "passed"
+    assert len(record.test_results) == 3
+    assert {tr.outcome for tr in record.test_results} == {"passed"}
+    assert sorted(tr.node_id for tr in record.test_results) == [
+        "__tests__/math.test.js::math::add is commutative",
+        "__tests__/math.test.js::math::add returns the sum of two integers",
+        "__tests__/math.test.js::math::subtract returns the difference of two integers",
+    ]

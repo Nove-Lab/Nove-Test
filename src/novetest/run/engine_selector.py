@@ -1,13 +1,18 @@
-"""Supported (ecosystem, engine) pairs and marker detection.
+"""Marker detection for the supported (ecosystem, engine) pairs.
 
 This module owns THE single source of truth for engine detection: the
 ordered marker/priority table `_ENGINE_MARKER_TABLE`. Everything that
-needs to know "which ecosystems exist, what markers identify them, and
-who wins on a polyglot workspace" derives from that one constant —
-`list_supported_engine_pairs`, `detect_engine_candidates`, and (via
-`detect_engine_candidates`) the disambiguation inside
-`readiness.assess_engine_readiness`. Run-time dispatch itself is
-pin-driven and lives in `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict —
+needs to know "what markers identify each ecosystem, and who wins on a
+polyglot workspace" derives from that one constant —
+`detect_engine_candidates`, and through it the disambiguation inside
+`readiness.assess_engine_readiness`. The supported PAIR matrix itself
+lives one layer down in `models.engine_matrix.SUPPORTED_ENGINE_PAIRS`
+(XCT-13 / S43); `list_supported_engine_pairs` returns that domain
+constant since S11 collapsed the run-side derived copy, and divergence
+guards (`tests/unit/run/test_engine_selector.py`,
+`tests/unit/models/test_engine_matrix.py`) pin the marker table's
+(ecosystem, engine) projection exactly equal to it. Run-time dispatch
+is pin-driven and lives in `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict —
 detection here decides only what a pin CAN name. There is deliberately
 no second ordered list anywhere in `run/`; the historic
 selector-vs-readiness rank mismatch (java 3rd vs junit 5th — the §4.1
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from novetest.models import SUPPORTED_ENGINE_PAIRS
 from novetest.run.types import EngineCandidate
 
 # THE canonical ordered marker/priority table. Row order matches
@@ -48,15 +54,19 @@ _ENGINE_MARKER_TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("dotnet", "xunit", ("*.sln", "*.csproj", "*/*.csproj")),
 )
 
-_SUPPORTED_PAIRS: tuple[tuple[str, str], ...] = tuple(
-    (ecosystem, engine_name) for ecosystem, engine_name, _ in _ENGINE_MARKER_TABLE
-)
-
-
 def list_supported_engine_pairs() -> tuple[tuple[str, str], ...]:
-    """Return the (ecosystem, engine_name) pairs Nove Test claims to support."""
+    """Return the (ecosystem, engine_name) pairs Nove Test claims to support.
 
-    return _SUPPORTED_PAIRS
+    Returns the ``models.SUPPORTED_ENGINE_PAIRS`` domain constant — the
+    SSoT since XCT-13/S43 promoted the matrix out of this module; S11
+    collapsed the run-side derived copy onto it. `_ENGINE_MARKER_TABLE`
+    above stays the DETECTION source (markers + priority); its
+    (ecosystem, engine) projection is pinned exactly equal to the models
+    constant by the divergence guards, so the two data sources cannot
+    drift apart silently.
+    """
+
+    return SUPPORTED_ENGINE_PAIRS
 
 
 def detect_engine_candidates(project_workspace: Path) -> tuple[EngineCandidate, ...]:

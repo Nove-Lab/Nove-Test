@@ -174,7 +174,12 @@ def test_artifact_paths_serialized_as_strings(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _jest_native_result(payload: dict[str, object], tmp_path: Path) -> NativeResult:
+def _jest_native_result(
+    payload: dict[str, object],
+    tmp_path: Path,
+    *,
+    workspace_root: Path | None = Path("/abs"),
+) -> NativeResult:
     return NativeResult(
         engine_name="jest",
         payload=payload,
@@ -187,9 +192,15 @@ def _jest_native_result(payload: dict[str, object], tmp_path: Path) -> NativeRes
         started_at_ms=1_700_000_000_000,
         completed_at_ms=1_700_000_000_500,
         engine_version="29.7.0",
+        workspace_root=workspace_root,
     )
 
 
+# Canned payloads mirror the REAL jest 29.7.0 `--json --outputFile` report
+# shape: the per-suite assertion entries live under `assertionResults`
+# (W2-S11 / MT Issue 1 — the normalizer used to read only the internal
+# pre-serializer key `testResults`, which real reports never carry, so
+# every jest run normalized to ZERO per-test results).
 JEST_PASSING_PAYLOAD: dict[str, object] = {
     "success": True,
     "numPassedTests": 2,
@@ -201,7 +212,7 @@ JEST_PASSING_PAYLOAD: dict[str, object] = {
         {
             "name": "/abs/__tests__/math.test.js",
             "status": "passed",
-            "testResults": [
+            "assertionResults": [
                 {
                     "ancestorTitles": ["math"],
                     "title": "add returns the sum of two integers",
@@ -233,7 +244,7 @@ JEST_FAILING_PAYLOAD: dict[str, object] = {
         {
             "name": "/abs/__tests__/math.test.js",
             "status": "failed",
-            "testResults": [
+            "assertionResults": [
                 {
                     "ancestorTitles": ["math"],
                     "title": "add works",
@@ -272,8 +283,11 @@ def test_jest_passing_payload_yields_passed_status(tmp_path: Path) -> None:
     assert record.summary_counts["total"] == 2
     assert len(record.test_results) == 2
     assert {tr.outcome for tr in record.test_results} == {"passed"}
-    # Nodeid format: <file>::<ancestors>::<title>
-    assert all("math" in tr.node_id for tr in record.test_results)
+    # Nodeid format: <workspace-relative POSIX file>::<ancestors>::<title>
+    assert [tr.node_id for tr in record.test_results] == [
+        "__tests__/math.test.js::math::add returns the sum of two integers",
+        "__tests__/math.test.js::math::subtract works",
+    ]
     assert "jest_json_report" in record.artifact_paths
 
 
@@ -352,7 +366,7 @@ def test_jest_pending_test_maps_to_skipped_outcome(tmp_path: Path) -> None:
             {
                 "name": "/abs/__tests__/x.test.js",
                 "status": "passed",
-                "testResults": [
+                "assertionResults": [
                     {
                         "ancestorTitles": ["g"],
                         "title": "pending case",
@@ -379,6 +393,150 @@ def test_jest_pending_test_maps_to_skipped_outcome(tmp_path: Path) -> None:
     )
     assert {tr.outcome for tr in record.test_results} == {"skipped"}
     assert record.status == "passed"
+
+
+def test_jest29_assertion_results_yield_non_empty_test_results(tmp_path: Path) -> None:
+    """MT Issue 1 canary (W2-S11): the jest-29 report shape — per-suite
+    ``assertionResults`` — MUST produce per-test results. Pre-fix the
+    normalizer read only the internal per-suite ``testResults`` key, so a
+    real report flattened to an EMPTY tuple while summary counts parsed
+    fine (silently starving regression compare / localization / replay).
+    """
+
+    record = normalize_native_result(
+        _jest_native_result(JEST_PASSING_PAYLOAD, tmp_path),
+        NativeEngineContext("javascript-typescript", "jest", "29.7.0"),
+        target_expression="__tests__/",
+        target_type="directory",
+    )
+    assert len(record.test_results) == 2
+    assert {tr.outcome for tr in record.test_results} == {"passed"}
+
+
+def test_jest_legacy_nested_testresults_key_still_parses(tmp_path: Path) -> None:
+    """Fallback pin: a payload nesting assertions under the per-suite
+    ``testResults`` key (jest's internal pre-serializer field name)
+    normalizes identically to the ``assertionResults`` shape."""
+
+    payload: dict[str, object] = {
+        "success": True,
+        "numPassedTests": 1,
+        "numFailedTests": 0,
+        "numTotalTests": 1,
+        "testResults": [
+            {
+                "name": "/abs/__tests__/math.test.js",
+                "status": "passed",
+                "testResults": [
+                    {
+                        "ancestorTitles": ["math"],
+                        "title": "add works",
+                        "status": "passed",
+                        "duration": 2,
+                        "failureMessages": [],
+                    },
+                ],
+            }
+        ],
+    }
+    record = normalize_native_result(
+        _jest_native_result(payload, tmp_path),
+        NativeEngineContext("javascript-typescript", "jest"),
+        target_expression="",
+        target_type="workspace",
+    )
+    assert [tr.node_id for tr in record.test_results] == [
+        "__tests__/math.test.js::math::add works"
+    ]
+    assert record.test_results[0].outcome == "passed"
+
+
+def _jest_single_suite_payload(suite_name: str) -> dict[str, object]:
+    """One-suite, one-test jest-29-shaped payload for node_id shape pins."""
+
+    return {
+        "success": True,
+        "numPassedTests": 1,
+        "numFailedTests": 0,
+        "numTotalTests": 1,
+        "testResults": [
+            {
+                "name": suite_name,
+                "status": "passed",
+                "assertionResults": [
+                    {
+                        "ancestorTitles": ["math"],
+                        "title": "add works",
+                        "status": "passed",
+                        "duration": 1,
+                        "failureMessages": [],
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def _normalize_single_suite(
+    suite_name: str, workspace_root: Path | None, tmp_path: Path
+) -> str:
+    record = normalize_native_result(
+        _jest_native_result(
+            _jest_single_suite_payload(suite_name),
+            tmp_path,
+            workspace_root=workspace_root,
+        ),
+        NativeEngineContext("javascript-typescript", "jest"),
+        target_expression="",
+        target_type="workspace",
+    )
+    (test_result,) = record.test_results
+    return test_result.node_id
+
+
+def test_jest_node_id_posix_suite_path_is_workspace_relative(tmp_path: Path) -> None:
+    """RUN-13: an absolute POSIX suite path relativizes against the
+    workspace root — node_ids are neither absolute nor host-specific."""
+
+    node_id = _normalize_single_suite(
+        "/repo/__tests__/math.test.js", Path("/repo"), tmp_path
+    )
+    assert node_id == "__tests__/math.test.js::math::add works"
+
+
+def test_jest_node_id_windows_suite_path_is_workspace_relative(tmp_path: Path) -> None:
+    """RUN-13: an absolute Windows-style suite path (backslashes, drive
+    letter) yields the SAME workspace-relative POSIX node_id — a run
+    recorded on Windows compares cleanly against one recorded on POSIX."""
+
+    node_id = _normalize_single_suite(
+        "C:\\repo\\__tests__\\math.test.js", Path("C:\\repo"), tmp_path
+    )
+    assert node_id == "__tests__/math.test.js::math::add works"
+    assert "\\" not in node_id
+
+
+def test_jest_suite_file_outside_workspace_root_falls_back_to_raw_posix(
+    tmp_path: Path,
+) -> None:
+    """Edge pin: a suite file NOT under the workspace root (should not
+    happen for jest, whose rootDir is the workspace) keeps the raw path
+    in POSIX separators instead of crashing."""
+
+    node_id = _normalize_single_suite(
+        "/elsewhere/x.test.js", Path("/repo"), tmp_path
+    )
+    assert node_id == "/elsewhere/x.test.js::math::add works"
+
+
+def test_jest_node_id_without_workspace_root_keeps_raw_posix(tmp_path: Path) -> None:
+    """Edge pin: no workspace root recorded (``NativeResult.workspace_root``
+    is None) — the raw suite path survives, but still in POSIX separators."""
+
+    node_id = _normalize_single_suite(
+        "C:\\repo\\__tests__\\math.test.js", None, tmp_path
+    )
+    assert node_id == "C:/repo/__tests__/math.test.js::math::add works"
 
 
 # ---------------------------------------------------------------------------
