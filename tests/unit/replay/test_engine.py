@@ -15,6 +15,12 @@ pin the engine's COMPOSITION contract without spawning any native engine:
   discarded — ``reruns_total`` = attempted reruns, and the verdict can
   honestly flip (2 crashes + 2 passes is NOT ``reproducible``). Crashed
   attempts are never persisted as Memory Entries.
+
+W2/S40 (ANA-12, downgraded) adds the remaining seam pins: the
+``ReplayUnavailable`` pass-through from ``reconstruct_replay_context``, the
+``reruns=0`` / negative-input boundary, and the gate-validated-pair dispatch
+invariant that replaced the deleted in-loop ``EngineNotSupportedError``
+handler.
 """
 
 from __future__ import annotations
@@ -30,7 +36,11 @@ from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 from novetest.replay.classifier import CrashedRerun
 from novetest.replay.context import ReplayContext
-from novetest.replay.errors import REASON_ENGINE_NOT_READY, ReplayUnavailable
+from novetest.replay.errors import (
+    REASON_ENGINE_NOT_READY,
+    REASON_ORIGINAL_NOT_FOUND,
+    ReplayUnavailable,
+)
 from novetest.run import (
     AdapterInvocationError,
     EngineNotSupportedError,
@@ -495,3 +505,128 @@ async def test_crashed_rerun_detail_reaches_classifier_input(
     assert isinstance(first_attempt, CrashedRerun)
     assert first_attempt.detail == "jest exited 127"
     assert isinstance(captured[0][1], RunRecord)
+
+
+# ---------------------------------------------------------------------------
+# W2/S40 (a) — ``ReplayUnavailable`` from reconstruction passes through
+# ---------------------------------------------------------------------------
+
+
+async def test_reconstruction_unavailable_passes_through_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    store: ProjectStore,
+    persisted: list[RunRecord],
+    written_results: list[ReplayResult],
+) -> None:
+    """A ``ReplayUnavailable`` returned by ``reconstruct_replay_context`` is
+    returned by ``replay_run`` AS-IS: the exact object, reason and detail
+    untouched — and nothing downstream runs (no probe, no rerun, no cached
+    result)."""
+    unavailable = ReplayUnavailable(
+        run_reference=_ORIGINAL_REF,
+        reason=REASON_ORIGINAL_NOT_FOUND,
+        detail="no run evidence for run_id='01SREPLAYENGINE000000ORIG'",
+    )
+    monkeypatch.setattr(
+        replay_engine, "reconstruct_replay_context", lambda _store, _ref: unavailable
+    )
+    probe_calls = _install_probe(monkeypatch, ready_pairs={})
+    execute_calls = _install_execute(monkeypatch, outcomes=[])
+
+    outcome = await replay_engine.replay_run(store, _ORIGINAL_REF)
+
+    assert outcome is unavailable  # the exact object, not a re-wrapped copy
+    assert isinstance(outcome, ReplayUnavailable)
+    assert outcome.reason == REASON_ORIGINAL_NOT_FOUND
+    assert outcome.detail == "no run evidence for run_id='01SREPLAYENGINE000000ORIG'"
+    assert probe_calls == []
+    assert execute_calls == []
+    assert persisted == []
+    assert written_results == []
+
+
+# ---------------------------------------------------------------------------
+# W2/S40 (b) — ``reruns=0`` boundary (and negative input clamp)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reruns", [0, -2])
+async def test_zero_or_negative_reruns_is_unable_to_replay_with_zero_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    store: ProjectStore,
+    persisted: list[RunRecord],
+    written_results: list[ReplayResult],
+    tmp_path: Path,
+    reruns: int,
+) -> None:
+    """``reruns=0`` (and any negative input, clamped by ``max(reruns, 0)``)
+    skips the rerun loop entirely: the gate still runs, no rerun executes,
+    and the empty attempt set classifies ``unable_to_replay`` /
+    ``no-replayed-runs`` with honest S38 accounting (``reruns_total`` =
+    attempted = 0). The zero-attempt result is still cached — a completed
+    (if empty) Replay Attempt."""
+    _install_context(
+        monkeypatch, _context(tmp_path, ecosystem="python", engine_name="pytest")
+    )
+    probe_calls = _install_probe(
+        monkeypatch, ready_pairs={("python", "pytest"): "ready"}
+    )
+    execute_calls = _install_execute(monkeypatch, outcomes=[])
+
+    outcome = await replay_engine.replay_run(store, _ORIGINAL_REF, reruns=reruns)
+
+    assert isinstance(outcome, ReplayResult)
+    assert outcome.classification == "unable_to_replay"
+    assert outcome.reason == "no-replayed-runs"
+    assert outcome.reruns_total == 0
+    assert outcome.reruns_failed == 0
+    assert outcome.per_rerun_outcomes == ()
+    assert outcome.test_id is None
+    assert outcome.replayed_run_reference is None
+    assert outcome.consistency_summary["replay_passed"] == 0
+    assert outcome.consistency_summary["replay_failed"] == 0
+    assert outcome.consistency_summary["replay_errored"] == 0
+    # The gate still ran (before the loop); no rerun was dispatched.
+    assert probe_calls == [(tmp_path, "python", "pytest")]
+    assert execute_calls == []
+    assert persisted == []
+    assert written_results == [outcome]
+
+
+# ---------------------------------------------------------------------------
+# W2/S40 (c) — rerun dispatch happens on the gate-validated pair
+# ---------------------------------------------------------------------------
+
+
+async def test_rerun_dispatch_uses_exactly_the_gate_validated_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    store: ProjectStore,
+    persisted: list[RunRecord],
+    written_results: list[ReplayResult],
+    tmp_path: Path,
+) -> None:
+    """Every rerun dispatches on the SAME ``engine_context`` object the gate
+    validated — the invariant that made the in-loop
+    ``except EngineNotSupportedError`` handler unreachable (deleted, W2/S40).
+
+    An out-of-matrix recorded pair is rejected by the GATE
+    (``test_gate_unsupported_recorded_pair_is_replay_unavailable`` above);
+    a gate-validated pair cannot miss adapter dispatch because the dispatch
+    table's keys equal the supported matrix (pinned run-side by
+    ``test_adapter_dispatch_matches_supported_engine_matrix``)."""
+    context = _context(tmp_path, ecosystem="go", engine_name="go-test")
+    _install_context(monkeypatch, context)
+    probe_calls = _install_probe(monkeypatch, ready_pairs={("go", "go-test"): "ready"})
+    execute_calls = _install_execute(
+        monkeypatch, outcomes=["passed", "passed", "passed"]
+    )
+
+    outcome = await replay_engine.replay_run(store, _ORIGINAL_REF, reruns=3)
+
+    assert isinstance(outcome, ReplayResult)
+    assert outcome.classification == "reproducible"
+    assert probe_calls == [(tmp_path, "go", "go-test")]
+    assert len(execute_calls) == 3
+    assert all(
+        call["engine_context"] is context.engine_context for call in execute_calls
+    )

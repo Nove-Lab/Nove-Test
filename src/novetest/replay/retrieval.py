@@ -13,7 +13,7 @@ Replay Attempt be reconstructed for this run?" — NOT "has one already run?".
 
 from __future__ import annotations
 
-from novetest.memory.project_store import ProjectStore
+from novetest.memory import ProjectStore
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_reference import RunReference
 from novetest.replay.context import ReplayContext, reconstruct_replay_context

@@ -11,6 +11,14 @@ engine, empty cache). It is distinct from a *successful* ``unable_to_replay``
 classification (a valid ``ReplayResult`` per REQ-REP-003): that one means
 "we replayed and the run could not reproduce", and is NOT an error.
 
+Channel policy (codified W2/S39, ``design/interace-contract/replay.md``):
+``replay`` is an EXECUTABLE verb — like ``run`` / ``test`` it refuses engine
+absence/misconfiguration on the ERRORS channel (``ok: false``, exit 4). The
+pure read/derive verbs (``coverage`` / ``regression`` / ``localization``)
+instead report unavailability on the DATA channel (``ok: true``, exit 0)
+with a documented ``reason`` — replay only borrows that data-channel shape
+for its non-error reasons below (exit 0), never for engine absence.
+
 Closed ``reason`` vocabulary and the exit-code split each reason maps to in
 ``cli/app.py::_build_replay_envelope`` (rationale recorded in the handoff):
 

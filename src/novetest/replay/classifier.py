@@ -195,9 +195,7 @@ def _focal_divergent_test(
     test; otherwise the divergence is spread (or untraceable) and we return
     ``None``.
     """
-    original_outcomes = {
-        tr.node_id: tr.outcome for tr in original_record.test_results
-    }
+    original_outcomes = _original_outcomes_by_node_id(original_record)
     divergent: set[str] = set()
     for record in replayed_records:
         for tr in record.test_results:
@@ -207,3 +205,38 @@ def _focal_divergent_test(
     if len(divergent) == 1:
         return next(iter(divergent))
     return None
+
+
+def _original_outcomes_by_node_id(record: RunRecord) -> dict[str, str]:
+    """Collapse the original run's results to one outcome per ``node_id``.
+
+    Duplicate ``node_id``s are real: jest accepts the same title twice inside
+    one describe block, and the normalizer emits both results under the
+    identical ``file::describe::title`` node_id. A plain dict comprehension
+    silently kept the LAST occurrence, making the focal-divergence verdict
+    order-dependent when the duplicates disagree. Pinned policy (W2/S40 —
+    the same fail-first collapse W2-S37/Gate-1 Q4b shipped for regression's
+    ``_collapse_by_node_id``; a small local equivalent, NOT imported — that
+    helper is regression-private):
+
+    - a fail-like occurrence (membership per ``models.FAIL_LIKE_OUTCOMES``,
+      the S25 SSoT) beats any non-fail-like occurrence — a duplicated test
+      that failed even once keeps its failure visible to the comparison;
+    - among occurrences of the SAME class (fail-like vs non-fail-like), the
+      last occurrence wins — identical to the previous last-wins behavior
+      whenever the duplicates agree.
+
+    The replayed side needs no collapse: every replayed occurrence is
+    compared individually against this map, and "ANY occurrence differing
+    marks the node_id divergent" is already order-independent.
+    """
+    outcomes: dict[str, str] = {}
+    for tr in record.test_results:
+        existing = outcomes.get(tr.node_id)
+        if (
+            existing is None
+            or tr.outcome in _FAILED_TEST_OUTCOMES
+            or existing not in _FAILED_TEST_OUTCOMES
+        ):
+            outcomes[tr.node_id] = tr.outcome
+    return outcomes

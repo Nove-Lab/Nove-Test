@@ -540,3 +540,143 @@ def test_crashed_and_parsed_errored_mix_anchors_first_parsed_record() -> None:
     assert result.reruns_total == 2
     assert result.replayed_run_reference == parsed_errored.run_reference
     assert result.per_rerun_outcomes == ("errored", "errored")
+
+
+# ---------------------------------------------------------------------------
+# Case 17 (W2/S40): duplicate node_ids in the ORIGINAL record collapse
+# fail-first, so the focal-divergence verdict is order-independent.
+# Duplicates are real: jest accepts the same title twice in one describe
+# block and the normalizer emits both under the identical node_id.
+# ---------------------------------------------------------------------------
+
+
+_DUP = "tests/sum.test.js::sum::adds"
+_STABLE = "tests/sum.test.js::sum::stable"
+
+
+def test_duplicate_node_id_fail_then_pass_order_keeps_failure_visible() -> None:
+    """Original duplicates ``[failed, passed]`` on one node_id → the failure
+    wins the collapse, so a passing rerun of that test IS the focal
+    divergence. The pre-S40 last-wins dict comprehension collapsed this
+    order to ``passed`` and reported ``test_id=None``."""
+    original = _make_record_with_tests(
+        "01ORIG0000000000000000S1",
+        "failed",
+        (
+            TestResult(node_id=_DUP, outcome="failed"),
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+    rerun = _make_record_with_tests(
+        "01RERUN000000000000000S1",
+        "passed",
+        (
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+
+    result = classify_replay_consistency(original, [rerun])
+
+    assert result.classification == "inconsistent"
+    assert result.test_id == _DUP
+
+
+def test_duplicate_node_id_pass_then_fail_order_same_verdict() -> None:
+    """The mirrored ``[passed, failed]`` duplicate order yields the SAME
+    verdict as ``[failed, passed]`` — the fail-first collapse removes the
+    order dependence (this order coincided with last-wins pre-S40)."""
+    original = _make_record_with_tests(
+        "01ORIG0000000000000000S2",
+        "failed",
+        (
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_DUP, outcome="failed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+    rerun = _make_record_with_tests(
+        "01RERUN000000000000000S2",
+        "passed",
+        (
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+
+    result = classify_replay_consistency(original, [rerun])
+
+    assert result.classification == "inconsistent"
+    assert result.test_id == _DUP
+
+
+def test_duplicate_node_id_same_class_fail_like_last_occurrence_wins() -> None:
+    """Within the fail-like class the LAST occurrence wins (byte-identical to
+    the old behavior for agreeing duplicates): ``[errored, failed]``
+    collapses to ``failed``, so a rerun still failing that test does NOT
+    diverge on it — the focal divergence is the OTHER test (a first-wins
+    collapse would report two divergents and ``test_id=None``).
+
+    Two reruns because a lone run-level-errored rerun would hit the
+    all-errored ``unable_to_replay`` gate before focal-test resolution."""
+    original = _make_record_with_tests(
+        "01ORIG0000000000000000S3",
+        "failed",
+        (
+            TestResult(node_id=_DUP, outcome="errored"),
+            TestResult(node_id=_DUP, outcome="failed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+    rerun_errored = _make_record_with_tests(
+        "01RERUN000000000000000S3",
+        "errored",
+        (
+            TestResult(node_id=_DUP, outcome="failed"),
+            TestResult(node_id=_STABLE, outcome="errored"),
+        ),
+    )
+    rerun_failed = _make_record_with_tests(
+        "01RERUN00000000000000S3B",
+        "failed",
+        (
+            TestResult(node_id=_DUP, outcome="failed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+
+    result = classify_replay_consistency(original, [rerun_errored, rerun_failed])
+
+    assert result.classification == "inconsistent"
+    assert result.test_id == _STABLE
+
+
+def test_duplicate_node_id_same_class_non_fail_like_last_occurrence_wins() -> None:
+    """Within the non-fail-like class the LAST occurrence also wins:
+    ``[skipped, passed]`` collapses to ``passed``, so a passing rerun of the
+    duplicated test does NOT diverge — the single divergent test is the
+    OTHER one (a first-wins collapse would report two divergents and
+    ``test_id=None``)."""
+    original = _make_record_with_tests(
+        "01ORIG0000000000000000S4",
+        "passed",
+        (
+            TestResult(node_id=_DUP, outcome="skipped"),
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_STABLE, outcome="passed"),
+        ),
+    )
+    rerun = _make_record_with_tests(
+        "01RERUN000000000000000S4",
+        "failed",
+        (
+            TestResult(node_id=_DUP, outcome="passed"),
+            TestResult(node_id=_STABLE, outcome="failed"),
+        ),
+    )
+
+    result = classify_replay_consistency(original, [rerun])
+
+    assert result.classification == "inconsistent"
+    assert result.test_id == _STABLE

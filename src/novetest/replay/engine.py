@@ -26,8 +26,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import store_run_evidence
+from novetest.memory import ProjectStore, store_run_evidence
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
@@ -84,7 +83,12 @@ async def replay_run(
         # Recorded pairs are supported-matrix members by construction, but a
         # legacy/hand-edited ``record.json`` can carry a pair outside the
         # matrix (``RunRecord.from_dict`` does not re-validate it) — replay
-        # cannot re-execute such a run.
+        # cannot re-execute such a run. This gate is the ONLY
+        # ``EngineNotSupportedError`` surface in replay: the rerun loop below
+        # dispatches on this same gate-validated pair, and the adapter
+        # dispatch table's keys equal the supported matrix (pinned run-side),
+        # so the loop cannot raise it (W2/S40 deleted the unreachable
+        # in-loop handler).
         return ReplayUnavailable(
             run_reference=original_ref,
             reason=REASON_ENGINE_NOT_READY,
@@ -122,13 +126,6 @@ async def replay_run(
                 artifact_dir=artifact_dir,
                 run_id=run_id,
                 timeout=timeout,
-            )
-        except EngineNotSupportedError as exc:
-            # The recorded engine has no adapter — replay cannot proceed.
-            return ReplayUnavailable(
-                run_reference=original_ref,
-                reason=REASON_ENGINE_NOT_READY,
-                detail=str(exc),
             )
         except AdapterInvocationError as exc:
             # Q2 Option A (W2/S38 — ANA-14): a rerun that cannot produce a

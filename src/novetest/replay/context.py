@@ -24,8 +24,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory import (
+    ProjectStore,
+    RunEvidenceNotFoundError,
+    retrieve_run_evidence,
+)
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 from novetest.replay.errors import (
