@@ -17,7 +17,7 @@ from __future__ import annotations
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
 from novetest.models.test_result import TestResult
-from novetest.replay.classifier import classify_replay_consistency
+from novetest.replay.classifier import CrashedRerun, classify_replay_consistency
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +455,88 @@ def test_one_errored_one_passed_not_unable_to_replay() -> None:
     # The errored run's outcome ("errored") != original ("passed") → reruns_failed=1.
     assert result.reruns_failed == 1
     assert result.classification == "inconsistent"
+
+# ---------------------------------------------------------------------------
+# Case 14 (W2/S38, ANA-14 / Q2-A): crashed attempts count as errored reruns
+# ---------------------------------------------------------------------------
+
+
+def test_crashed_attempts_count_as_errored_not_reproducible() -> None:
+    """2 crashes + 2 passes (original passed) → ``inconsistent``, honest counts.
+
+    A ``CrashedRerun`` marker (a rerun that produced no parseable native
+    result) collapses to the ``errored`` outcome. Pre-S38 these attempts
+    were discarded before classification, yielding a false ``reproducible``
+    with ``reruns_total=2`` — the accounting must instead range over all
+    FOUR attempts.
+    """
+    original = _make_record("01ORIG0000000000000000PP", "passed")
+    attempts = [
+        CrashedRerun(detail="engine crashed mid-run"),
+        _make_record("01RERUN000000000000000P1", "passed"),
+        CrashedRerun(detail="engine crashed mid-run"),
+        _make_record("01RERUN000000000000000P2", "passed"),
+    ]
+
+    result = classify_replay_consistency(original, attempts)
+
+    assert result.classification == "inconsistent"
+    assert result.reruns_total == 4
+    assert result.reruns_failed == 2
+    # Attempt order preserved; crashes appear as "errored".
+    assert result.per_rerun_outcomes == ("errored", "passed", "errored", "passed")
+    assert result.consistency_summary["replay_errored"] == 2
+    assert result.consistency_summary["replay_passed"] == 2
+    # No parsed record diverged → no focal test.
+    assert result.test_id is None
+    # replayed_run_reference anchors the first PARSED record.
+    assert result.replayed_run_reference == attempts[1].run_reference
+
+
+# ---------------------------------------------------------------------------
+# Case 15 (W2/S38): all attempts crashed → unable_to_replay, honest total
+# ---------------------------------------------------------------------------
+
+
+def test_all_crashed_attempts_unable_to_replay_with_attempted_total() -> None:
+    """Every attempt crashed → ``unable_to_replay`` / ``replay-run-errored``.
+
+    ``reruns_total`` reports the ATTEMPTED count (not 0), and
+    ``replayed_run_reference`` is ``None`` because no parseable replay run
+    exists to reference. Pre-S38 this case degraded to ``no-replayed-runs``
+    with ``reruns_total=0``.
+    """
+    original = _make_record("01ORIG0000000000000000QQ", "passed")
+    attempts = [CrashedRerun(), CrashedRerun(), CrashedRerun()]
+
+    result = classify_replay_consistency(original, attempts)
+
+    assert result.classification == "unable_to_replay"
+    assert result.reason == "replay-run-errored"
+    assert result.reruns_total == 3
+    assert result.reruns_failed == 0
+    assert result.per_rerun_outcomes == ("errored", "errored", "errored")
+    assert result.replayed_run_reference is None
+    assert result.consistency_summary["replay_errored"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Case 16 (W2/S38): crashed + parsed-errored mix still all-errored;
+# the reference anchors the first PARSED record
+# ---------------------------------------------------------------------------
+
+
+def test_crashed_and_parsed_errored_mix_anchors_first_parsed_record() -> None:
+    """[crashed, parsed-errored] → all-errored gate fires; the parsed record
+    (even though errored) provides the audit-trail reference."""
+    original = _make_record("01ORIG0000000000000000RR", "passed")
+    parsed_errored = _make_record("01RERUN000000000000000R1", "errored")
+    attempts = [CrashedRerun(detail="boom"), parsed_errored]
+
+    result = classify_replay_consistency(original, attempts)
+
+    assert result.classification == "unable_to_replay"
+    assert result.reason == "replay-run-errored"
+    assert result.reruns_total == 2
+    assert result.replayed_run_reference == parsed_errored.run_reference
+    assert result.per_rerun_outcomes == ("errored", "errored")

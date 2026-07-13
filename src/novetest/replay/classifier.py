@@ -1,7 +1,7 @@
 """``classify_replay_consistency`` — pure reproducibility classification.
 
-Compares the original Run Record against the replay-execution Run Records
-and produces a ``ReplayResult`` (REQ-REP-003). This is a **pure function**:
+Compares the original Run Record against the replay rerun attempts and
+produces a ``ReplayResult`` (REQ-REP-003). This is a **pure function**:
 no I/O, no clock (the ``attempted_at`` stamp is injected by the caller), so
 exhaustive table tests are cheap and the determinism contract is trivially
 satisfied.
@@ -20,19 +20,30 @@ could not execute or collect meaningfully (e.g. the Test Target vanished, so
 the native engine collected nothing) — distinct from a run that executed and
 reported test failures.
 
+Rerun accounting (Q2 Option A, W2/S38 — ANA-14): the input set ranges over
+rerun ATTEMPTS, not just parsed Run Records. A rerun that crashed before
+producing a parseable native result (``AdapterInvocationError`` in
+``replay_run``) arrives as a ``CrashedRerun`` marker and is counted as an
+``errored`` attempt — so ``reruns_total`` always equals the attempted rerun
+count and a crashing session can never masquerade as ``reproducible``.
+Crashed attempts carry no ``RunRecord`` and are never persisted.
+
 Classification precedence:
 
-1. ``unable_to_replay`` — no replay run was produced at all, OR **every**
-   replay run errored. The original could not be reproduced because the
-   replay could not run, not because outcomes diverged.
-2. ``reproducible``     — every replay run's outcome matches the original's.
-3. ``inconsistent``     — at least one replay run's outcome differs (strict).
+1. ``unable_to_replay`` — no rerun was attempted at all, OR **every**
+   rerun attempt errored (parsed-errored or crashed). The original could
+   not be reproduced because the replay could not run, not because
+   outcomes diverged.
+2. ``reproducible``     — every rerun attempt's outcome matches the original's.
+3. ``inconsistent``     — at least one rerun attempt's outcome differs (strict).
 
 When ``inconsistent`` and **exactly one** test nodeid is responsible for the
 divergence across all replay runs, ``test_id`` names it; otherwise ``None``.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.replay_result import ReplayResult
@@ -56,24 +67,47 @@ _RUN_ERRORED = "errored"
 _FAILED_TEST_OUTCOMES: frozenset[str] = FAIL_LIKE_OUTCOMES  # SSoT: novetest.models (S25)
 
 
+@dataclass(slots=True, frozen=True)
+class CrashedRerun:
+    """A rerun attempt that produced NO parseable native result.
+
+    Synthesized by ``replay_run`` when ``run/execute_with_engine_context``
+    raises ``AdapterInvocationError`` (Q2 Option A, W2/S38 — ANA-14). The
+    attempt counts as an ``errored`` entry in the classification inputs and
+    in ``reruns_total`` (= attempted reruns), but — having no ``RunRecord``
+    — it is never persisted as a Memory Entry and never contributes test
+    results. ``detail`` retains the adapter error message for the
+    classifier's input set; it is not serialized onto ``ReplayResult``
+    (no schema change).
+    """
+
+    detail: str | None = None
+
+
 def classify_replay_consistency(
     original_record: RunRecord,
-    replayed_records: list[RunRecord],
+    rerun_attempts: list[RunRecord | CrashedRerun],
     *,
     attempted_at: int = 0,
 ) -> ReplayResult:
-    """Classify replay reproducibility from the original + replay records.
+    """Classify replay reproducibility from the original + rerun attempts.
 
+    ``rerun_attempts`` is ordered: parsed reruns appear as ``RunRecord``s,
+    crashed reruns as ``CrashedRerun`` markers (collapsed to ``errored``).
     ``attempted_at`` is injected (epoch ms) so this function stays pure;
     the pure-classifier callers (unit tests) pass ``0``.
     """
     original_ref = original_record.run_reference
+    parsed_records = [r for r in rerun_attempts if isinstance(r, RunRecord)]
     replayed_ref: RunReference | None = (
-        replayed_records[0].run_reference if replayed_records else None
+        parsed_records[0].run_reference if parsed_records else None
     )
 
     original_outcome = _overall_outcome(original_record)
-    rerun_outcomes = tuple(_overall_outcome(r) for r in replayed_records)
+    rerun_outcomes = tuple(
+        _RUN_ERRORED if isinstance(a, CrashedRerun) else _overall_outcome(a)
+        for a in rerun_attempts
+    )
 
     consistency_summary = {
         "original_passed": 1 if original_outcome == _RUN_PASS else 0,
@@ -83,7 +117,8 @@ def classify_replay_consistency(
         "replay_errored": sum(1 for o in rerun_outcomes if o == _RUN_ERRORED),
     }
 
-    # (1) unable_to_replay — nothing to compare, or every replay run errored.
+    # (1) unable_to_replay — nothing attempted, or every attempt errored
+    # (parsed-errored records and crashed attempts alike).
     if not rerun_outcomes:
         return ReplayResult(
             run_reference=original_ref,
@@ -101,7 +136,7 @@ def classify_replay_consistency(
         return ReplayResult(
             run_reference=original_ref,
             classification=CLASSIFICATION_UNABLE_TO_REPLAY,
-            reruns_total=len(replayed_records),
+            reruns_total=len(rerun_attempts),
             reruns_failed=0,
             test_id=None,
             replayed_run_reference=replayed_ref,
@@ -111,19 +146,19 @@ def classify_replay_consistency(
             reason=REASON_REPLAY_RUN_ERRORED,
         )
 
-    # (2)/(3) strict divergence count: any rerun differing from the original.
+    # (2)/(3) strict divergence count: any attempt differing from the original.
     reruns_failed = sum(1 for o in rerun_outcomes if o != original_outcome)
     if reruns_failed == 0:
         classification = CLASSIFICATION_REPRODUCIBLE
         test_id: str | None = None
     else:
         classification = CLASSIFICATION_INCONSISTENT
-        test_id = _focal_divergent_test(original_record, replayed_records)
+        test_id = _focal_divergent_test(original_record, parsed_records)
 
     return ReplayResult(
         run_reference=original_ref,
         classification=classification,
-        reruns_total=len(replayed_records),
+        reruns_total=len(rerun_attempts),
         reruns_failed=reruns_failed,
         test_id=test_id,
         replayed_run_reference=replayed_ref,

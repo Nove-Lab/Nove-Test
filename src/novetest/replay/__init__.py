@@ -17,7 +17,9 @@ Public API mirrors the other engines' surfaces
 - ``replay_run``                — engine entry point (reconstruct → rerun
                                    loop → classify → persist).
 - ``reconstruct_replay_context`` — resolve target + native engine context.
-- ``classify_replay_consistency`` — pure classification over Run Records.
+- ``classify_replay_consistency`` — pure classification over rerun
+                                   attempts (Run Records + crashed-rerun
+                                   markers).
 - ``get_replay_result``         — cache-only read.
 - ``check_replay_availability`` — eligibility probe (bool).
 

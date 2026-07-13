@@ -4,8 +4,9 @@ Implements ``design/workflows/replay.md``:
 
     replay/replay_run
       → replay/reconstruct_replay_context   (resolve target + engine context)
+      → run/probe_engine                     (gate exactly the RECORDED engine)
       → run/execute_with_engine_context      (loop N times, --reruns)
-      → memory/store_run_evidence            (loop, one per rerun)
+      → memory/store_run_evidence            (loop, one per parsed rerun)
       → replay/classify_replay_consistency   (pure)
       → replay/persistence.write_replay_result
 
@@ -30,7 +31,7 @@ from novetest.memory.store import store_run_evidence
 from novetest.models.replay_result import ReplayResult
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
-from novetest.replay.classifier import classify_replay_consistency
+from novetest.replay.classifier import CrashedRerun, classify_replay_consistency
 from novetest.replay.context import ReplayContext, reconstruct_replay_context
 from novetest.replay.errors import (
     REASON_ENGINE_NOT_READY,
@@ -40,8 +41,8 @@ from novetest.replay.persistence import write_replay_result
 from novetest.run import (
     AdapterInvocationError,
     EngineNotSupportedError,
-    assess_engine_readiness,
     execute_with_engine_context,
+    probe_engine,
 )
 from novetest.utils.ulid import generate_ulid
 
@@ -65,18 +66,42 @@ async def replay_run(
         return context
 
     # Engine readiness is the one async precondition (kept out of the sync
-    # ``reconstruct_replay_context``). A missing/misconfigured engine is a
-    # hard exit-4 surface — distinct from a runnable engine producing an
-    # errored run (which the classifier maps to ``unable_to_replay``).
-    readiness = await assess_engine_readiness(context.test_target.workspace_path)
+    # ``reconstruct_replay_context``). The gate probes exactly the RECORDED
+    # engine (``context.engine_context``) — the engine every rerun re-executes
+    # with — NOT the workspace's first auto-detected candidate: in a polyglot
+    # workspace the two can differ and ``assess_engine_readiness`` would gate
+    # the wrong engine (ANA-13, W2/S38). A missing/misconfigured recorded
+    # engine is a hard exit-4 surface — distinct from a runnable engine
+    # producing an errored run (which the classifier maps to
+    # ``unable_to_replay``).
+    try:
+        readiness = await probe_engine(
+            context.test_target.workspace_path,
+            context.engine_context.ecosystem,
+            context.engine_context.engine_name,
+        )
+    except EngineNotSupportedError as exc:
+        # Recorded pairs are supported-matrix members by construction, but a
+        # legacy/hand-edited ``record.json`` can carry a pair outside the
+        # matrix (``RunRecord.from_dict`` does not re-validate it) — replay
+        # cannot re-execute such a run.
+        return ReplayUnavailable(
+            run_reference=original_ref,
+            reason=REASON_ENGINE_NOT_READY,
+            detail=str(exc),
+        )
     if readiness.state != "ready":
         return ReplayUnavailable(
             run_reference=original_ref,
             reason=REASON_ENGINE_NOT_READY,
-            detail=f"engine readiness state={readiness.state!r}",
+            detail=(
+                f"recorded engine {context.engine_context.ecosystem}:"
+                f"{context.engine_context.engine_name} readiness "
+                f"state={readiness.state!r}"
+            ),
         )
 
-    replayed_records: list[RunRecord] = []
+    rerun_attempts: list[RunRecord | CrashedRerun] = []
     for _ in range(max(reruns, 0)):
         run_id = generate_ulid()
         artifact_dir = store.path / "run" / "artifacts" / f"run_{run_id}"
@@ -105,18 +130,24 @@ async def replay_run(
                 reason=REASON_ENGINE_NOT_READY,
                 detail=str(exc),
             )
-        except AdapterInvocationError:
-            # This rerun could not produce a parseable native result. Skip
-            # it; an attempt where every rerun fails this way yields zero
-            # replay records and the classifier returns ``unable_to_replay``.
+        except AdapterInvocationError as exc:
+            # Q2 Option A (W2/S38 — ANA-14): a rerun that cannot produce a
+            # parseable native result is an ERRORED ATTEMPT, not a non-event.
+            # It counts in the classification inputs (and thus in
+            # ``reruns_total`` = attempted reruns) via a synthetic errored
+            # outcome; nothing is persisted — there is no ``RunRecord`` to
+            # persist. The pre-S38 ``continue`` discard shrank
+            # ``reruns_total`` and let a 50%-crash session classify
+            # ``reproducible``.
+            rerun_attempts.append(CrashedRerun(detail=str(exc)))
             continue
 
         persisted = _persist_replay_run(store, record)
-        replayed_records.append(persisted)
+        rerun_attempts.append(persisted)
 
     result = classify_replay_consistency(
         context.original_record,
-        replayed_records,
+        rerun_attempts,
         attempted_at=int(time.time() * 1000),
     )
     write_replay_result(store, original_ref, result)

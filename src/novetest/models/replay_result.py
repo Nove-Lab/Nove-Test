@@ -53,11 +53,13 @@ REPLAY_CLASSIFICATIONS: frozenset[str] = frozenset(
 # REQ-REP-003 outcome, not an error.
 REPLAY_UNABLE_REASONS: frozenset[str] = frozenset(
     {
-        # No replay run could be produced at all (e.g. ``reruns=0`` requested,
-        # or every rerun failed to yield a parseable native result).
+        # No rerun was attempted at all (``reruns=0`` requested).
         "no-replayed-runs",
-        # Every replayed run errored out (e.g. the Test Target no longer
-        # resolves in the workspace, so the native engine collects nothing).
+        # Every rerun attempt errored: parsed reruns with an errored status
+        # (e.g. the Test Target no longer resolves, so the native engine
+        # collects nothing) and/or reruns that crashed without producing a
+        # parseable native result (counted as errored attempts per Q2
+        # Option A, W2/S38).
         "replay-run-errored",
     }
 )
@@ -75,19 +77,25 @@ class ReplayResult:
     - ``run_reference``           — the **original** Run's reference (the run
                                      being replayed). Always present.
     - ``classification``          — closed enum (``REPLAY_CLASSIFICATIONS``).
-    - ``reruns_total``            — number of replay runs actually produced
-                                     and persisted in this session (>= 0).
-    - ``reruns_failed``           — count of replay runs whose run-level
+    - ``reruns_total``            — number of rerun ATTEMPTS in this session
+                                     (>= 0). Includes attempts that crashed
+                                     without a parseable native result (Q2
+                                     Option A, W2/S38); only parsed reruns
+                                     are persisted as Memory Entries.
+    - ``reruns_failed``           — count of rerun attempts whose run-level
                                      outcome differed from the original
                                      (0 <= reruns_failed <= reruns_total).
     - ``test_id``                 — focal divergent test nodeid when exactly
                                      one test caused an ``inconsistent``
                                      result; ``None`` otherwise.
-    - ``replayed_run_reference``  — the reference of the first replay-execution
-                                     Run Record (``None`` when no replay run
-                                     was produced). REQ-REP-004 slot.
-    - ``per_rerun_outcomes``      — run-level outcome per replay run, in order
-                                     (e.g. ``("passed", "failed", "passed")``).
+    - ``replayed_run_reference``  — the reference of the first PARSED
+                                     replay-execution Run Record (``None``
+                                     when no parseable replay run was
+                                     produced). REQ-REP-004 slot.
+    - ``per_rerun_outcomes``      — run-level outcome per rerun attempt, in
+                                     order (e.g. ``("passed", "errored",
+                                     "passed")``; crashed attempts appear as
+                                     ``"errored"``).
     - ``consistency_summary``     — counts powering the classification
                                      (``original_passed`` / ``replay_passed`` /
                                      ``replay_failed`` / ``replay_errored`` ...).
