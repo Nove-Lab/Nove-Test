@@ -8,9 +8,9 @@ Detection happens through `detect_engine_candidates` (init-time marker
 scan, canonical priority order) and `probe_engine` (readiness of one
 explicitly named engine — the store pin or a transient override), per
 the anchored-pin model of `decisions/2026-07-03-engine-selection-policy.md`.
-`execute` accepts the externally resolved pair via its ``engine``
-parameter; ``engine=None`` preserves the legacy auto-detect path until
-Orchestration wires pins through every caller.
+`execute` REQUIRES the externally resolved pair via its ``engine``
+parameter — the legacy ``engine=None`` auto-detect path was removed by
+W2/S16 (RUN-25) once Orchestration wired pins through every caller.
 
 Adapter entry points (``run_pytest``, ``run_jest``, ...) are deliberately
 not re-exported here — the public Run surface is engine-agnostic.
@@ -21,7 +21,6 @@ from novetest.run.engine import execute, execute_with_engine_context
 from novetest.run.engine_selector import (
     detect_engine_candidates,
     list_supported_engine_pairs,
-    select_native_engine,
 )
 from novetest.run.errors import (
     AdapterInvocationError,
@@ -63,5 +62,4 @@ __all__ = [
     "normalize_native_result",
     "probe_engine",
     "resolve_test_target",
-    "select_native_engine",
 ]

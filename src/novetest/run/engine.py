@@ -1,15 +1,17 @@
 """Top-level Run engine orchestration.
 
 `execute` and `execute_with_engine_context` implement the workflows in
-`design/workflows/run.md` §1: readiness gate, optional engine selection,
-adapter invocation, normalization, and Run Reference assignment. The
-caller supplies the artifacts directory (the orchestration slice is what
-binds it to ``.novetest/run/artifacts/run_<ulid>/`` in Phase 1).
+`design/workflows/run.md` §1: readiness gate, adapter invocation,
+normalization, and Run Reference assignment. The caller supplies the
+artifacts directory (the orchestration slice is what binds it to
+``.novetest/run/artifacts/run_<ulid>/`` in Phase 1).
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from pathlib import Path
+from typing import Protocol
 
 from novetest.models import RunRecord
 from novetest.run.adapters.cargo_adapter import run_cargo
@@ -18,10 +20,9 @@ from novetest.run.adapters.gotest_adapter import run_gotest
 from novetest.run.adapters.jest_adapter import run_jest
 from novetest.run.adapters.junit_adapter import run_junit
 from novetest.run.adapters.pytest_adapter import run_pytest
-from novetest.run.engine_selector import select_native_engine
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.normalizer import normalize_native_result
-from novetest.run.readiness import assess_engine_readiness, probe_engine
+from novetest.run.readiness import probe_engine
 from novetest.run.reference import assign_run_reference
 from novetest.run.types import (
     AdapterWarning,
@@ -31,11 +32,41 @@ from novetest.run.types import (
 )
 
 
+class _AdapterEntryPoint(Protocol):
+    """The shared signature of every ``run_<engine>`` adapter entry."""
+
+    def __call__(
+        self,
+        test_target: TestTarget,
+        *,
+        artifact_dir: Path,
+        timeout: float | None,
+        collect_coverage: bool,
+    ) -> Awaitable[NativeResult]: ...
+
+
+# THE dispatch table: engine_name -> adapter entry point. Module-level
+# constant dict — the ``readiness._READINESS_PROBES`` house pattern, NOT
+# a decorator registry (review roadmap §5 rejected-direction #1). Keys
+# are pinned equal to the engine names of ``list_supported_engine_pairs()``
+# by the divergence guard in ``tests/unit/run/test_engine.py``, so a
+# seventh engine entering the supported matrix without an adapter entry
+# (or an adapter entry without a matrix row) fails at test time.
+_ADAPTER_ENTRY_POINTS: dict[str, _AdapterEntryPoint] = {
+    "pytest": run_pytest,
+    "jest": run_jest,
+    "junit": run_junit,
+    "go-test": run_gotest,
+    "cargo-test": run_cargo,
+    "xunit": run_xunit,
+}
+
+
 async def execute(
     test_target: TestTarget,
     *,
     artifact_dir: Path,
-    engine: tuple[str, str] | None = None,
+    engine: tuple[str, str],
     run_id: str | None = None,
     timeout: float | None = 600.0,
     collect_coverage: bool = False,
@@ -44,24 +75,21 @@ async def execute(
 
     ``engine`` is the externally resolved ``(ecosystem, engine_name)``
     pair — the store pin, or a transient ``--engine`` override (decision
-    `2026-07-03-engine-selection-policy.md` D3). When provided, readiness
-    is probed for exactly that engine (`probe_engine`) and dispatch goes
-    straight to it: NO marker detection runs on the hot path. When
-    ``None``, the legacy auto-detect sequence runs unchanged
-    (`assess_engine_readiness` scan → `select_native_engine`).
-    TODO(run-team): drop the ``engine=None`` auto-detect branch once
-    `orchestration-team-2026-07-03-anchored-init-and-verb-resolution`
-    wires pins through the last caller.
+    `2026-07-03-engine-selection-policy.md` D3). Readiness is probed for
+    exactly that engine (`probe_engine`) and dispatch goes straight to
+    it: NO marker detection runs on the hot path. Callers resolve the
+    pair upstream (`orchestration.anchor_resolution.resolve_execution_engine`
+    never returns ``None`` — it raises on failure), so there is no
+    auto-detect fallback here (legacy ``engine=None`` branch removed by
+    W2/S16, RUN-25).
 
     Sequence (mirroring `design/workflows/run.md` §1):
-    1. Readiness gate — `probe_engine` (pinned) or
-       `assess_engine_readiness` (auto-detect); short-circuit with
-       EngineNotReadyError on any non-``ready`` state so callers can
-       surface exit code 4 without spawning a subprocess.
-    2. Engine resolution — the supplied pin, or `select_native_engine`.
-    3. Invoke the adapter.
-    4. `normalize_native_result` — build the Run Record.
-    5. `assign_run_reference` — stamp a fresh ULID-derived reference.
+    1. Readiness gate — `probe_engine` on the supplied pair;
+       short-circuit with EngineNotReadyError on any non-``ready`` state
+       so callers can surface exit code 4 without spawning a subprocess.
+    2. Invoke the adapter — `_ADAPTER_ENTRY_POINTS` dispatch.
+    3. `normalize_native_result` — build the Run Record.
+    4. `assign_run_reference` — stamp a fresh ULID-derived reference.
 
     ``collect_coverage`` is plumbed through to the adapter so a coverage-
     enabled run lands ``coverage_json`` / ``coverage_xml`` in
@@ -78,23 +106,16 @@ async def execute(
     ``build_test_envelope``.
     """
 
-    if engine is not None:
-        ecosystem, engine_name = engine
-        readiness = await probe_engine(
-            test_target.workspace_path, ecosystem, engine_name
-        )
-        if readiness.state != "ready":
-            raise EngineNotReadyError(readiness)
-        assert readiness.engine_context is not None  # always set on "ready"
-        engine_context = readiness.engine_context
-    else:
-        readiness = await assess_engine_readiness(test_target.workspace_path)
-        if readiness.state != "ready":
-            raise EngineNotReadyError(readiness)
-        engine_context = select_native_engine(test_target)
+    ecosystem, engine_name = engine
+    readiness = await probe_engine(
+        test_target.workspace_path, ecosystem, engine_name
+    )
+    if readiness.state != "ready":
+        raise EngineNotReadyError(readiness)
+    assert readiness.engine_context is not None  # always set on "ready"
     return await execute_with_engine_context(
         test_target,
-        engine_context,
+        readiness.engine_context,
         artifact_dir=artifact_dir,
         run_id=run_id,
         timeout=timeout,
@@ -114,9 +135,10 @@ async def execute_with_engine_context(
     """Same as `execute` but reuses a pre-recorded Native Engine context.
 
     Used by Replay (Phase 5) to keep the same engine path as the original
-    run. Phase 1 still gates on `assess_engine_readiness` because workspace
-    state can drift between original and replay; the readiness state is
-    advisory to the caller, not to the workflow shape.
+    run. There is NO readiness gate in this function: the replay engine
+    gates on the RECORDED engine via `readiness.probe_engine` BEFORE
+    calling (W2/S38, ANA-13), so workspace drift between original and
+    replay surfaces upstream as a hard not-ready result, never mid-dispatch.
 
     Returns the ``RunRecord`` paired with the adapter warnings tuple —
     same contract as ``execute``.
@@ -181,48 +203,14 @@ async def _invoke_adapter(
     """Dispatch to the per-engine adapter or raise `EngineNotSupportedError`."""
 
     engine_name = native_engine_context.engine_name
-    if engine_name == "pytest":
-        return await run_pytest(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
+    adapter = _ADAPTER_ENTRY_POINTS.get(engine_name)
+    if adapter is None:
+        raise EngineNotSupportedError(
+            f"adapter for {engine_name!r} not implemented yet"
         )
-    if engine_name == "jest":
-        return await run_jest(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
-        )
-    if engine_name == "go-test":
-        return await run_gotest(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
-        )
-    if engine_name == "cargo-test":
-        return await run_cargo(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
-        )
-    if engine_name == "junit":
-        return await run_junit(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
-        )
-    if engine_name == "xunit":
-        return await run_xunit(
-            test_target,
-            artifact_dir=artifact_dir,
-            timeout=timeout,
-            collect_coverage=collect_coverage,
-        )
-    raise EngineNotSupportedError(
-        f"adapter for {engine_name!r} not implemented yet"
+    return await adapter(
+        test_target,
+        artifact_dir=artifact_dir,
+        timeout=timeout,
+        collect_coverage=collect_coverage,
     )

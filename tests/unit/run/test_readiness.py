@@ -551,16 +551,18 @@ async def test_cargo_version_probe_exec_failure_degrades_to_misconfigured(
 # Polyglot disambiguation (2026-07-03 pin-driven-dispatch slice)
 #
 # `assess_engine_readiness` probes the FIRST candidate in canonical table
-# order — derived from the same `engine_selector._ENGINE_MARKER_TABLE` that
-# `select_native_engine` consumes, so readiness and dispatch cannot
-# disagree (question 2026-07-02 §4.1).
+# order — the same `engine_selector._ENGINE_MARKER_TABLE` order that
+# `detect_engine_candidates` reports (and that a pin created from
+# detection dispatches), so readiness and dispatch cannot disagree
+# (question 2026-07-02 §4.1).
 # ---------------------------------------------------------------------------
 
 
-async def test_assess_and_select_agree_on_pom_plus_gomod_workspace(
+async def test_assess_and_detection_agree_on_pom_plus_gomod_workspace(
     tmp_path: Path,
 ) -> None:
-    """The §4.1 mismatch workspace: readiness must probe what dispatch runs.
+    """The §4.1 mismatch workspace: readiness must probe what detection ranks
+    first (the pair a pin created from detection would dispatch).
 
     Pre-fix, readiness's hand-ordered chain probed go (rank 3) while the
     selector dispatched java (rank 3 in ITS list) — a `pom.xml`+`go.mod`
@@ -572,8 +574,7 @@ async def test_assess_and_select_agree_on_pom_plus_gomod_workspace(
     probe result.
     """
 
-    from novetest.run.engine_selector import select_native_engine
-    from novetest.run.types import TestTarget
+    from novetest.run.engine_selector import detect_engine_candidates
 
     (tmp_path / "pom.xml").write_text("<project/>", encoding="utf-8")
     (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
@@ -583,8 +584,8 @@ async def test_assess_and_select_agree_on_pom_plus_gomod_workspace(
     assert readiness.engine_context is not None
     probed = (readiness.engine_context.ecosystem, readiness.engine_context.engine_name)
 
-    dispatched = select_native_engine(TestTarget("", "workspace", tmp_path))
-    assert probed == (dispatched.ecosystem, dispatched.engine_name) == ("java", "junit")
+    first = detect_engine_candidates(tmp_path)[0]
+    assert probed == (first.ecosystem, first.engine_name) == ("java", "junit")
 
 
 # ---------------------------------------------------------------------------

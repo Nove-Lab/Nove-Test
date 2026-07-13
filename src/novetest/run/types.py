@@ -34,9 +34,10 @@ class NativeEngineContext:
     """Identifies the engine that will execute (or executed) a run.
 
     Inlined onto `RunRecord` for persistence; here it serves the internal
-    handoff between `select_native_engine` and `execute`. ``ecosystem`` and
-    ``engine_name`` come from `list_supported_engine_pairs`; ``engine_version``
-    is filled in after the adapter has probed the local install.
+    handoff between the readiness probe (`probe_engine`) and `execute`'s
+    adapter dispatch. ``ecosystem`` and ``engine_name`` come from
+    `list_supported_engine_pairs`; ``engine_version`` is filled in after
+    the adapter has probed the local install.
     """
 
     ecosystem: str

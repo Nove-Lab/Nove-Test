@@ -7,8 +7,9 @@ Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
    is the only ordering authority (decision
    `2026-07-03-engine-selection-policy.md` §"Kills the two-priority-lists
    latent bug by design").
-2. `assess_engine_readiness` probes the FIRST candidate — by construction
-   the same engine `select_native_engine` would dispatch.
+2. `assess_engine_readiness` probes the FIRST candidate — the canonical
+   winner of the marker table (dispatch itself is pin-driven through
+   `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict).
    `probe_engine` probes ONE explicitly named engine instead (the store
    pin, a transient ``--engine`` override, or init's per-candidate
    readiness pass). Per-engine, the probe does a deeper check:
@@ -73,8 +74,10 @@ async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessRes
       interpreter, ``pytest-json-report`` plugin missing).
 
     Polyglot disambiguation: the first candidate in canonical table order
-    wins — derived from, not parallel to, `select_native_engine`'s
-    selection, so readiness and dispatch cannot disagree.
+    wins — derived from the same `engine_selector._ENGINE_MARKER_TABLE`
+    that orders detection everywhere (dispatch runs the pinned pair via
+    `engine.py`'s `_ADAPTER_ENTRY_POINTS`), so readiness and dispatch
+    cannot disagree.
     """
 
     candidates = detect_engine_candidates(project_workspace)

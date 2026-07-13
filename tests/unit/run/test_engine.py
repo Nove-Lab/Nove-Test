@@ -1,20 +1,23 @@
 """End-to-end integration-style tests for `novetest.run.engine.execute`.
 
-These exercise the full Phase 1 happy path: readiness → engine selection →
-adapter invocation → normalization → run-reference assignment. They
-intentionally spawn real pytest subprocesses against the fixture projects
-because the workflow's value is the wiring, not the individual steps.
+These exercise the full happy path: pinned readiness probe → adapter
+dispatch → normalization → run-reference assignment. They intentionally
+spawn real pytest subprocesses against the fixture projects because the
+workflow's value is the wiring, not the individual steps.
 """
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from novetest.run import engine as engine_module
+from novetest.run import readiness as readiness_module
 from novetest.run.engine import execute, execute_with_engine_context
+from novetest.run.engine_selector import list_supported_engine_pairs
 from novetest.run.errors import EngineNotReadyError, EngineNotSupportedError
 from novetest.run.target_resolver import resolve_test_target
 from novetest.run.types import (
@@ -31,7 +34,9 @@ async def test_execute_pytest_basic_returns_all_passed(
     # Per 2026-06-06 envelope-warnings-projection slice, ``execute``
     # returns ``(RunRecord, adapter_warnings)``; pytest emits zero
     # warnings today so the tuple's second element is the empty tuple.
-    record, warnings = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    record, warnings = await execute(
+        target, artifact_dir=tmp_path, engine=("python", "pytest"), timeout=60.0
+    )
     assert warnings == ()
     assert record.status == "passed"
     assert record.engine_name == "pytest"
@@ -49,7 +54,9 @@ async def test_execute_pytest_failing_captures_failure(
     failing_workspace: Path, tmp_path: Path
 ) -> None:
     target = resolve_test_target("", failing_workspace)
-    record, warnings = await execute(target, artifact_dir=tmp_path, timeout=60.0)
+    record, warnings = await execute(
+        target, artifact_dir=tmp_path, engine=("python", "pytest"), timeout=60.0
+    )
     assert warnings == ()
     assert record.status == "failed"
     failed = [tr for tr in record.test_results if tr.outcome == "failed"]
@@ -60,10 +67,19 @@ async def test_execute_pytest_failing_captures_failure(
 async def test_execute_short_circuits_for_empty_no_engine(
     empty_workspace: Path, tmp_path: Path
 ) -> None:
+    """A pin naming an engine the workspace does not carry short-circuits
+    at the readiness probe (`probe_engine` finds no pytest configuration
+    in the empty fixture) — EngineNotReadyError before any subprocess."""
+
     target = resolve_test_target("", empty_workspace)
     artifact_dir = tmp_path / "should-not-be-created"
     with pytest.raises(EngineNotReadyError) as exc_info:
-        await execute(target, artifact_dir=artifact_dir, timeout=10.0)
+        await execute(
+            target,
+            artifact_dir=artifact_dir,
+            engine=("python", "pytest"),
+            timeout=10.0,
+        )
     assert exc_info.value.readiness.state == "engine-missing"
     # No subprocess spawned → no native artifacts laid down.
     assert not artifact_dir.exists()
@@ -109,9 +125,9 @@ async def test_execute_with_engine_context_dispatches_jest(
 ) -> None:
     """`execute_with_engine_context(engine_name='jest')` must call ``run_jest``.
 
-    Stubs ``run_jest`` at the engine seam so we observe dispatch without
-    requiring Node.js. The same NativeResult-fake pattern as the pytest
-    `test_execute_threads_collect_coverage_kwarg_into_adapter` case.
+    Stubs the ``jest`` entry of the dispatch dict so we observe dispatch
+    without requiring Node.js. The same NativeResult-fake pattern as the
+    pytest `test_execute_threads_collect_coverage_kwarg_into_adapter` case.
     """
 
     called_with: dict[str, Any] = {}
@@ -159,7 +175,7 @@ async def test_execute_with_engine_context_dispatches_jest(
             engine_version="29.7.0",
         )
 
-    monkeypatch.setattr(engine_module, "run_jest", fake_run_jest)
+    monkeypatch.setitem(engine_module._ADAPTER_ENTRY_POINTS, "jest", fake_run_jest)
     target = resolve_test_target("__tests__/", jest_basic_workspace)
     context = NativeEngineContext(
         ecosystem="javascript-typescript", engine_name="jest"
@@ -181,6 +197,7 @@ async def test_run_id_can_be_pinned(
     record, _ = await execute(
         target,
         artifact_dir=tmp_path,
+        engine=("python", "pytest"),
         run_id="01HZZZZZZZZZZZZZZZZZZZZZZZ",
         timeout=60.0,
     )
@@ -194,9 +211,9 @@ async def test_execute_threads_collect_coverage_kwarg_into_adapter(
 ) -> None:
     """`execute(collect_coverage=True)` must pass-through to ``run_pytest``.
 
-    Stubs ``run_pytest`` at the engine seam so we observe the kwarg without
-    actually invoking pytest (which would need ``pytest-cov`` plumbing
-    that's exercised by the integration suite, not this unit test).
+    Stubs the ``pytest`` entry of the dispatch dict so we observe the
+    kwarg without actually invoking pytest (which would need ``pytest-cov``
+    plumbing that's exercised by the integration suite, not this unit test).
     """
 
     seen_kwargs: dict[str, Any] = {}
@@ -223,11 +240,14 @@ async def test_execute_threads_collect_coverage_kwarg_into_adapter(
             engine_version="stub",
         )
 
-    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+    monkeypatch.setitem(
+        engine_module._ADAPTER_ENTRY_POINTS, "pytest", fake_run_pytest
+    )
     target = resolve_test_target("", basic_workspace)
     await execute(
         target,
         artifact_dir=tmp_path,
+        engine=("python", "pytest"),
         timeout=10.0,
         collect_coverage=True,
     )
@@ -241,9 +261,9 @@ async def test_execute_with_engine_context_dispatches_gotest(
 ) -> None:
     """`execute_with_engine_context(engine_name='go-test')` must call ``run_gotest``.
 
-    Stubs ``run_gotest`` at the engine seam so we observe dispatch without
-    requiring Go to be installed. Same fake-NativeResult pattern as the
-    jest dispatch test.
+    Stubs the ``go-test`` entry of the dispatch dict so we observe dispatch
+    without requiring Go to be installed. Same fake-NativeResult pattern as
+    the jest dispatch test.
     """
 
     called_with: dict[str, Any] = {}
@@ -284,7 +304,9 @@ async def test_execute_with_engine_context_dispatches_gotest(
             engine_version="1.23.4",
         )
 
-    monkeypatch.setattr(engine_module, "run_gotest", fake_run_gotest)
+    monkeypatch.setitem(
+        engine_module._ADAPTER_ENTRY_POINTS, "go-test", fake_run_gotest
+    )
     target = resolve_test_target("", gotest_basic_workspace)
     context = NativeEngineContext(ecosystem="go", engine_name="go-test")
     record, warnings = await execute_with_engine_context(
@@ -305,9 +327,9 @@ async def test_execute_with_engine_context_dispatches_cargo(
     """`execute_with_engine_context(engine_name='cargo-test')` must call
     ``run_cargo``.
 
-    Stubs ``run_cargo`` at the engine seam so we observe dispatch without
-    requiring the Rust toolchain to be installed. Same fake-NativeResult
-    pattern as the gotest dispatch test.
+    Stubs the ``cargo-test`` entry of the dispatch dict so we observe
+    dispatch without requiring the Rust toolchain to be installed. Same
+    fake-NativeResult pattern as the gotest dispatch test.
     """
 
     called_with: dict[str, Any] = {}
@@ -352,7 +374,9 @@ async def test_execute_with_engine_context_dispatches_cargo(
             metadata={"nextest_version": "0.9.70"},
         )
 
-    monkeypatch.setattr(engine_module, "run_cargo", fake_run_cargo)
+    monkeypatch.setitem(
+        engine_module._ADAPTER_ENTRY_POINTS, "cargo-test", fake_run_cargo
+    )
     target = resolve_test_target("", cargo_test_basic_workspace)
     context = NativeEngineContext(ecosystem="rust", engine_name="cargo-test")
     record, warnings = await execute_with_engine_context(
@@ -367,7 +391,8 @@ async def test_execute_with_engine_context_dispatches_cargo(
 
 # ---------------------------------------------------------------------------
 # execute(engine=...) — pin-driven dispatch
-# (2026-07-03 pin-driven-dispatch slice, decision engine-selection-policy D3)
+# (2026-07-03 pin-driven-dispatch slice, decision engine-selection-policy D3;
+# engine REQUIRED + dict dispatch since W2/S16, RUN-25)
 # ---------------------------------------------------------------------------
 
 
@@ -380,22 +405,56 @@ def _bomb(name: str) -> Any:
     return _explode
 
 
+def test_execute_engine_parameter_is_required_keyword_only() -> None:
+    """Debt b (W2/S16, RUN-25): ``engine`` is a REQUIRED keyword-only
+    parameter — the legacy ``engine=None`` auto-detect branch is deleted,
+    and the auto-detect seams are gone from the engine module. Restoring
+    ``engine: tuple[str, str] | None = None`` must fail here by name."""
+
+    param = inspect.signature(execute).parameters["engine"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
+    # The deleted auto-detect seams must not resurface on the module.
+    assert not hasattr(engine_module, "select_native_engine")
+    assert not hasattr(engine_module, "assess_engine_readiness")
+
+
+def test_adapter_dispatch_matches_supported_engine_matrix() -> None:
+    """Debt d (W2/S16) divergence guard: the dispatch dict's key set must
+    equal the engine names of the supported matrix. A seventh engine added
+    to `_ENGINE_MARKER_TABLE` without an adapter entry (or an adapter
+    entry without a matrix row) fails here at test time, not in
+    production. The expectation derives from `list_supported_engine_pairs()`
+    — deliberately not a second hardcoded list."""
+
+    assert set(engine_module._ADAPTER_ENTRY_POINTS) == {
+        engine_name for _, engine_name in list_supported_engine_pairs()
+    }
+
+
 async def test_execute_with_explicit_engine_skips_detection(
     basic_workspace: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`execute(engine=(eco, name))` must not detect: neither the readiness
-    marker scan (`assess_engine_readiness`) nor `select_native_engine` may
-    run. Readiness is probed for exactly the supplied pair and its ready
-    context (version included) feeds dispatch.
+    """`execute(engine=(eco, name))` must not detect: no marker scan runs
+    on the pinned path. With `probe_engine` stubbed at the engine seam,
+    any surviving detection would have to reach the readiness module's
+    bound scan seams (`detect_engine_candidates` /
+    `assess_engine_readiness`) — both are bombed. Readiness is probed for
+    exactly the supplied pair and its ready context (version included)
+    feeds dispatch.
     """
 
     monkeypatch.setattr(
-        engine_module, "assess_engine_readiness", _bomb("assess_engine_readiness")
+        readiness_module,
+        "assess_engine_readiness",
+        _bomb("assess_engine_readiness"),
     )
     monkeypatch.setattr(
-        engine_module, "select_native_engine", _bomb("select_native_engine")
+        readiness_module,
+        "detect_engine_candidates",
+        _bomb("detect_engine_candidates"),
     )
 
     probed_with: dict[str, Any] = {}
@@ -443,7 +502,9 @@ async def test_execute_with_explicit_engine_skips_detection(
         )
 
     monkeypatch.setattr(engine_module, "probe_engine", fake_probe_engine)
-    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+    monkeypatch.setitem(
+        engine_module._ADAPTER_ENTRY_POINTS, "pytest", fake_run_pytest
+    )
 
     target = resolve_test_target("", basic_workspace)
     record, warnings = await execute(
@@ -551,7 +612,8 @@ def _stub_pytest_native_result(
     summary: dict[str, int],
     tests: list[dict[str, Any]],
 ) -> None:
-    """Patch ``run_pytest`` to return a controlled pytest payload.
+    """Patch the dispatch dict's ``pytest`` entry to return a controlled
+    pytest payload.
 
     ``exitcode`` doubles as the ``NativeResult.returncode`` and rides the
     payload's ``exitcode`` field so the normalizer derives status from a
@@ -579,7 +641,9 @@ def _stub_pytest_native_result(
             completed_at_ms=0,
         )
 
-    monkeypatch.setattr(engine_module, "run_pytest", fake_run_pytest)
+    monkeypatch.setitem(
+        engine_module._ADAPTER_ENTRY_POINTS, "pytest", fake_run_pytest
+    )
 
 
 async def test_zero_collection_passed_empty_emits_warning(

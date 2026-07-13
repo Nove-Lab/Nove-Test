@@ -3,23 +3,21 @@
 Since the 2026-07-03 pin-driven-dispatch slice this module is the single
 source of truth for marker detection and disambiguation order — the
 detection tests (formerly in ``test_readiness.py``) and the divergence
-guards live here.
+guards live here. Since W2/S16 dispatch itself is pin-driven through
+``engine.py``'s ``_ADAPTER_ENTRY_POINTS`` dict (its own divergence guard
+lives in ``test_engine.py``); detection order decides only what a pin
+CAN name, pinned by first-candidate assertions here.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from novetest.run import readiness as readiness_module
 from novetest.run.engine_selector import (
     detect_engine_candidates,
     list_supported_engine_pairs,
-    select_native_engine,
 )
-from novetest.run.errors import EngineNotSupportedError
-from novetest.run.types import TestTarget
 
 
 def test_supported_pairs_cover_six_ecosystems() -> None:
@@ -31,75 +29,6 @@ def test_supported_pairs_cover_six_ecosystems() -> None:
     assert ("rust", "cargo-test") in pairs
     assert ("dotnet", "xunit") in pairs
     assert len(pairs) == 6
-
-
-def test_python_workspace_selects_pytest(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-    target = TestTarget("", "workspace", tmp_path)
-    context = select_native_engine(target)
-    assert context.ecosystem == "python"
-    assert context.engine_name == "pytest"
-
-
-def test_unknown_workspace_raises(tmp_path: Path) -> None:
-    target = TestTarget("", "workspace", tmp_path)
-    with pytest.raises(EngineNotSupportedError):
-        select_native_engine(target)
-
-
-def test_js_workspace_selects_jest(tmp_path: Path) -> None:
-    """Phase 2.5: jest is now an implemented adapter, so `package.json`
-    workspaces resolve to the jest engine context rather than raising.
-    """
-
-    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
-    target = TestTarget("", "workspace", tmp_path)
-    context = select_native_engine(target)
-    assert context.ecosystem == "javascript-typescript"
-    assert context.engine_name == "jest"
-
-
-def test_dotnet_workspace_selects_xunit(tmp_path: Path) -> None:
-    """Phase 2.5 sixth-and-last slice: xunit is now an implemented adapter,
-    so ``*.csproj`` workspaces resolve to the xunit engine context rather
-    than raising. The glob-based detection branch (vs marker-file detection
-    used by python/javascript/java/go/rust) is exercised here so the
-    selector's two detection paths both have regression coverage.
-    """
-
-    (tmp_path / "Foo.csproj").write_text("<Project/>", encoding="utf-8")
-    target = TestTarget("", "workspace", tmp_path)
-    context = select_native_engine(target)
-    assert context.ecosystem == "dotnet"
-    assert context.engine_name == "xunit"
-
-
-def test_go_workspace_selects_gotest(tmp_path: Path) -> None:
-    """Phase 3: go-test is now an implemented adapter, so `go.mod`
-    workspaces resolve to the go-test engine context rather than raising.
-    """
-
-    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
-    target = TestTarget("", "workspace", tmp_path)
-    context = select_native_engine(target)
-    assert context.ecosystem == "go"
-    assert context.engine_name == "go-test"
-
-
-def test_rust_workspace_selects_cargo_test(tmp_path: Path) -> None:
-    """Phase 3 (adapter backlog #2): cargo-test is now an implemented
-    adapter, so `Cargo.toml` workspaces resolve to the cargo-test engine
-    context rather than raising.
-    """
-
-    (tmp_path / "Cargo.toml").write_text(
-        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
-        encoding="utf-8",
-    )
-    target = TestTarget("", "workspace", tmp_path)
-    context = select_native_engine(target)
-    assert context.ecosystem == "rust"
-    assert context.engine_name == "cargo-test"
 
 
 # ---------------------------------------------------------------------------
@@ -124,10 +53,37 @@ def test_detect_js_candidate_from_package_json(tmp_path: Path) -> None:
 
 
 def test_detect_dotnet_via_csproj_glob(tmp_path: Path) -> None:
+    """The glob-based detection branch (vs literal marker-file detection
+    used by python/javascript/java/go/rust) keeps regression coverage."""
+
     (tmp_path / "Foo.csproj").write_text("<Project/>", encoding="utf-8")
     candidates = detect_engine_candidates(tmp_path)
     pairs = {(c.ecosystem, c.engine_name) for c in candidates}
     assert ("dotnet", "xunit") in pairs
+
+
+def test_detect_go_candidate_from_gomod(tmp_path: Path) -> None:
+    """Ported from the deleted ``test_go_workspace_selects_gotest``:
+    a ``go.mod``-only workspace yields go-test as the sole candidate."""
+
+    (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
+    candidates = detect_engine_candidates(tmp_path)
+    assert [(c.ecosystem, c.engine_name) for c in candidates] == [("go", "go-test")]
+
+
+def test_detect_rust_candidate_from_cargo_toml(tmp_path: Path) -> None:
+    """Ported from the deleted ``test_rust_workspace_selects_cargo_test``:
+    a ``Cargo.toml``-only workspace yields cargo-test as the sole
+    candidate."""
+
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "x"\nversion = "0.1.0"\nedition = "2021"\n',
+        encoding="utf-8",
+    )
+    candidates = detect_engine_candidates(tmp_path)
+    assert [(c.ecosystem, c.engine_name) for c in candidates] == [
+        ("rust", "cargo-test")
+    ]
 
 
 def test_detect_dotnet_one_level_csproj_evidence_is_root_relative(
@@ -213,18 +169,20 @@ def test_readiness_probe_registry_matches_supported_pairs() -> None:
     )
 
 
-def test_java_outranks_go_in_selection(tmp_path: Path) -> None:
+def test_java_outranks_go_in_detection(tmp_path: Path) -> None:
     """The exact §4.1 mismatch workspace: `pom.xml` + `go.mod`.
 
-    Pre-fix, `select_native_engine` ranked java 3rd while readiness
-    probed go (junit ranked 5th in its hand-ordered chain), so Go could
-    be readiness-verified while JUnit was dispatched. Selection must pick
-    java here; `test_readiness.py::
-    test_assess_and_select_agree_on_pom_plus_gomod_workspace` pins the
-    readiness side of the same workspace.
+    Pre-fix, selection ranked java 3rd while readiness probed go (junit
+    ranked 5th in its hand-ordered chain), so Go could be
+    readiness-verified while JUnit was dispatched. Detection must rank
+    java FIRST here — the first candidate is what a pin created from
+    detection dispatches; `test_readiness.py::
+    test_assess_and_detection_agree_on_pom_plus_gomod_workspace` pins the
+    readiness side of the same workspace. (Ported from the deleted
+    ``test_java_outranks_go_in_selection`` at S16.)
     """
 
     (tmp_path / "pom.xml").write_text("<project/>", encoding="utf-8")
     (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
-    context = select_native_engine(TestTarget("", "workspace", tmp_path))
-    assert (context.ecosystem, context.engine_name) == ("java", "junit")
+    first = detect_engine_candidates(tmp_path)[0]
+    assert (first.ecosystem, first.engine_name) == ("java", "junit")

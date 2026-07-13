@@ -1,13 +1,15 @@
-"""Supported (ecosystem, engine) pairs, marker detection, and selection.
+"""Supported (ecosystem, engine) pairs and marker detection.
 
 This module owns THE single source of truth for engine detection: the
 ordered marker/priority table `_ENGINE_MARKER_TABLE`. Everything that
 needs to know "which ecosystems exist, what markers identify them, and
 who wins on a polyglot workspace" derives from that one constant —
-`list_supported_engine_pairs`, `detect_engine_candidates`,
-`select_native_engine`, and (via `detect_engine_candidates`) the
-disambiguation inside `readiness.assess_engine_readiness`. There is
-deliberately no second ordered list anywhere in `run/`; the historic
+`list_supported_engine_pairs`, `detect_engine_candidates`, and (via
+`detect_engine_candidates`) the disambiguation inside
+`readiness.assess_engine_readiness`. Run-time dispatch itself is
+pin-driven and lives in `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict —
+detection here decides only what a pin CAN name. There is deliberately
+no second ordered list anywhere in `run/`; the historic
 selector-vs-readiness rank mismatch (java 3rd vs junit 5th — the §4.1
 latent bug of the 2026-07-02 engine-selection-policy question) is dead
 by construction. See `decisions/2026-07-03-engine-selection-policy.md`
@@ -24,8 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from novetest.run.errors import EngineNotSupportedError
-from novetest.run.types import EngineCandidate, NativeEngineContext, TestTarget
+from novetest.run.types import EngineCandidate
 
 # THE canonical ordered marker/priority table. Row order matches
 # REQ-RUN-006 in the requirements specification and decides which engine
@@ -63,8 +64,9 @@ def detect_engine_candidates(project_workspace: Path) -> tuple[EngineCandidate, 
 
     Marker-based only: scans ONE directory (plus the dotnet row's
     one-level csproj glob), no recursion, no subprocess. Candidates come
-    back in canonical priority order — first entry is what
-    `select_native_engine` would dispatch. The caller decides how to
+    back in canonical priority order — the first entry is the canonical
+    winner (the pair that, once pinned, `engine.py`'s
+    `_ADAPTER_ENTRY_POINTS` dispatch runs). The caller decides how to
     disambiguate: `novetest init` treats ≥2 READY candidates as
     `engine-ambiguous` (decision 2026-07-03-engine-selection-policy D1,
     with per-candidate readiness via `readiness.probe_engine`), while
@@ -107,27 +109,3 @@ def _marker_evidence(root: Path, markers: tuple[str, ...]) -> tuple[str, ...]:
         elif (root / marker).exists():
             literal_hits.append(marker)
     return tuple(literal_hits) + tuple(sorted(glob_hits))
-
-
-def select_native_engine(test_target: TestTarget) -> NativeEngineContext:
-    """Pick the Native Engine for a resolved Test Target.
-
-    The first candidate in canonical table order wins — by construction
-    the same engine `assess_engine_readiness` probes. Workspaces that
-    match no supported ecosystem raise — the caller is expected to gate
-    on `assess_engine_readiness` first.
-
-    Under the anchored-pin model this auto-detect selection only serves
-    the legacy `execute(engine=None)` path; pinned flows hand `execute`
-    the resolved pair directly and never reach this function.
-    """
-
-    candidates = detect_engine_candidates(test_target.workspace_path)
-    if not candidates:
-        raise EngineNotSupportedError(
-            f"no supported ecosystem detected for workspace {test_target.workspace_path!s}"
-        )
-    chosen = candidates[0]
-    return NativeEngineContext(
-        ecosystem=chosen.ecosystem, engine_name=chosen.engine_name
-    )
