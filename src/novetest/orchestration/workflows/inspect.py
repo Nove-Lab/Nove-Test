@@ -28,6 +28,7 @@ from novetest.localization import (
 from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,
+    SkippedRecord,
     list_run_history,
     retrieve_run_evidence,
 )
@@ -107,12 +108,22 @@ class InspectView:
         }
 
 
-def build_inspect_view(store: ProjectStore, run_id: str) -> InspectView | None:
+def build_inspect_view(
+    store: ProjectStore,
+    run_id: str,
+    *,
+    skipped: list[SkippedRecord] | None = None,
+) -> InspectView | None:
     """Aggregate the stored evidence for ``run_id`` into an ``InspectView``.
 
     Returns ``None`` when no Memory Entry (live or tombstoned) matches
     ``run_id`` — the CLI handler maps that to a structured ``not-found``
     envelope. Tombstoned runs remain inspectable, mirroring ``memory show``.
+
+    ``skipped`` is threaded to the history scan's MEM-05 collector so the
+    CLI can distinguish a genuine miss from a corrupt-on-disk record whose
+    ``run_id`` matches the requested id (Gate-1 Q1-A escalation to
+    ``store-corrupt`` — ``inspect`` joins the S42 addressed-verb set).
 
     The Coverage section is sourced cache-read-only via
     ``get_coverage_facts`` — ``inspect`` never derives. A run executed
@@ -127,7 +138,7 @@ def build_inspect_view(store: ProjectStore, run_id: str) -> InspectView | None:
     without re-deriving.
     """
 
-    history = list_run_history(store)
+    history = list_run_history(store, skipped=skipped)
     target = next(
         (e for e in history if e.run_record.run_reference.run_id == run_id),
         None,

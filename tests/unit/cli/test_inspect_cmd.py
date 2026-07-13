@@ -92,10 +92,10 @@ def test_inspect_emits_aggregated_view_when_run_resolves(
     stub_store: object,
 ) -> None:
     run_id = "01TESTTESTTESTTESTTESTTEST"
-    seen: list[tuple[object, str]] = []
+    seen: list[tuple[object, str, object]] = []
 
-    def fake_build(store: Any, rid: str) -> _FakeView:
-        seen.append((store, rid))
+    def fake_build(store: Any, rid: str, *, skipped: Any = None) -> _FakeView:
+        seen.append((store, rid, skipped))
         return _FakeView(_VIEW_PAYLOAD)
 
     monkeypatch.setattr(app_module, "build_inspect_view", fake_build)
@@ -103,8 +103,9 @@ def test_inspect_emits_aggregated_view_when_run_resolves(
     with pytest.raises(SystemExit) as exc_info:
         app_module.inspect_cmd(run_id)
     assert exc_info.value.code == 0
-    # The handler forwards the resolved store + raw run_id to the workflow.
-    assert seen == [(stub_store, run_id)]
+    # The handler forwards the resolved store + raw run_id to the workflow,
+    # plus a (fresh, empty) MEM-05 skip collector for the Q1-A miss check.
+    assert seen == [(stub_store, run_id, [])]
 
     payload = _captured_envelope(capsys)
     assert payload["command"] == "inspect"
@@ -125,7 +126,7 @@ def test_inspect_returns_not_found_for_unknown_run_id(
     """`build_inspect_view` returns None → structured not-found, exit 2."""
 
     monkeypatch.setattr(
-        app_module, "build_inspect_view", lambda _store, _rid: None
+        app_module, "build_inspect_view", lambda _store, _rid, skipped=None: None
     )
 
     with pytest.raises(SystemExit) as exc_info:

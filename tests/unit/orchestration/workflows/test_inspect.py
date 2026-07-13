@@ -9,6 +9,7 @@ view. The Memory / Coverage seams (`list_run_history`,
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,7 +18,7 @@ from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_DERIVED_FACTS
 from novetest.localization import LocalizationUnavailable
 from novetest.localization.results import REASON_MISSING_DERIVED_FACTS as LOC_REASON_MISSING
-from novetest.memory import RunEvidenceNotFoundError
+from novetest.memory import RunEvidenceNotFoundError, SkippedRecord
 from novetest.models import MemoryEntry, RunRecord, RunReference
 from novetest.models.coverage_fact_set import CoverageFactSet, CoverageSummary
 from novetest.orchestration.workflows import inspect as inspect_module
@@ -98,7 +99,7 @@ def _patch_memory(
     existent filesystem.
     """
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: history)
+    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: history)
 
     def fake_retrieve(_store: Any, _ref: RunReference) -> MemoryEntry:
         if isinstance(retrieved, RunEvidenceNotFoundError):
@@ -160,7 +161,7 @@ def _patch_memory(
 def test_unknown_run_id_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """No Memory Entry matches the run_id → `None` (CLI maps to not-found)."""
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: [])
+    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: [])
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("get_coverage_facts called for an unknown run_id")
@@ -168,6 +169,37 @@ def test_unknown_run_id_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(inspect_module, "get_coverage_facts", must_not_be_called)
 
     assert build_inspect_view(object(), "fake-id") is None  # type: ignore[arg-type]
+
+
+def test_skipped_collector_threads_to_history_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Q1-A seam: the ``skipped`` collector reaches ``list_run_history``.
+
+    ``build_inspect_view`` never escalates itself — it returns ``None`` for
+    the miss and the CLI decides (``_lookup_miss_exit``) whether the miss is
+    a genuine ``not-found`` or an addressed-corrupt ``store-corrupt``. The
+    workflow's whole contribution is threading the MEM-05 collector through
+    to the scan; this pins exactly that.
+    """
+
+    skip = SkippedRecord(
+        path=Path("/store/memory/runs/2026/07/13/run_01CORRUPT/record.json"),
+        error="Corrupt run record at …/record.json: Expecting value",
+        run_id="01CORRUPT",
+    )
+
+    def fake_history(_store: Any, skipped: Any = None) -> list[MemoryEntry]:
+        if skipped is not None:
+            skipped.append(skip)
+        return []
+
+    monkeypatch.setattr(inspect_module, "list_run_history", fake_history)
+
+    collector: list[SkippedRecord] = []
+    view = build_inspect_view(object(), "01CORRUPT", skipped=collector)  # type: ignore[arg-type]
+    assert view is None
+    assert collector == [skip]
 
 
 def test_entry_vanishing_between_list_and_retrieve_returns_none(

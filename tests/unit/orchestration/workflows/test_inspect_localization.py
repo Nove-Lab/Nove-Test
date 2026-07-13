@@ -124,7 +124,7 @@ def _patch_all_seams(
     was called with — empty if the call was correctly suppressed."""
 
     monkeypatch.setattr(
-        inspect_module, "list_run_history", lambda _store: [entry]
+        inspect_module, "list_run_history", lambda _store, skipped=None: [entry]
     )
     monkeypatch.setattr(
         inspect_module, "retrieve_run_evidence", lambda *_a, **_k: entry
@@ -369,7 +369,7 @@ def test_fake_run_id_returns_none_before_localization_call(
         derive_calls.append("called")
         raise AssertionError("get_localization_findings called for unknown run_id")
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: [])
+    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: [])
     monkeypatch.setattr(inspect_module, "get_localization_findings", must_not_call)
 
     result = build_inspect_view(object(), "fake-run-id")  # type: ignore[arg-type]
@@ -405,7 +405,7 @@ def test_inspect_never_calls_derive_localization_findings(
         get_calls.append(r)
         return cache_result
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: [entry])
+    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: [entry])
     monkeypatch.setattr(
         inspect_module, "retrieve_run_evidence", lambda *_a, **_k: entry
     )

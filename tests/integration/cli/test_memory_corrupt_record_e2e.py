@@ -14,6 +14,10 @@ real subprocesses:
   tombstoned; manual removal of the named run dir is the recovery)
 - ``novetest coverage show`` → same escalation on a non-memory addressed verb
   (which pre-S42 gave ZERO corruption signal), warning-free by S41's design
+- ``novetest inspect``       → same escalation (W2 inspect slice — the ONE
+  run_id-addressed verb the S42 set omitted, because its scan lives inside
+  ``build_inspect_view``; pre-slice it still gave ``not-found`` / exit 2
+  with ZERO corruption signal), warning-free like every non-memory verb
 - genuinely-absent ids       → ``not-found`` / exit 2 UNCHANGED
 - ``novetest regression latest``  → baseline resolution survives the corrupt
   sibling (scan-level isolation, no CLI warning channel there by design)
@@ -228,6 +232,61 @@ def test_coverage_show_of_corrupt_run_escalates_store_corrupt(
     assert envelope["ok"] is False
     assert envelope["errors"][0]["code"] == "store-corrupt"
     assert str(torn_path) in envelope["errors"][0]["message"]
+    assert envelope["warnings"] == []
+
+
+def test_inspect_of_corrupt_run_escalates_store_corrupt(
+    isolated_cwd, run_cli
+) -> None:
+    """Q1-A extension (W2 inspect slice): ``inspect <corrupt id>`` — the run
+    EXISTS but its ``record.json`` is unreadable, so ``not-found`` (the
+    pre-slice behavior, with ZERO corruption signal) would be dishonest.
+    Exit 5 / ``store-corrupt`` with the corrupt file's path in the message;
+    warning-free (non-memory verbs escalate without the
+    ``corrupt-run-record-skipped`` channel — S42 transport convention)."""
+    torn_path, _ = _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["inspect", _TORN_REF.run_id, "--output", "json"])
+
+    assert result.returncode == 5, result.stderr
+    envelope = result.envelope()
+    assert envelope["command"] == "inspect"
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["code"] == "store-corrupt"
+    assert str(torn_path) in envelope["errors"][0]["message"]
+    assert envelope["warnings"] == []
+
+
+def test_inspect_keeps_not_found_for_genuinely_absent_id(
+    isolated_cwd, run_cli
+) -> None:
+    """Negative pin: an id matching NO record (healthy or corrupt) keeps
+    ``not-found`` / exit 2 on ``inspect``, even while corrupt skips exist."""
+    _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["inspect", "01ABSENT00000000000000000Z", "--output", "json"])
+
+    assert result.returncode == 2, result.stderr
+    envelope = result.envelope()
+    assert envelope["command"] == "inspect"
+    assert envelope["errors"][0]["code"] == "not-found"
+    assert envelope["warnings"] == []
+
+
+def test_inspect_of_healthy_run_survives_corrupt_sibling(
+    isolated_cwd, run_cli
+) -> None:
+    """Isolation pin (S41 holds): a corrupt OTHER record must not affect
+    inspecting a healthy id — full aggregated view, exit 0, warning-free."""
+    _seed_store_with_corruption(isolated_cwd)
+
+    result = run_cli(["inspect", _TARGET_REF.run_id, "--output", "json"])
+
+    assert result.returncode == 0, result.stderr
+    envelope = result.envelope()
+    assert envelope["command"] == "inspect"
+    assert envelope["ok"] is True
+    assert envelope["data"]["run_reference"]["run_id"] == _TARGET_REF.run_id
     assert envelope["warnings"] == []
 
 

@@ -1517,27 +1517,19 @@ def inspect_cmd(run_id: str) -> None:
 
     A stale or fake ``run_id`` surfaces a structured ``not-found`` error
     (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
+    An id whose record is corrupt on disk escalates to ``store-corrupt``
+    (exit 5) instead — the Gate-1 Q1-A addressed-lookup convention
+    (``_lookup_miss_exit``); warning-free like every non-memory verb.
     """
     store = _require_store("inspect")
+    skipped: list[SkippedRecord] = []
     try:
-        view = build_inspect_view(store, run_id)
+        view = build_inspect_view(store, run_id, skipped=skipped)
     except ProjectStoreCorruptError as exc:
         # S42 residual loud path (TOCTOU targeted read): exit 5.
         _emit_and_exit(_store_corrupt_envelope("inspect", str(exc)), EXIT_STORAGE)
     if view is None:
-        _emit_and_exit(
-            Envelope(
-                command="inspect",
-                ok=False,
-                errors=(
-                    EnvelopeError(
-                        code="not-found",
-                        message=f"No Memory Entry for run_id={run_id!r}",
-                    ),
-                ),
-            ),
-            EXIT_USAGE,
-        )
+        _lookup_miss_exit("inspect", run_id, skipped)
     _emit_and_exit(
         Envelope(command="inspect", ok=True, data=view.to_dict()),
         EXIT_OK,

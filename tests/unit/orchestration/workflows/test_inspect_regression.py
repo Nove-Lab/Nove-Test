@@ -120,7 +120,7 @@ def _patch_seams(
     cross-engine priors, or only other-target runs; the discrimination
     lives in the real selector, pinned in ``tests/unit/regression/``)."""
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store: history)
+    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: history)
     monkeypatch.setattr(
         inspect_module, "retrieve_run_evidence", lambda *_a, **_k: retrieved
     )

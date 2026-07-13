@@ -306,7 +306,8 @@ path tells them apart:
 - **A single run record** — the `record.json` of the exact run you
   addressed by `run_id` (`memory show` / `memory delete` / `coverage show`
   / `coverage diff` / `regression compare` / `compare` / `localization` /
-  `replay`) is torn, hand-mangled, or written by a newer schema. The
+  `replay` / `inspect`) is torn, hand-mangled, or written by a newer
+  schema. The
   message names the corrupt file's absolute path. This is NOT `not-found`:
   the run exists, its storage is unreadable — re-running or picking another
   id will not fix it. A record that turns corrupt mid-verb (between the

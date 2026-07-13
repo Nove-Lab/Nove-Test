@@ -7,6 +7,9 @@ Two wire deltas are pinned here (Gate-1 Q1 Option A, task
    because the isolated scan skipped the requested record as corrupt
    escalates from the dishonest ``not-found`` / exit 2 to ``store-corrupt``
    / exit 5 (``_lookup_miss_exit``). Genuinely-absent ids keep ``not-found``.
+   The W2 inspect slice (task ``…-w2-inspect-store-corrupt-escalation``)
+   extends the addressed set to ``inspect``, whose run-id scan lives inside
+   ``build_inspect_view`` and threads a skip collector back to the handler.
 2. **Residual loud paths** — a ``ProjectStoreCorruptError`` surfacing
    through a verb body (TOCTOU: the record turned corrupt between the scan
    and a targeted read) maps to ``store-corrupt`` / exit 5 at the verb's
@@ -201,6 +204,76 @@ def test_memory_delete_corrupt_addressed_lookup_exits_5(
     assert payload["command"] == "memory.delete"
     assert payload["errors"][0]["code"] == "store-corrupt"
     assert str(_FAKE_PATH) in payload["errors"][0]["message"]
+
+
+def _fake_inspect_build_with_skip(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    skip_run_id: str = _RUN_ID,
+) -> None:
+    """``build_inspect_view`` stand-in: miss + one corrupt skip on the scan.
+
+    ``inspect``'s history scan lives INSIDE the workflow (unlike the
+    ``_resolve_run_reference`` consumers), so the handler-level seam here is
+    the workflow function itself: it fills the threaded MEM-05 collector and
+    returns ``None`` — exactly what the real ``build_inspect_view`` does when
+    the scan skipped the record as corrupt.
+    """
+    error = f"Corrupt run record at {_FAKE_PATH}: Expecting value: line 1 column 1"
+
+    def fake_build(_store: Any, _rid: str, *, skipped: Any = None) -> None:
+        if skipped is not None:
+            skipped.append(
+                SkippedRecord(path=_FAKE_PATH, error=error, run_id=skip_run_id)
+            )
+        return None
+
+    monkeypatch.setattr(app_module, "build_inspect_view", fake_build)
+
+
+def test_inspect_corrupt_addressed_lookup_exits_5_warning_free(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+) -> None:
+    """Q1-A extension (W2 inspect slice): ``inspect <corrupt id>`` escalates
+    the pre-slice ``not-found`` / exit 2 to ``store-corrupt`` / exit 5 with
+    the corrupt file's path — warning-free, like every non-memory verb
+    (S42 transport convention)."""
+    _fake_inspect_build_with_skip(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.inspect_cmd(_RUN_ID)
+    assert exc_info.value.code == 5
+
+    payload = _captured_envelope(capsys)
+    assert payload["ok"] is False
+    assert payload["command"] == "inspect"
+    assert payload["errors"][0]["code"] == "store-corrupt"
+    assert str(_FAKE_PATH) in payload["errors"][0]["message"]
+    assert payload["warnings"] == []
+
+
+def test_inspect_keeps_not_found_when_corrupt_skip_is_another_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+) -> None:
+    """Negative pin: the escalation fires ONLY on an id match — a corrupt
+    skip belonging to a DIFFERENT run must not turn an absent id's honest
+    ``not-found`` / exit 2 into an exit 5."""
+    _fake_inspect_build_with_skip(monkeypatch, skip_run_id=_RUN_ID)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.inspect_cmd(_ABSENT_ID)
+    assert exc_info.value.code == 2
+
+    payload = _captured_envelope(capsys)
+    assert payload["command"] == "inspect"
+    assert payload["errors"][0]["code"] == "not-found"
+    assert payload["warnings"] == []
 
 
 # ---------------------------------------------------------------------------
