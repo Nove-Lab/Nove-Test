@@ -287,6 +287,37 @@ def test_only_run_on_target_surfaces_no_comparable_baseline(
     assert sub_reports["regression"] == "unavailable"
 
 
+def test_bare_invocation_refusal_detail_renders_workspace_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """W2/S27 (Gate-1 Q5b): a bare ``novetest test`` records an EMPTY
+    ``target_expression``; the no-comparable-baseline refusal must render
+    the pinned ``(entire workspace)`` placeholder instead of ``detail: ""``
+    (mirrors regression's S36-close pin). Non-empty expressions are
+    unchanged — pinned by
+    ``test_only_run_on_target_surfaces_no_comparable_baseline`` above."""
+
+    inspected = _make_entry(
+        "01BAREINVOKEBAREINVOKEBARE", created_at=5, target_expression=""
+    )
+    seen = _patch_seams(
+        monkeypatch,
+        history=[inspected],
+        retrieved=inspected,
+        baseline_ref=None,        # selector: no comparable baseline
+        compare_result=None,      # compare_runs must NOT be called
+    )
+
+    view = build_inspect_view(object(), inspected.run_record.run_reference.run_id)  # type: ignore[arg-type]
+    assert view is not None
+    assert seen == []
+    outcome = view.to_dict()["regression_outcome"]
+    assert isinstance(outcome, dict)
+    assert outcome["kind"] == "unavailable"
+    assert outcome["reason"] == REASON_NO_COMPARABLE_BASELINE
+    assert outcome["detail"] == "(entire workspace)"
+
+
 def test_tombstoned_inspected_run_propagates_compare_run_tombstoned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

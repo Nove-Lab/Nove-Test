@@ -78,6 +78,9 @@ def test_reset_round_trip_wipes_runs_and_reinitializes(isolated_cwd, run_cli) ->
     assert data["items_removed"]["runs"] >= 1
     assert "previous_initialized_at" in data
     assert "initialized_at" in data
+    # ORC-20: reset carries the previous pin across the wipe and names it,
+    # shape identical to init's pinned_engine.
+    assert data["pinned_engine"] == {"ecosystem": "python", "engine_name": "pytest"}
 
     # ----- novetest status: store is empty after the wipe + re-init -----
     status = run_cli(["status", "--output", "json"])

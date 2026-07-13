@@ -668,12 +668,12 @@ and re-inits. `command: "reset"`, exit 0:
   "command": "reset",
   "data": {
     "engine_readiness": {
-      "ecosystem": null,
-      "engine": null,
-      "engine_version": null,
-      "evidence": [],
-      "issues": ["no supported (ecosystem, native engine) pair detected in workspace"],
-      "state": "engine-missing"
+      "ecosystem": "python",
+      "engine": "pytest",
+      "engine_version": "9.0.3",
+      "evidence": ["pyproject.toml"],
+      "issues": [],
+      "state": "ready"
     },
     "initialized_at": 1782368398311,
     "items_removed": {
@@ -683,6 +683,10 @@ and re-inits. `command: "reset"`, exit 0:
       "replay_results": 0,
       "runs": 0,
       "tombstones": 0
+    },
+    "pinned_engine": {
+      "ecosystem": "python",
+      "engine_name": "pytest"
     },
     "previous_initialized_at": 1782368397706,
     "store_path": "/abs/path/.novetest",

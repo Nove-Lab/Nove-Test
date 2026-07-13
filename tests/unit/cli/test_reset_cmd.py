@@ -66,6 +66,12 @@ def _happy_result() -> SimpleNamespace:
             path="/ws/.novetest",
             store_state="ready",
             initialized_at=1_719_215_123_000,
+            # ORC-20: reset's success envelope mirrors init's pinned_engine
+            # shape (a successful reset always carries a pin — the previous
+            # pin, or the D1 choice for a legacy pin-less store).
+            pinned_engine=SimpleNamespace(
+                to_dict=lambda: {"ecosystem": "python", "engine_name": "pytest"}
+            ),
         ),
         engine_readiness=readiness,
     )
@@ -217,6 +223,8 @@ def test_reset_happy_path_projects_data(
     }
     assert data["engine_readiness"]["state"] == "ready"
     assert data["engine_readiness"]["engine"] == "pytest"
+    # ORC-20: the additive pinned_engine key, shape identical to init's.
+    assert data["pinned_engine"] == {"ecosystem": "python", "engine_name": "pytest"}
 
 
 def test_reset_happy_path_envelope_snapshot(

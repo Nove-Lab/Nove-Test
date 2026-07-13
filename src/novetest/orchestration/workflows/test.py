@@ -172,10 +172,10 @@ async def test_target_in_store(
 
     ``engine`` is the transient ``--engine`` override pair (decision
     ``2026-07-03-engine-selection-policy.md`` D3); ``None`` falls back to
-    the store's pin, and ``run/execute`` always receives an explicit pair
-    (no ``execute(engine=None)`` caller remains). The target expression is
-    normalized to anchor-relative canonical form first, so the same ask
-    from any cwd shares one baseline series.
+    the store's pin, and ``run/execute`` requires an explicit,
+    store-pinned (or overridden) pair — it never auto-detects. The target
+    expression is normalized to anchor-relative canonical form first, so
+    the same ask from any cwd shares one baseline series.
     """
 
     workspace_path = store.path.parent
@@ -370,7 +370,11 @@ def build_test_outcome_from_run_id(
     if baseline_ref is None:
         regression_outcome = RegressionUnavailable(
             reason=_REASON_NO_COMPARABLE_BASELINE,
-            detail=target_entry.run_record.target_expression,
+            # A bare ``novetest test`` records an EMPTY target expression —
+            # render the pinned placeholder instead of ``detail: ""``
+            # (mirrors regression's S36-close pin; free-text only).
+            detail=target_entry.run_record.target_expression
+            or "(entire workspace)",
             baseline_run_reference=None,
             target_run_reference=ref,
         )

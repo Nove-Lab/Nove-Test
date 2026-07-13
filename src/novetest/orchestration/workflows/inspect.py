@@ -194,7 +194,11 @@ def _resolve_inspect_regression(
     if baseline_ref is None:
         return RegressionUnavailable(
             reason=REASON_NO_COMPARABLE_BASELINE,
-            detail=inspected.run_record.target_expression,
+            # A bare ``novetest test`` records an EMPTY target expression —
+            # render the pinned placeholder instead of ``detail: ""``
+            # (mirrors regression's S36-close pin; free-text only).
+            detail=inspected.run_record.target_expression
+            or "(entire workspace)",
             baseline_run_reference=None,
             target_run_reference=inspected_ref,
         )

@@ -13,6 +13,9 @@ This file covers two unit-scope concerns:
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from novetest.coverage import CoverageUnavailable
@@ -37,6 +40,7 @@ from novetest.models.regression_fact_set import (
 )
 from novetest.models.run_reference import RunReference
 from novetest.orchestration.recommendation import StageEligibility
+from novetest.orchestration.workflows import test as test_module
 from novetest.orchestration.workflows.test import _build_stage_eligibility
 from novetest.regression import RegressionUnavailable
 from novetest.regression.results import (
@@ -188,3 +192,86 @@ class TestBuildStageEligibility:
                 localization_outcome=mode_finding,
             )
             assert elig.localization == mode, mode
+
+
+# ---------------------------------------------------------------------------
+# build_test_outcome_from_run_id — no-comparable-baseline refusal detail
+# ---------------------------------------------------------------------------
+
+
+def _seed_single_run(workspace: Path, target_expression: str) -> str:
+    """Materialize a real Project Store with ONE run; return its run_id.
+
+    A single run on a target means the real ``resolve_baseline_for_run``
+    selector answers ``None`` — the re-derive path's own
+    no-comparable-baseline refusal site fires (the object under test)."""
+    from novetest.memory import create_project_store, store_run_evidence
+    from novetest.models.run_record import RunRecord
+    from novetest.models.test_result import TestResult
+
+    store = create_project_store(workspace)
+    ref = RunReference(run_id="01W2S27DETA0000000000000AA", created_at=1_700_000_000_000)
+    record = RunRecord(
+        run_reference=ref,
+        target_expression=target_expression,
+        target_type="dir",
+        engine_name="pytest",
+        engine_version="8.2.0",
+        ecosystem="python",
+        status="passed",
+        started_at=ref.created_at,
+        completed_at=ref.created_at + 1_000,
+        test_results=(
+            TestResult(node_id="tests/x.py::test_ok", outcome="passed", duration_ms=5),
+        ),
+    )
+    store_run_evidence(store, record)
+    return ref.run_id
+
+
+@pytest.mark.parametrize(
+    ("target_expression", "expected_detail"),
+    [
+        pytest.param("", "(entire workspace)", id="bare-invocation-placeholder"),
+        pytest.param("tests/", "tests/", id="non-empty-expression-unchanged"),
+    ],
+)
+def test_rederive_no_baseline_refusal_detail_renders_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_expression: str,
+    expected_detail: str,
+) -> None:
+    """W2/S27 (Gate-1 Q5b): a bare ``novetest test`` records an EMPTY
+    ``target_expression``; the re-derive path's no-comparable-baseline
+    refusal must render the pinned ``(entire workspace)`` placeholder
+    instead of ``detail: ""`` (mirrors regression's S36-close pin).
+    Non-empty expressions pass through verbatim.
+
+    The refusal object never surfaces its ``detail`` past
+    ``_build_stage_eligibility`` (which keeps only ``reason``), so the pin
+    captures it there via a recording pass-through — everything else runs
+    against a real single-run Project Store (real selector → ``None``)."""
+
+    from novetest.memory import locate_project_store
+
+    run_id = _seed_single_run(tmp_path, target_expression)
+    store = locate_project_store(tmp_path)
+    assert store is not None
+
+    captured: dict[str, Any] = {}
+    real_builder = test_module._build_stage_eligibility
+
+    def recording_builder(**kwargs: Any) -> StageEligibility:
+        captured.update(kwargs)
+        return real_builder(**kwargs)
+
+    monkeypatch.setattr(test_module, "_build_stage_eligibility", recording_builder)
+
+    outcome = test_module.build_test_outcome_from_run_id(store, run_id)
+
+    assert outcome is not None
+    refusal = captured["regression_outcome"]
+    assert isinstance(refusal, RegressionUnavailable)
+    assert refusal.reason == REG_REASON_NO_COMPARABLE_BASELINE
+    assert refusal.detail == expected_detail

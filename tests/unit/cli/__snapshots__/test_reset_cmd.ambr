@@ -23,6 +23,10 @@
         'runs': 12,
         'tombstones': 1,
       }),
+      'pinned_engine': dict({
+        'ecosystem': 'python',
+        'engine_name': 'pytest',
+      }),
       'previous_initialized_at': 1717939496000,
       'store_path': '/ws/.novetest',
       'store_state': 'ready',

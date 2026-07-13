@@ -80,8 +80,13 @@ async def reset_project_workspace(
     ``ProjectStoreCorruptError`` (raised by ``wipe_project_store`` →
     CLI ``store-corrupt`` / exit 5) — reset deliberately refuses to wipe a
     store it cannot read. Any filesystem failure during the wipe surfaces
-    as ``OSError`` (→ CLI ``store-wipe-failed`` / exit 5); the primitive's
-    atomic-rename guard means the original store is still recoverable.
+    as ``OSError`` (→ CLI ``store-wipe-failed`` / exit 5). Recoverability
+    splits at the primitive's atomic detach-rename: a failure BEFORE the
+    rename leaves the original store intact; a failure at the post-rename
+    ``rmtree`` (the primitive's step 6) has already detached ``.novetest/``
+    and leaves only ``.novetest.deleting.<ulid>/`` staging residue — not a
+    recoverable store, an orphan the ``sweep_staging_residue`` reaper
+    reclaims on the next ``init`` / ``reset`` (MEM-03 / S42).
 
     The engine to re-pin is resolved BEFORE any destructive action: the
     previous pin when present, else the D1 choice for a legacy pin-less

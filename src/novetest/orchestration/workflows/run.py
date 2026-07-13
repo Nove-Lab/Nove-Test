@@ -88,10 +88,10 @@ async def run_target_in_store(
     baseline series.
 
     ``engine`` is the transient ``--engine`` override pair; ``None`` falls
-    back to the store's pin. Either way ``run/execute`` receives an explicit
-    pair — the legacy auto-detect path (``execute(engine=None)``) has no
-    caller here anymore. A pin-less store with no override raises
-    ``EngineNotReadyError`` (engine-missing) before any subprocess spawns.
+    back to the store's pin. Either way ``run/execute`` requires an
+    explicit, store-pinned (or overridden) pair — it never auto-detects.
+    A pin-less store with no override raises ``EngineNotReadyError``
+    (engine-missing) before any subprocess spawns.
 
     When ``collect_coverage=True``, the adapter is invoked with coverage
     instrumentation and the workflow follows up with

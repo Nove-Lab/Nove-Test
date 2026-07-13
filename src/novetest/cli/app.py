@@ -663,6 +663,13 @@ def reset_cmd(
         "initialized_at": result.init_result.store.initialized_at,
         "items_removed": result.wipe_report.items_removed,
         "engine_readiness": _readiness_payload(result.init_result.engine_readiness),
+        # ORC-20: reset re-inits, so its envelope names what got pinned —
+        # shape identical to init's ``pinned_engine`` (additive, W2/S27).
+        "pinned_engine": (
+            result.init_result.store.pinned_engine.to_dict()
+            if result.init_result.store.pinned_engine is not None
+            else None
+        ),
     }
     _emit_and_exit(Envelope(command="reset", ok=True, data=data), EXIT_OK)
 

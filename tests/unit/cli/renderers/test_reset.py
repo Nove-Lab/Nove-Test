@@ -37,6 +37,11 @@ def _reset_envelope(
             "initialized_at": 1_719_215_123_000,
             "items_removed": items_removed,
             "engine_readiness": readiness,
+            # ORC-20 additive envelope key. The text renderer deliberately
+            # does not surface it (init's renderer doesn't either — the
+            # readiness line already names the engine), so the snapshots
+            # below must stay byte-identical with the key present.
+            "pinned_engine": {"ecosystem": "python", "engine_name": "pytest"},
         },
     )
 
