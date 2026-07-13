@@ -34,6 +34,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
+from novetest.models.engine_matrix import SUPPORTED_ENGINE_PAIRS
 from novetest.utils.ulid import generate_ulid
 
 
@@ -291,25 +292,19 @@ def set_pinned_engine(store: ProjectStore, ecosystem: str, engine_name: str) -> 
 
     Overwriting an existing pin is legal — decision D1's re-pin-in-place: same
     store, pin updated, run history untouched. The pair is validated against
-    the six supported pairs (REQ-RUN-006); unsupported pairs raise
+    the six supported pairs (REQ-RUN-006, the shared
+    ``models.engine_matrix.SUPPORTED_ENGINE_PAIRS`` domain constant — XCT-13
+    killed the former upward import from ``run``); unsupported pairs raise
     ``ValueError`` before any disk mutation. The rewrite carries the same
     write-safety guarantees as every existing ``store.json`` write (single
     ``write_text``), and re-reads the metadata from disk first so a stale
     handle cannot clobber fields changed since the handle was loaded.
     """
-    # Deferred import: the canonical pair list is Run's single source of truth
-    # (consolidated per the 2026-07-03 decision); importing it inside the
-    # function keeps Memory import-light at module load and touches Run only
-    # on this validation-time-only path. No cycle exists (Run never imports
-    # Memory), so this is a layering courtesy, not a workaround.
-    from novetest.run.engine_selector import list_supported_engine_pairs
-
     pair = (ecosystem, engine_name)
-    supported = list_supported_engine_pairs()
-    if pair not in supported:
+    if pair not in SUPPORTED_ENGINE_PAIRS:
         raise ValueError(
             f"Unsupported (ecosystem, engine) pair {pair!r}; supported pairs: "
-            + ", ".join(f"({e!r}, {n!r})" for e, n in supported)
+            + ", ".join(f"({e!r}, {n!r})" for e, n in SUPPORTED_ENGINE_PAIRS)
         )
     current = _read_metadata(store.path)
     updated = replace(

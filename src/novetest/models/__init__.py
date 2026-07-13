@@ -13,6 +13,7 @@ from novetest.models.coverage_fact_set import (
     CoverageSummary,
     FileCoverage,
 )
+from novetest.models.engine_matrix import SUPPORTED_ENGINE_PAIRS
 from novetest.models.localization_finding import (
     CodeLocation,
     EvidenceCitation,
@@ -28,6 +29,7 @@ from novetest.models.test_result import FAIL_LIKE_OUTCOMES, TestResult
 
 __all__ = [
     "FAIL_LIKE_OUTCOMES",
+    "SUPPORTED_ENGINE_PAIRS",
     "CodeLocation",
     "CoverageFactSet",
     "CoverageSummary",

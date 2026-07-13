@@ -1196,3 +1196,53 @@ def test_skipped_record_run_id_is_none_for_unparseable_directory(
 
     assert entries == []
     assert [s.run_id for s in skipped] == [None]
+
+
+# --- S43 rider: non-UTF-8 record.json is corruption like any other ------------
+#
+# S42's corruption inventory row 12: `_read_record` read the file OUTSIDE its
+# typed wrap, so a record.json holding non-UTF-8 bytes escaped as a raw
+# `UnicodeDecodeError` (a ValueError subclass) instead of the path-bearing
+# `ProjectStoreCorruptError`. The S43 rider moves the read inside the wrap.
+# A/B: revert that (read before the try) and both tests below fail.
+
+
+def _plant_non_utf8_record(store: ProjectStore, run_id: str) -> Path:
+    """Store a healthy run at TS_2026_05_13, then overwrite it with bad bytes."""
+    store_run_evidence(store, _record(run_id=run_id, created_at=TS_2026_05_13))
+    record_path = (
+        store.path / "memory" / "runs" / "2026" / "05" / "13"
+        / f"{RUN_DIR_PREFIX}{run_id}" / RECORD_FILENAME
+    )
+    # 0xFF is never a valid UTF-8 start byte → UnicodeDecodeError at read_text.
+    record_path.write_bytes(b'\xff\xfe{"schema_version": 1}')
+    return record_path
+
+
+def test_targeted_read_of_non_utf8_record_raises_typed_storage_error(
+    store: ProjectStore,
+) -> None:
+    bad = _record(run_id="01BYTES", created_at=TS_2026_05_13)
+    record_path = _plant_non_utf8_record(store, "01BYTES")
+
+    with pytest.raises(ProjectStoreCorruptError) as exc_info:
+        retrieve_run_evidence(store, bad.run_reference)
+    assert str(record_path) in str(exc_info.value)
+
+
+def test_scan_skip_of_non_utf8_record_carries_path_and_run_id(
+    store: ProjectStore,
+) -> None:
+    # The scan side already skipped this class (raw ValueError catch); the
+    # rider upgrades the skip's error message to the path-bearing typed form
+    # — the same doctrine every other corruption class has had since S42
+    # (memory.md MEM-05: the projected warning message names the file).
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    record_path = _plant_non_utf8_record(store, "01BYTES")
+
+    skipped: list[SkippedRecord] = []
+    entries = list_run_history(store, skipped=skipped)
+
+    assert [e.entry_id for e in entries] == ["01OK"]
+    assert [s.run_id for s in skipped] == ["01BYTES"]
+    assert str(record_path) in skipped[0].error

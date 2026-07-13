@@ -371,19 +371,23 @@ def _read_record(path: Path) -> RunRecord:
     """Parse one ``record.json``; corruption raises the typed storage error.
 
     Parse/shape failures — torn JSON, a wrong-shaped body, missing/mistyped
-    keys, a future ``schema_version`` — are wrapped in
+    keys, a future ``schema_version``, non-UTF-8 bytes — are wrapped in
     ``ProjectStoreCorruptError`` with the corrupt file's path in the message
-    (XCT-03 / S42), so every loud targeted read carries the typed storage
-    error the CLI maps to ``store-corrupt`` / exit 5. ``OSError`` (file
-    vanished mid-read) deliberately stays unwrapped — vanished-file
-    semantics are unchanged.
+    (XCT-03 / S42; the encoding class is the S43 rider), so every loud
+    targeted read carries the typed storage error the CLI maps to
+    ``store-corrupt`` / exit 5. ``OSError`` (file vanished mid-read)
+    deliberately stays unwrapped — vanished-file semantics are unchanged.
     """
-    raw = path.read_text(encoding="utf-8")
     try:
+        raw = path.read_text(encoding="utf-8")
         return RunRecord.from_dict(json.loads(raw))
-    except (ValueError, TypeError, KeyError) as exc:
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError) as exc:
         # json.JSONDecodeError is a ValueError; RunRecord.from_dict raises
         # ValueError (incl. unsupported schema_version), TypeError, KeyError.
+        # UnicodeDecodeError (non-UTF-8 bytes at read_text) is a ValueError
+        # subclass, named explicitly per the S43 contract — the load-bearing
+        # part of the rider is the read happening INSIDE this try. OSError
+        # from the same read is NOT in the tuple and stays loud/unwrapped.
         raise ProjectStoreCorruptError(f"Corrupt run record at {path}: {exc}") from exc
 
 
@@ -394,12 +398,13 @@ def _read_record_isolated(
 
     Catches exactly the failure classes a bad ``record.json`` produces —
     ``ProjectStoreCorruptError`` (the typed wrap ``_read_record`` puts around
-    torn JSON / wrong-shaped bodies / future ``schema_version`` since S42;
-    a ``RuntimeError``, so it needs its own entry in the tuple), ``OSError``
-    (file vanished mid-scan, e.g. a concurrent tombstone rename), and the
-    residual raw ``ValueError``/``TypeError`` classes that can still escape
-    unwrapped (e.g. ``UnicodeDecodeError`` from non-UTF-8 bytes at
-    ``read_text``). Anything else is a bug and stays loud.
+    torn JSON / wrong-shaped bodies / future ``schema_version`` / non-UTF-8
+    bytes since S42+S43; a ``RuntimeError``, so it needs its own entry in
+    the tuple) and ``OSError`` (file vanished mid-scan, e.g. a concurrent
+    tombstone rename). Since the S43 rider moved ``read_text`` inside the
+    ``_read_record`` wrap, no raw ``ValueError``/``TypeError`` escapes it
+    anymore; both stay in this tuple as belt-and-suspenders for future
+    parse paths. Anything else is a bug and stays loud.
     """
     try:
         return _read_record(path)

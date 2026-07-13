@@ -4,6 +4,14 @@ Public surface mirrors ``design/interace-contract/memory.md``. Phase 1
 implements Section 1 (Project Store) in ``project_store`` and the Phase 1
 subset of Section 2 (Memory) in ``store``. See those modules' docstrings for
 scope notes.
+
+Boundary policy (XCT-12 / S43): consumers outside ``memory/`` import ONLY
+from ``novetest.memory`` — the submodule paths (``novetest.memory.store``,
+``novetest.memory.project_store``) are private and may be reorganized without
+notice. Every symbol a peer engine legitimately consumes is exported below;
+a missing symbol is added here (additively), never deep-imported. The
+pre-existing deep imports in the derived engines are ratcheted down by
+``tests/unit/memory/test_public_surface.py`` — new offenders fail that guard.
 """
 
 from __future__ import annotations
