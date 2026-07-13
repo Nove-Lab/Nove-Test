@@ -184,7 +184,7 @@ Unavailable (run exists, ran without coverage) — still exit 0,
 
 Coverage reason strings are **hyphenated**: `run-not-found`,
 `missing-native-payload`, `missing-derived-facts`,
-`native-payload-corrupt`, `incomparable-granularity`. A stale/unknown
+`native-payload-corrupt`. A stale/unknown
 `run_id` is different — `errors[0].code = "not-found"`, exit 2.
 
 ---

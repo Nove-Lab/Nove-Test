@@ -1,7 +1,8 @@
 """Programmatic ``CoverageFactSet`` generator for the NFR-COV-002 benchmark.
 
-Pure functions only — no disk I/O, stdlib + ``novetest.models`` only. Builds
-large but fully deterministic ``CoverageFactSet`` instances so
+Pure functions only — no disk I/O, stdlib + ``novetest.models`` +
+``novetest.coverage._summary`` only. Builds large but fully deterministic
+``CoverageFactSet`` instances so
 ``tests/perf/coverage/test_perf_compare.py`` can exercise
 ``compare_coverage_facts`` at the 50,000-covered-location scale NFR-COV-002
 specifies.
@@ -13,15 +14,19 @@ fact set — see ``agent-comms/tasks/coverage-team-2026-05-20-coverage-compare-p
 ``missing_lines`` / ``missing_branches`` do NOT count toward the target; a
 modest number is included per file so ``FileCoverage.from_dict`` does
 realistic deserialization work.
+
+Summary math delegates to ``novetest.coverage._summary`` (W2/S35 residue of
+the S33 dedup — this module used to carry private copies of the aggregate /
+per-file / percent summary helpers). The plain ``from ... import`` is
+deliberate: the S33 module-attribute-call convention is load-bearing only
+inside the parsers that the divergence guard monkeypatches — do not "fix"
+the style in either direction here.
 """
 
 from __future__ import annotations
 
-from novetest.models.coverage_fact_set import (
-    CoverageFactSet,
-    CoverageSummary,
-    FileCoverage,
-)
+from novetest.coverage._summary import aggregate_summary, summary_from_counts
+from novetest.models.coverage_fact_set import CoverageFactSet, FileCoverage
 from novetest.models.run_reference import RunReference
 
 
@@ -65,7 +70,7 @@ def generate_fact_set(
         engine_name="pytest",
         ecosystem="python",
         mapping_granularity="aggregate",
-        summary=_aggregate_summary(files),
+        summary=aggregate_summary(files),
         files=files,
         derived_at=_CREATED_AT,
         metadata={"generator": "tests/perf/coverage/generate_large_fact_set.py"},
@@ -113,7 +118,14 @@ def _build_file(
     missing_branches = tuple(
         (base + 2 * b, base + 2 * b + 2) for b in range(_MISSING_BRANCHES_PER_FILE)
     )
-    summary = _file_summary(lines_per_file, branches_per_file)
+    # Production per-file convention: missing = num - covered, excluded = 0,
+    # percent over statements only (see ``_summary.summary_from_counts``).
+    summary = summary_from_counts(
+        num_statements=lines_per_file + _MISSING_LINES_PER_FILE,
+        covered_statements=lines_per_file,
+        num_branches=branches_per_file + _MISSING_BRANCHES_PER_FILE,
+        covered_branches=branches_per_file,
+    )
     return FileCoverage(
         file_path=f"src/pkg/module_{index:04d}.py",
         executed_lines=executed_lines,
@@ -143,48 +155,3 @@ def _perturb_file(f: FileCoverage) -> FileCoverage:
         missing_branches=f.missing_branches,
         summary=f.summary,
     )
-
-
-def _file_summary(lines_per_file: int, branches_per_file: int) -> CoverageSummary:
-    num_statements = lines_per_file + _MISSING_LINES_PER_FILE
-    num_branches = branches_per_file + _MISSING_BRANCHES_PER_FILE
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=lines_per_file,
-        missing_statements=_MISSING_LINES_PER_FILE,
-        excluded_statements=0,
-        num_branches=num_branches,
-        covered_branches=branches_per_file,
-        missing_branches=_MISSING_BRANCHES_PER_FILE,
-        percent_covered=_percent(
-            lines_per_file + branches_per_file, num_statements + num_branches
-        ),
-    )
-
-
-def _aggregate_summary(files: tuple[FileCoverage, ...]) -> CoverageSummary:
-    num_statements = sum(f.summary.num_statements for f in files)
-    covered_statements = sum(f.summary.covered_statements for f in files)
-    missing_statements = sum(f.summary.missing_statements for f in files)
-    excluded_statements = sum(f.summary.excluded_statements for f in files)
-    num_branches = sum(f.summary.num_branches for f in files)
-    covered_branches = sum(f.summary.covered_branches for f in files)
-    missing_branches = sum(f.summary.missing_branches for f in files)
-    return CoverageSummary(
-        num_statements=num_statements,
-        covered_statements=covered_statements,
-        missing_statements=missing_statements,
-        excluded_statements=excluded_statements,
-        num_branches=num_branches,
-        covered_branches=covered_branches,
-        missing_branches=missing_branches,
-        percent_covered=_percent(
-            covered_statements + covered_branches, num_statements + num_branches
-        ),
-    )
-
-
-def _percent(covered: int, total: int) -> float:
-    if total == 0:
-        return 100.0
-    return round(covered / total * 100, 2)

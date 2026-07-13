@@ -12,13 +12,13 @@ as ``CoverageUnavailable``.
 
 Mapping-granularity mismatch is allowed: the per-Code-Location transition
 set is still meaningful (it's defined at line/branch resolution, not
-test-resolution), so we only flag granularity as ``incomparable`` when one
-side has ``aggregate`` granularity and the caller would have expected
-per-test signal. For the four interfaces of this slice, we **return the
-delta regardless of granularity** but record both sides' granularity on
-the result so callers can decide what to surface. This keeps the engine
-focused on facts; Orchestration decides whether a coarser granularity is
-acceptable for the requested workflow.
+test-resolution), so we **return the delta regardless of granularity** and
+record both sides' granularity on the result (``baseline_granularity`` /
+``target_granularity``) for the consumer to judge — mixed pairs occur
+within a single engine, e.g. one run derived with per-test contexts and
+one without. There is no granularity refusal reason (W2/S35, ANA-17).
+This keeps the engine focused on facts; Orchestration decides whether a
+coarser granularity is acceptable for the requested workflow.
 """
 
 from __future__ import annotations

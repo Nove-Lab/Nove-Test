@@ -15,11 +15,16 @@ Pure filesystem/record probing. Two probes:
 2. **Derivable from native payload?** Probe whether the Run Record
    advertises ANY of:
 
-   - ``coverage_json`` — pytest / jest / go-test (coverage.py JSON or
-     Istanbul JSON)
+   - ``coverage_json`` — pytest / jest (coverage.py JSON or Istanbul
+     JSON)
    - ``coverage_lcov`` — cargo-test (cargo-llvm-cov LCOV text)
    - ``coverage_xml`` — junit (JaCoCo XML) or xunit (.NET Coverlet
      Cobertura XML)
+
+   go-test is deliberately absent: its adapter registers a cover
+   profile under ``coverage_profile``, but the coverage engine does not
+   consume that key — coverage derivation for go-test is unimplemented,
+   so go-test runs are honestly reported unavailable (ANA-16).
 
    The probe accepts the artifact pointing to a FILE or a DIRECTORY
    (the latter is the dotnet adapter's forward-compat per-test mode,
@@ -43,11 +48,19 @@ from novetest.models.run_reference import RunReference
 
 # Mirror the pinned artifact keys from derive.py so the two stay in sync
 # if Run Team ever renames any (the rename would land in a single
-# decision). ``coverage_json`` covers pytest / jest / go-test;
+# decision). ``coverage_json`` covers pytest / jest;
 # ``coverage_lcov`` covers cargo-test; ``coverage_xml`` covers junit
 # (JaCoCo XML) and xunit (Coverlet Cobertura XML). The native-payload
 # probe accepts ANY of them — derive's engine dispatch picks the right
 # parser at derive time.
+#
+# SYNC NOTE (ANA-16): go-test's ``coverage_profile`` key is deliberately
+# NOT probed — the coverage engine has no go cover-profile parser, so a
+# probe hit would advertise availability derive can't honor. A future go
+# coverage slice must update THREE sites together: this tuple, the
+# engine dispatch in ``derive.derive_coverage_facts`` (add a go-test
+# branch), and the adapter's key registration
+# (``run/adapters/gotest_adapter.py`` — ``coverage_profile``).
 _COVERAGE_JSON_ARTIFACT_KEY = "coverage_json"
 _COVERAGE_LCOV_ARTIFACT_KEY = "coverage_lcov"
 _COVERAGE_XML_ARTIFACT_KEY = "coverage_xml"

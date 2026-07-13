@@ -6,11 +6,17 @@ Workflow (from ``design/workflows/coverage.md``):
 
 We resolve the Memory Entry for the run, look up the native coverage
 payload (artifact key depends on engine: ``coverage_json`` for
-pytest / jest / go-test, ``coverage_lcov`` for cargo-test,
+pytest / jest, ``coverage_lcov`` for cargo-test,
 ``coverage_xml`` for junit (JaCoCo) and xunit (Coverlet Cobertura)),
 parse it through the engine-appropriate parser, persist the resulting
 ``CoverageFactSet`` so subsequent ``get_coverage_facts`` calls hit
 cache, and return the fact set.
+
+go-test is NOT a ``coverage_json`` consumer: its adapter registers a
+cover profile under ``coverage_profile``, but that key is unconsumed —
+coverage derivation for go-test is unimplemented, so go-test runs fall
+into the default branch, find no ``coverage_json`` entry, and return
+the honest ``missing-native-payload`` unavailable outcome (ANA-16).
 
 Missing or unregistered native payload is an **explicit unavailable
 outcome** (REQ-COV-004), not an exception. Corrupt payloads (JSON,
@@ -128,6 +134,15 @@ def derive_coverage_facts(
     if record.engine_name == _XUNIT_ENGINE_NAME:
         return _derive_xunit_cobertura(store, record)
 
+    # SYNC NOTE (ANA-16): there is deliberately NO go-test branch — the
+    # gotest adapter registers a cover profile under ``coverage_profile``
+    # but no parser consumes it, so go-test falls through to the default
+    # ``coverage_json`` lookup below and returns missing-native-payload
+    # (honestly unavailable). A future go coverage slice must update
+    # THREE sites together: this dispatch (add the branch + a
+    # ``coverage_profile`` key constant), ``_COVERAGE_ARTIFACT_KEYS`` in
+    # ``availability.py``, and the adapter's key registration
+    # (``run/adapters/gotest_adapter.py``).
     rel_path = record.artifact_paths.get(COVERAGE_JSON_ARTIFACT_KEY)
     if not rel_path:
         return CoverageUnavailable(

@@ -22,13 +22,15 @@ from novetest.models.run_reference import RunReference
 # ---------------------------------------------------------------------------
 # Reason codes — string constants so callers can match safely. Keep this set
 # small; expand only when a new path through the engine genuinely needs to
-# be distinguishable to consumers.
+# be distinguishable to consumers. Every member of ``KNOWN_REASONS`` must
+# have a real emit site in the coverage engine (or be explicitly allowlisted
+# as reserved) — the dead-token guard in
+# ``tests/unit/coverage/test_results.py`` fails otherwise (W2/S35, ANA-17).
 # ---------------------------------------------------------------------------
 REASON_RUN_NOT_FOUND: Final[str] = "run-not-found"
 REASON_MISSING_NATIVE_PAYLOAD: Final[str] = "missing-native-payload"
 REASON_MISSING_DERIVED_FACTS: Final[str] = "missing-derived-facts"
 REASON_NATIVE_PAYLOAD_CORRUPT: Final[str] = "native-payload-corrupt"
-REASON_INCOMPARABLE_GRANULARITY: Final[str] = "incomparable-granularity"
 # D5 guard (decision 2026-07-03-engine-selection-policy §D5, Finding A of
 # the D5 cross-run audit): ``compare_coverage_facts`` refuses cross-engine
 # pairs the same way Regression's ``compare_runs`` does. Same wire string
@@ -42,7 +44,6 @@ KNOWN_REASONS: frozenset[str] = frozenset(
         REASON_MISSING_NATIVE_PAYLOAD,
         REASON_MISSING_DERIVED_FACTS,
         REASON_NATIVE_PAYLOAD_CORRUPT,
-        REASON_INCOMPARABLE_GRANULARITY,
         REASON_ENGINE_MISMATCH,
     }
 )
