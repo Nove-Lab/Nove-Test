@@ -44,7 +44,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Final
 
-from novetest.memory.project_store import ProjectStore
+from novetest.memory import ProjectStore
 from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.localization_finding import (
     CodeLocation,

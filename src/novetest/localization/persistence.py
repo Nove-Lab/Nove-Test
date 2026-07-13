@@ -14,8 +14,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RUN_DIR_PREFIX
+from novetest.memory import RUN_DIR_PREFIX, ProjectStore
 from novetest.models.localization_finding import LocalizationFinding
 
 

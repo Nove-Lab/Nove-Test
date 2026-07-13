@@ -20,8 +20,11 @@ from novetest.localization.results import (
     REASON_MISSING_DERIVED_FACTS,
     LocalizationUnavailable,
 )
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import RunEvidenceNotFoundError, retrieve_run_evidence
+from novetest.memory import (
+    ProjectStore,
+    RunEvidenceNotFoundError,
+    retrieve_run_evidence,
+)
 from novetest.models import FAIL_LIKE_OUTCOMES
 from novetest.models.localization_finding import LocalizationFinding
 from novetest.models.run_reference import RunReference

@@ -16,6 +16,7 @@ from novetest.localization import derive
 from novetest.localization.derive import derive_localization_findings
 from novetest.localization.persistence import localization_findings_path
 from novetest.localization.results import (
+    REASON_NO_COVERAGE,
     REASON_NO_FAILED_TESTS,
     REASON_NO_RUN_EVIDENCE,
     REASON_RUN_NOT_ANALYZABLE,
@@ -740,6 +741,230 @@ def test_covered_xpassed_test_does_not_dilute_per_test_suspicion(
     assert top.score_raw == pytest.approx(1.0)
     # The excluded test never surfaces as a related failed test either.
     assert "tests/test_calc.py::test_xpass" not in top.related_failed_tests
+
+
+# ---------------------------------------------------------------------------
+# S31 — per-test path robustness: ANA-07 (empty per-test contexts → the
+# ``no-coverage`` discriminant, not an exception) and ANA-08 (selected-formula
+# score > 0 filter before truncation; all-zero → empty entries).
+# ---------------------------------------------------------------------------
+
+
+def test_per_test_empty_contexts_is_unavailable_no_coverage_not_an_exception(
+    tmp_path: Path,
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-07 A/B tripwire (Gate-1 Q2): a fact set claiming per-test
+    granularity whose every ``line_contexts`` is EMPTY returns
+    ``LocalizationUnavailable(reason="no-coverage")`` — it must NOT let
+    ``SpectraBuildError`` ride through the public entry to the CLI
+    blanket handler (``cli-error`` / exit 1)."""
+    workspace = tmp_path / "ws"
+    record = make_record(
+        test_results=(
+            TestResult(node_id="tests/a.py::t", outcome="failed", duration_ms=1),
+        ),
+    )
+    # ``mapping_granularity`` defaults to "per-test"; the single covered
+    # line carries an empty nodeid tuple — no per-test attribution at all.
+    coverage = make_coverage(files=(make_file("src/foo.py", {1: ()}),))
+    seed_store(workspace, record=record, coverage=coverage)
+    store = get_project_store_state(workspace / ".novetest")
+
+    result = derive_localization_findings(store, default_ref)
+
+    assert isinstance(result, LocalizationUnavailable)
+    assert result.reason == REASON_NO_COVERAGE
+    assert result.detail is not None
+    assert "per-test coverage has no line contexts" in result.detail
+    # The detail carries the offending run_id for operators.
+    assert default_ref.run_id in result.detail
+    # Unavailable outcomes are never cached — a later (repaired) derive
+    # must re-attempt the pipeline rather than replay this state.
+    assert not localization_findings_path(store, default_ref.run_id).exists()
+
+
+def test_per_test_zero_score_symbols_never_pad_entries(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-08 A/B tripwire (Gate-1 Q3a): symbols whose selected-formula
+    score is 0 are filtered BEFORE truncation. The buggy fixture yields
+    ``buggy`` (ef=1 → Ochiai 1.0) and ``safe`` (ef=0 → Ochiai 0.0);
+    pre-S31 the ``safe`` symbol padded ``entries`` with
+    ``score_raw == 0.0`` noise."""
+    workspace = _seed_buggy_project(
+        tmp_path=tmp_path,
+        write_python_module=write_python_module,
+        make_record=make_record,
+        make_coverage=make_coverage,
+        make_file=make_file,
+        seed_store=seed_store,
+    )
+    store = get_project_store_state(workspace / ".novetest")
+    result = derive_localization_findings(store, default_ref)
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_per_test"
+
+    # Exactly the one positive-score symbol — no zero-score padding.
+    assert [e.code_location.symbol for e in result.entries] == ["buggy"]
+    for entry in result.entries:
+        assert entry.score_raw > 0
+    # With the noise gone there is nothing to tie with.
+    assert result.entries[0].tied_with == ()
+
+
+def test_per_test_all_zero_scores_yield_empty_entries(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-08 (Gate-1 Q3a): when every candidate's selected-formula score
+    is 0 — here the failing test executed NO covered line, so ef=0
+    everywhere — the finding is returned with EMPTY ``entries``: the
+    honest "no suspects". The ranking/tie assembly must tolerate the
+    empty case."""
+    workspace = tmp_path / "ws"
+    source_file = workspace / "src" / "calc.py"
+    write_python_module(source_file, _BUGGY_SOURCE)
+    clear_resolver_cache()
+
+    test_results = (
+        TestResult(node_id="tests/test_calc.py::test_safe", outcome="passed", duration_ms=1),
+        TestResult(node_id="tests/test_calc.py::test_buggy", outcome="failed", duration_ms=1),
+    )
+    record = make_record(test_results=test_results)
+    # Only the PASSING test appears in the line contexts — the failing
+    # test contributes an all-zero row, so ef=0 for every location.
+    coverage = make_coverage(
+        files=(
+            make_file(
+                "src/calc.py",
+                {
+                    1: ("tests/test_calc.py::test_safe",),
+                    2: ("tests/test_calc.py::test_safe",),
+                },
+            ),
+        ),
+    )
+    seed_store(workspace, record=record, coverage=coverage)
+    store = get_project_store_state(workspace / ".novetest")
+
+    result = derive_localization_findings(store, default_ref)
+
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_per_test"
+    assert result.entries == ()
+
+
+def test_aggregate_filter_and_score_values_unchanged_by_s31(
+    tmp_path: Path,
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """S31 regression pin: the aggregate path's own >0 filter and score
+    values are byte-stable across the per-test filter change. One file
+    is mentioned by the failing trace (ef=1, ep=1 → Ochiai 1/sqrt(2));
+    a second covered-but-unmentioned file (ef=0) stays filtered out."""
+    import math
+
+    workspace = tmp_path / "ws"
+    record = make_record(
+        test_results=(
+            TestResult(
+                node_id="tests/a.py::t",
+                outcome="failed",
+                duration_ms=1,
+                failure_reference="src/foo.py:7: AssertionError",
+            ),
+            TestResult(node_id="tests/a.py::t_ok", outcome="passed", duration_ms=1),
+        ),
+    )
+    coverage = make_coverage(
+        files=(
+            make_file("src/foo.py", {1: ()}),
+            make_file("src/bar.py", {1: ()}),
+        ),
+        mapping_granularity="aggregate",
+    )
+    seed_store(workspace, record=record, coverage=coverage)
+    store = get_project_store_state(workspace / ".novetest")
+
+    result = derive_localization_findings(store, default_ref)
+
+    assert isinstance(result, LocalizationFinding)
+    assert result.mode == "sbfl_aggregate"
+    # Exactly the trace-mentioned file; the ef=0 file never pads.
+    assert [e.code_location.file for e in result.entries] == ["src/foo.py"]
+    # Value pin: ef=1, ep=1, nf=0, np=0 → Ochiai 1/sqrt((1+0)*(1+1)).
+    assert result.entries[0].score_raw == pytest.approx(1.0 / math.sqrt(2.0))
+
+
+def test_decorator_line_location_gains_symbol_precision(
+    tmp_path: Path,
+    write_python_module: Callable[[Path, str], None],
+    make_record: Callable[..., RunRecord],
+    make_coverage: Callable[..., CoverageFactSet],
+    make_file: Callable[[str, dict[int, tuple[str, ...]]], FileCoverage],
+    seed_store: Callable[..., object],
+    default_ref: RunReference,
+) -> None:
+    """ANA-22 at the finding layer (Gate-1 Q3b): a suspicious line ON a
+    decorator resolves to the decorated function (``kind: "symbol"``)
+    instead of degrading to ``kind: "file"``."""
+    workspace = tmp_path / "ws"
+    source = (
+        "def deco(f):\n"     # line 1
+        "    return f\n"     # line 2
+        "\n"
+        "@deco\n"            # line 4 — the suspicious decorator line
+        "def buggy():\n"     # line 5
+        "    return 0\n"     # line 6
+    )
+    source_file = workspace / "src" / "decorated.py"
+    write_python_module(source_file, source)
+    clear_resolver_cache()
+
+    record = make_record(
+        test_results=(
+            TestResult(node_id="tests/test_d.py::test_fail", outcome="failed", duration_ms=1),
+        ),
+    )
+    coverage = make_coverage(
+        files=(
+            make_file(
+                "src/decorated.py",
+                {4: ("tests/test_d.py::test_fail",)},
+            ),
+        ),
+    )
+    seed_store(workspace, record=record, coverage=coverage)
+    store = get_project_store_state(workspace / ".novetest")
+
+    result = derive_localization_findings(store, default_ref)
+
+    assert isinstance(result, LocalizationFinding)
+    assert len(result.entries) == 1
+    location = result.entries[0].code_location
+    assert location.kind == "symbol"
+    assert location.symbol == "buggy"
+    assert location.line_range == (4, 6)
 
 
 # ---------------------------------------------------------------------------

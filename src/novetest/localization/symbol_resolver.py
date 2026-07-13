@@ -30,12 +30,16 @@ import ast
 from pathlib import Path
 
 
-# Resolver cache keyed by absolute path string. A single resolver call
-# parses the file once and caches the function/class extents; subsequent
-# resolver calls for the same file at different lines reuse the parse.
-# Cache is process-local — invalidate by clearing the dict (see
-# ``_RESOLVER_CACHE.clear()`` calls in tests).
-_RESOLVER_CACHE: dict[str, list[tuple[str, int, int]]] = {}
+# Resolver cache keyed by ``(absolute path string, st_mtime_ns)``. A
+# single resolver call parses the file once and caches the function/class
+# extents; subsequent resolver calls for the same unchanged file at
+# different lines reuse the parse. Including ``st_mtime_ns`` in the key
+# (one ``stat`` per lookup) makes a modified file MISS the cache instead
+# of serving stale extents (ANA-21). Cache is process-local — invalidate
+# by ``clear_resolver_cache()``. No LRU / size cap: the CLI is a one-shot
+# process today; Phase 7 (long-lived MCP process) should revisit capacity
+# before reusing this module.
+_RESOLVER_CACHE: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
 
 
 def resolve_python_symbol(
@@ -87,10 +91,18 @@ def _extents_for(file_path: Path) -> list[tuple[str, int, int]] | None:
     """Return cached ``[(qualname, start_line, end_line), ...]`` for the file.
 
     Returns ``None`` on parse failure (missing file / syntax error). The
-    cache key is the resolved absolute path so two ``Path`` instances
-    pointing at the same file share the parse.
+    cache key is ``(path string, st_mtime_ns)`` — one ``stat`` per
+    lookup — so two ``Path`` instances pointing at the same unchanged
+    file share the parse, while any modification changes the key and
+    forces a fresh read + parse (ANA-21).
     """
-    key = str(file_path)
+    try:
+        mtime_ns = file_path.stat().st_mtime_ns
+    except OSError:
+        # Missing / unstatable file — same soft degradation as the
+        # unreadable-file case below.
+        return None
+    key = (str(file_path), mtime_ns)
     cached = _RESOLVER_CACHE.get(key)
     if cached is not None:
         return cached
@@ -136,7 +148,15 @@ def _walk_namespace(
                 # end_lineno on FunctionDef; defend against the legacy
                 # case by falling back to lineno (single-line range).
                 end_lineno = child.lineno
-            extents.append((qualname, child.lineno, end_lineno))
+            # Decorated defs: ``lineno`` points at the ``def`` keyword,
+            # leaving decorator lines OUTSIDE the extent and degrading
+            # them to file-level. Start at the FIRST decorator so a
+            # suspicious decorator line still resolves to the function
+            # (ANA-22).
+            start_lineno = child.lineno
+            if child.decorator_list:
+                start_lineno = child.decorator_list[0].lineno
+            extents.append((qualname, start_lineno, end_lineno))
             # Recurse INTO the function for nested defs (and classes).
             _walk_namespace(child, namespace + [child.name], extents)
         elif isinstance(child, ast.ClassDef):

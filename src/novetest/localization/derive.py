@@ -1,22 +1,39 @@
-"""End-to-end SBFL derivation — the per-test path.
+"""End-to-end Localization derivation — 3-way mode routing + both SBFL paths.
 
-Pipeline (per design-of-record §1–§6 + task brief §7):
+Shared preamble (per design-of-record §1–§6 + strategy doc §2):
 
   1. retrieve_run_evidence       — raises → REASON_NO_RUN_EVIDENCE.
   2. tombstoned input            → REASON_RUN_NOT_ANALYZABLE.
   3. failed tests == 0           → REASON_NO_FAILED_TESTS.
-  4. get_coverage_facts          — unavailable → REASON_NO_COVERAGE.
-  5. coverage_facts.mapping_granularity != "per-test"
-                                  → REASON_NO_COVERAGE (detail =
-                                    "sbfl_aggregate not yet implemented").
-  6. build_spectra.
-  7. compute ef/ep/nf/np per location, call all 4 formulas.
-  8. aggregate up to symbols via Python ast resolver (max(score) per
+  4. get_coverage_facts, then route by coverage shape (strategy doc §2):
+     - Path A — ``mapping_granularity == "per-test"``
+                                  → ``_derive_per_test``
+                                    (mode ``sbfl_per_test``).
+     - Path B — coverage available at any other granularity
+                                  → ``_derive_aggregate``
+                                    (mode ``sbfl_aggregate``).
+     - Path C — coverage entirely absent (``CoverageUnavailable``)
+                                  → ``derive_failure_proximity``
+                                    (mode ``failure_proximity``).
+     The ONLY coverage state surfacing ``REASON_NO_COVERAGE`` today is
+     the malformed per-test fact set: granularity claims "per-test" but
+     every file's ``line_contexts`` is empty, so ``build_spectra``'s
+     ``SpectraBuildError`` is caught at the dispatch and returned as the
+     unavailable discriminant (ANA-07 — the engine boundary stays total).
+
+Per-test pipeline (Path A, steps 5–10):
+
+  5. build_spectra.
+  6. compute ef/ep/nf/np per location, call all 4 formulas.
+  7. aggregate up to symbols via Python ast resolver (max(score) per
      symbol per design-of-record §3).
-  9. min-max normalize within the FULL ranking (before truncation), dense
-     1-based rank, compute tie groups, take top_n.
- 10. attach EvidenceCitations per entry.
- 11. assemble LocalizationFinding + persist via the atomic
+  8. min-max normalize + dense 1-based rank within the FULL ranking
+     (before truncation), then drop non-positive selected-formula
+     candidates (ANA-08 — same rule as aggregate mode; survivors stay
+     byte-identical, all-zero → empty ``entries``), compute tie groups,
+     take top_n.
+  9. attach EvidenceCitations per entry.
+ 10. assemble LocalizationFinding + persist via the atomic
      ``write_localization_findings`` helper.
 
 The cache-aware entry ``derive_localization_findings`` mirrors the
@@ -48,6 +65,7 @@ from novetest.localization.persistence import (
     write_localization_findings,
 )
 from novetest.localization.results import (
+    REASON_NO_COVERAGE,
     REASON_NO_FAILED_TESTS,
     REASON_NO_RUN_EVIDENCE,
     REASON_RUN_NOT_ANALYZABLE,
@@ -57,11 +75,15 @@ from novetest.localization.retrieval import check_localization_availability
 from novetest.localization.sbfl.dstar import dstar2
 from novetest.localization.sbfl.ochiai import ochiai
 from novetest.localization.sbfl.op2 import op2
-from novetest.localization.sbfl.spectra import Spectra, build_spectra
+from novetest.localization.sbfl.spectra import (
+    Spectra,
+    SpectraBuildError,
+    build_spectra,
+)
 from novetest.localization.sbfl.tarantula import tarantula
 from novetest.localization.symbol_resolver import resolve_python_symbol
-from novetest.memory.project_store import ProjectStore
-from novetest.memory.store import (
+from novetest.memory import (
+    ProjectStore,
     RunEvidenceNotFoundError,
     list_run_history,
     retrieve_run_evidence,
@@ -145,15 +167,14 @@ def derive_localization_findings(
 
     The cache layer is intentionally policy-free: this entry returns the
     cached payload verbatim when present, regardless of how ``top_n`` /
-    ``formula`` compare against the cached values. Cache invalidation is
-    the orchestration layer's responsibility — the CLI handlers
-    (``localization_run`` / ``localization_latest``) delete the on-disk
-    findings file via ``localization_findings_path(store, run_id).unlink()``
-    BEFORE re-invoking this entry when the user's explicit flags differ
-    from the cached state (Defect 5 fix, 2026-06-01). Engine-API consumers
-    that want the same override semantics call ``localization_findings_path
-    (...).unlink(missing_ok=True)`` themselves before this entry. A future
-    schema bump uses the same out-of-band deletion pattern.
+    ``formula`` compare against the cached values — get-then-derive,
+    nothing else. Cache invalidation is workflow-layer policy (S22): the
+    orchestration workflows call the public
+    ``invalidate_localization_findings(store, run_id)`` helper to drop
+    the on-disk findings BEFORE re-invoking this entry when the caller's
+    explicit flags differ from the cached state. Engine-API consumers
+    that want the same override semantics call the same helper. A future
+    schema bump uses the same out-of-band invalidation pattern.
 
     ``top_n`` defaults to 10 (design-of-record §4). ``formula`` defaults
     to ``"ochiai"`` and selects which formula's score drives ``rank``;
@@ -219,15 +240,32 @@ def derive_localization_findings(
             top_n=top_n,
         )
     elif coverage.mapping_granularity == "per-test":
-        # Path A: existing sbfl_per_test (unchanged).
-        finding = _derive_per_test(
-            store=store,
-            record=record,
-            coverage=coverage,
-            failed_test_ids=failed_test_ids,
-            top_n=top_n,
-            formula=formula,
-        )
+        # Path A: sbfl_per_test. ``build_spectra`` raises
+        # ``SpectraBuildError`` when the fact set CLAIMS per-test
+        # granularity but every file's ``line_contexts`` is empty (e.g.
+        # every test errored before executing covered code). That is a
+        # recoverable "coverage contributed nothing" state, not a tool
+        # error — surface it as the ``no-coverage`` discriminant so the
+        # engine boundary stays total (ANA-07; ``results.py`` contract).
+        # ``spectra.py`` stays loud; the loudness terminus is here.
+        try:
+            finding = _derive_per_test(
+                store=store,
+                record=record,
+                coverage=coverage,
+                failed_test_ids=failed_test_ids,
+                top_n=top_n,
+                formula=formula,
+            )
+        except SpectraBuildError:
+            return LocalizationUnavailable(
+                run_reference=record.run_reference,
+                reason=REASON_NO_COVERAGE,
+                detail=(
+                    "per-test coverage has no line contexts (run "
+                    f"{record.run_reference.run_id})"
+                ),
+            )
     else:
         # Path B: sbfl_aggregate — covers ``aggregate``, ``per-test-file``,
         # ``per-test-class`` (the latter two degrade to file-level here
@@ -260,7 +298,13 @@ def _derive_per_test(
     top_n: int,
     formula: str,
 ) -> LocalizationFinding:
-    """Build the per-test SBFL finding. Caller has validated all preconditions."""
+    """Build the per-test SBFL finding.
+
+    Caller has validated all preconditions; ``build_spectra``'s
+    ``SpectraBuildError`` (per-test granularity with zero line contexts)
+    deliberately propagates to the dispatch guard in
+    ``derive_localization_findings`` (ANA-07).
+    """
     spectra = build_spectra(coverage, failed_test_ids, _passed_test_ids(record))
     counts = _count_vectors(spectra)
     scores = _compute_all_formula_scores(counts)
@@ -284,21 +328,35 @@ def _derive_per_test(
         )
     )
 
-    # Min-max normalize within the FULL candidate set BEFORE truncation
-    # (design-of-record §4 — "normalize the whole ranking so the
-    # truncation does not concentrate the [0,1] range to a sub-window").
+    # Min-max normalize within the FULL candidate set BEFORE the filter
+    # and truncation (design-of-record §4 — "normalize the whole ranking
+    # so the truncation does not concentrate the [0,1] range to a
+    # sub-window").
     raw_scores_full = [c.scores[formula] for c in candidates]
     normalized_full = _min_max_normalize(raw_scores_full)
 
     # Dense 1-based ranks computed against the FULL ranking too — so a
     # tie that straddles the truncation boundary still has a coherent
     # rank value when one half is dropped.
-    dense_ranks = _dense_ranks([c.scores[formula] for c in candidates])
+    dense_ranks = _dense_ranks(raw_scores_full)
 
-    # Truncate to top_n.
-    truncated = candidates[:top_n]
-    truncated_norm = normalized_full[:top_n]
-    truncated_ranks = dense_ranks[:top_n]
+    # Drop non-positive-score candidates for the SELECTED formula BEFORE
+    # truncation — the SAME rule as aggregate mode (ANA-08).
+    # ``_aggregate_by_symbol`` groups EVERY covered line, so real
+    # projects yield hundreds of ef=0 symbols; unfiltered, they pad
+    # ``top_n`` with ``score_raw == 0.0`` noise entries that
+    # ``tied_with`` chains together. Because the list is DESC-sorted the
+    # positives are exactly a prefix, so slicing keeps the survivors'
+    # normalized scores / ranks / tie groups byte-identical to the
+    # unfiltered ranking (Gate-1 Q3a bounded delta: ``entries`` can only
+    # SHRINK). All-zero → the finding is returned with EMPTY ``entries``
+    # — the honest "no suspects".
+    positive_count = sum(1 for score in raw_scores_full if score > 0)
+    cutoff = min(positive_count, top_n)
+
+    truncated = candidates[:cutoff]
+    truncated_norm = normalized_full[:cutoff]
+    truncated_ranks = dense_ranks[:cutoff]
 
     # ``tied_with`` resolution: for each entry in the truncated set,
     # collect the indices of OTHER truncated entries sharing the same
@@ -503,6 +561,15 @@ def _derive_aggregate(
     # rejection is large.
     #
     # Source: questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md
+    #
+    # Known limitation (MT observation, S31 — comment only, no behavior
+    # change): ABSOLUTE ``failure_reference`` paths never match the
+    # project-relative ``coverage.files`` paths, so this filter zeroes
+    # ``ef`` for every candidate if aggregate mode is ever reached by an
+    # engine emitting absolute paths in failure logs. Production-
+    # unreachable today — pytest coverage is always per-test, and the
+    # no-coverage route goes to failure_proximity — but worth knowing
+    # before wiring a new aggregate-coverage engine through Path B.
     covered_files = {f.file_path for f in coverage.files}
     all_files = sorted(covered_files)
 
@@ -565,10 +632,11 @@ def _derive_aggregate(
     # Drop non-positive-score candidates for the SELECTED formula —
     # padding top_n with zero-Ochiai files defeats the point of the
     # ranking. We keep candidates with score > 0 to preserve the
-    # "informative" signal. The per-test path doesn't filter because its
-    # candidates list is small by construction (one entry per covered
-    # symbol); aggregate mode's candidates list spans every covered file
-    # so unfiltered noise dominates.
+    # "informative" signal. The per-test path applies the SAME rule
+    # (ANA-08): the old "per-test candidates are small by construction,
+    # no filter needed" premise was false — ``_aggregate_by_symbol``
+    # groups every covered line, so its candidate list spans every
+    # covered symbol too.
     candidates = [c for c in candidates if c[1][formula] > 0]
 
     raw_scores_full = [c[1][formula] for c in candidates]

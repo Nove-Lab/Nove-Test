@@ -13,12 +13,18 @@ the resulting 5-element ``KNOWN_REASONS``).
 When does each reason fire:
 
 - ``no-failed-tests``        — Run Record has 0 failed test results.
-- ``no-coverage``            — Run Record has failed tests but Coverage
-                                Facts are unavailable, OR available with
-                                ``mapping_granularity != "per-test"``. In
-                                a follow-up slice the latter triggers the
-                                ``sbfl_aggregate`` mode; today it surfaces
-                                as Unavailable with an explanatory detail.
+- ``no-coverage``            — Run Record has failed tests and the
+                                Coverage Facts CLAIM per-test granularity,
+                                but every file's ``line_contexts`` is
+                                empty — a malformed fact set that cannot
+                                seed a spectra matrix (the ANA-07 guard
+                                in ``derive.py``). NOTE: coverage being
+                                entirely ABSENT does NOT surface this
+                                reason — routing is 3-way (strategy doc
+                                §2): per-test → ``sbfl_per_test``,
+                                non-per-test → ``sbfl_aggregate``, no
+                                coverage at all → ``failure_proximity``
+                                (a finding, not an Unavailable).
 - ``no-run-evidence``        — ``retrieve_run_evidence`` raises (no live
                                 and no tombstoned record for the ref).
 - ``missing-derived-facts``  — Cache empty: ``get_localization_findings``
