@@ -399,19 +399,21 @@ def test_normalize_engine_native_pattern_passes_through(workspace: Path) -> None
     assert normalize_target_expression("./...", workspace) == "./..."
 
 
-def test_normalize_all_dots_component_never_probes_filesystem(
+def test_normalize_never_probes_the_filesystem(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The verbatim decision for all-dots components is purely lexical.
+    """S20: normalization is purely lexical — it never consults the disk.
 
-    Win32 strips trailing dots from path components, so an ``exists()``
-    probe on ``anchor / '...'`` answers for the anchor itself and rerouted
-    go's ``./...`` into the existing-subpath branch (``'...'`` — the
-    2026-07-04 windows-latest CI red). A recording spy makes that Windows
-    failure shape observable on POSIX: if the fix regresses to consulting
-    the filesystem, ``probed`` is non-empty on every platform (a raising
-    bomb instead of a spy would INTERNALERROR pytest's own report
-    machinery, which also calls ``Path.exists``).
+    Since ORC-10 the whole function is filesystem-independent (no
+    ``exists()`` probe): the all-dots family (``./...``, ``...``,
+    ``./sub/...``) is settled ahead of the lexical canonicalizer and the
+    rest is collapsed segment-wise. A recording spy on ``Path.exists`` guards
+    that invariant on every platform (a raising bomb instead of a spy would
+    INTERNALERROR pytest's own report machinery, which also calls
+    ``Path.exists``) — and it also pins the removal of the pre-S20 Win32
+    hazard where an ``exists()`` probe on ``anchor / '...'`` answered for the
+    anchor and rerouted go's ``./...`` into the subpath branch (the
+    2026-07-04 windows-latest CI red).
     """
 
     probed: list[Path] = []
@@ -425,25 +427,23 @@ def test_normalize_all_dots_component_never_probes_filesystem(
     assert normalize_target_expression("./...", workspace) == "./..."
     assert normalize_target_expression("...", workspace) == "..."
     assert normalize_target_expression("./sub/...", workspace) == "./sub/..."
-    assert probed == []  # never consulted — the decision is lexical
+    assert normalize_target_expression("tests/test_ghost.py", workspace) == (
+        "tests/test_ghost.py"
+    )
+    assert probed == []  # never consulted — every decision is lexical
 
 
-def test_normalize_parent_component_still_probes(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``..`` is parent navigation, not pattern syntax — the all-dots
-    lexical guard must not swallow it; the exists-probe path is unchanged."""
+def test_normalize_leading_parent_stays_verbatim(workspace: Path) -> None:
+    """S20: a path whose collapse escapes the anchor (leading ``..``) is
+    verbatim — it cannot be a stable workspace-relative key. Filesystem
+    existence is irrelevant (ORC-10)."""
 
-    probed: list[Path] = []
-    real_exists = Path.exists
-
-    def spy(self: Path) -> bool:
-        probed.append(self)
-        return real_exists(self)
-
-    monkeypatch.setattr(Path, "exists", spy)
     assert normalize_target_expression("../ghost.py", workspace) == "../ghost.py"
-    assert probed  # the probe ran; the path does not exist → verbatim
+    # Interior ``..`` that over-escapes collapses to a surviving leading
+    # ``..`` → still verbatim (the original spelling, uncollapsed).
+    assert (
+        normalize_target_expression("a/../../b", workspace) == "a/../../b"
+    )
 
 
 def test_normalize_nonexistent_path_passes_through(workspace: Path) -> None:
@@ -459,3 +459,83 @@ def test_normalize_empty_path_half_nodeid_passes_through(workspace: Path) -> Non
     """Degenerate ``::test_a`` (no path half) must not collapse to ``.::test_a``."""
 
     assert normalize_target_expression("::test_a", workspace) == "::test_a"
+
+
+# ---------------------------------------------------------------------------
+# normalize_target_expression — S20 (ORC-10) filesystem-independent key
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_key_is_independent_of_filesystem_existence(
+    workspace: Path,
+) -> None:
+    """ORC-10: the SAME logical target yields ONE key whether or not it is
+    on disk — existence no longer fractures a baseline series.
+
+    ``pkg/../tests/test_x.py`` collapses lexically to ``tests/test_x.py``;
+    materializing the real ``pkg/`` and ``tests/test_x.py`` under the anchor
+    must not change the key (the pre-S20 existing-subpath branch left the
+    ``..`` uncollapsed only when the path happened to exist)."""
+
+    spelled = "pkg/../tests/test_x.py"
+    key_when_absent = normalize_target_expression(spelled, workspace)
+
+    (workspace / "pkg").mkdir()
+    (workspace / "tests").mkdir()
+    (workspace / "tests" / "test_x.py").write_text("", encoding="utf-8")
+    key_when_present = normalize_target_expression(spelled, workspace)
+
+    assert key_when_absent == key_when_present == "tests/test_x.py"
+
+
+def test_normalize_collapses_parent_segments_when_nonexistent(
+    workspace: Path,
+) -> None:
+    """``a/../b`` ≡ ``b`` even when nothing exists — ``<seg>/..`` collapses."""
+
+    assert normalize_target_expression("a/../b", workspace) == "b"
+    assert normalize_target_expression("a/b/../c", workspace) == "a/c"
+
+
+def test_normalize_strips_dot_slash_prefix_when_nonexistent(
+    workspace: Path,
+) -> None:
+    """``./x`` ≡ ``x`` regardless of existence (the existing-path variant is
+    pinned separately) — one series per ask."""
+
+    assert normalize_target_expression("./x", workspace) == "x"
+    assert normalize_target_expression("./deep/sub/", workspace) == "deep/sub"
+
+
+def test_normalize_leaves_embedded_dot_tokens_untouched(workspace: Path) -> None:
+    """Only exact ``.`` / ``..`` SEGMENTS are special — a jest-style
+    ``foo..bar`` token (embedded dots, single segment) passes through."""
+
+    assert normalize_target_expression("foo..bar", workspace) == "foo..bar"
+    assert (
+        normalize_target_expression("src/foo..bar/spec", workspace)
+        == "src/foo..bar/spec"
+    )
+
+
+def test_normalize_anchor_collapse_keys_as_dot(workspace: Path) -> None:
+    """A path that collapses to the anchor itself keys as ``"."`` — the
+    canonical current-directory form the pre-S20 branch produced for a
+    literal ``.`` target (run-engine contract: the verbatim ``.`` survives on
+    the record). ``a/..`` collapses to the same anchor form."""
+
+    assert normalize_target_expression(".", workspace) == "."
+    assert normalize_target_expression("a/..", workspace) == "."
+
+
+def test_normalize_nodeid_path_half_collapses_node_half_verbatim(
+    workspace: Path,
+) -> None:
+    """S20 + node id: the path half is lexically canonicalized (even for a
+    nonexistent ``..`` spelling); the ``::`` node half is reattached
+    unchanged."""
+
+    assert (
+        normalize_target_expression("pkg/../tests/test_x.py::test_a[1-2]", workspace)
+        == "tests/test_x.py::test_a[1-2]"
+    )

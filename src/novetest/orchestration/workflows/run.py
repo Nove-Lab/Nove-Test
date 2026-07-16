@@ -122,7 +122,7 @@ async def run_target_in_store(
     )
 
     relative_paths = {
-        name: str(Path(p).relative_to(store.path))
+        name: Path(p).relative_to(store.path).as_posix()
         for name, p in record.artifact_paths.items()
     }
     persisted_record = replace(record, artifact_paths=relative_paths)

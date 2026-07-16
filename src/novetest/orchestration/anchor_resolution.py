@@ -240,6 +240,40 @@ def _has_all_dots_component(candidate: Path) -> bool:
     return any(part != ".." and set(part) == {"."} for part in candidate.parts)
 
 
+def _lexical_relative_key(path_part: str, candidate: Path) -> str:
+    """Filesystem-independent canonical key for a relative, non-all-dots target (D3, S20).
+
+    Segment-wise lexical canonicalization: ``Path`` parsing already drops
+    ``.`` segments and trailing slashes and normalizes separators, so this
+    only has to collapse ``<seg>/..`` pairs. The result is the SAME key the
+    former existing-subpath branch produced when the path existed — but with
+    no ``exists()`` probe, so on-disk existence and spelling
+    (``a/../b`` vs ``b``, ``./sub`` vs ``sub``) no longer fracture a target's
+    baseline series (ORC-10).
+
+    Only exact ``.`` / ``..`` path SEGMENTS are special: an embedded-dot
+    token like ``foo..bar`` (a jest-style pattern) is one segment and passes
+    through untouched. A path that collapses to the anchor itself (a bare
+    ``.`` or ``a/..``) keys as ``"."`` — the canonical current-directory form
+    the pre-S20 branch produced for a literal ``.`` target. When the collapse
+    still leaves a leading ``..`` the expression escapes the anchor and
+    cannot be a workspace-relative key — return ``path_part`` verbatim,
+    matching the pre-S20 pass-through for such inputs.
+    """
+
+    segments: list[str] = []
+    for part in candidate.parts:
+        if part == ".." and segments and segments[-1] != "..":
+            segments.pop()
+        else:
+            segments.append(part)
+    if not segments:
+        return "."
+    if segments[0] == "..":
+        return path_part
+    return "/".join(segments)
+
+
 def normalize_target_expression(target_expression: str, anchor: Path) -> str:
     """Normalize an explicit target to anchor-relative canonical POSIX form (D3).
 
@@ -250,19 +284,21 @@ def normalize_target_expression(target_expression: str, anchor: Path) -> str:
     - an absolute path → relativized against the anchor
       (``to_workspace_relative_posix``, never-absolute on every platform);
     - a relative path with an all-dots component (go's ``./...`` wildcard
-      family) → verbatim, decided lexically and NEVER probed: Win32 strips
-      trailing dots from path components, so ``(anchor / '...').exists()``
-      answers for the anchor itself and the probe would reroute the
-      pattern into the existing-subpath branch, mangling ``./...`` to
-      ``...`` (the 2026-07-04 windows-latest CI red);
-    - a relative path that exists under the anchor → its canonical POSIX
-      subpath (strips ``./`` prefixes, trailing slashes, and platform
-      separators, so ``./tests/test_x.py`` ≡ ``tests/test_x.py`` — one
-      baseline series per ask);
-    - anything else → verbatim. Engine-native patterns and not-yet-existing
-      paths pass through untouched — we do not pre-validate, keeping
-      parity with the native engine's own resolution rules (same
-      philosophy as ``run/resolve_test_target``).
+      family) → verbatim, decided lexically and NEVER probed: stripping the
+      ``./`` prefix would rewrite go's current-dir-recursive ``./...`` into
+      all-packages-recursive ``...``, and Win32 strips trailing dots from
+      path components — so the all-dots family is settled here, ahead of the
+      lexical canonicalizer, and the filesystem is never consulted (the
+      2026-07-04 windows-latest CI red stays fixed);
+    - any other relative path → its filesystem-INDEPENDENT lexical canonical
+      key (``_lexical_relative_key``): drop ``.`` segments, strip ``./``
+      prefixes and trailing slashes, normalize separators to POSIX, and
+      collapse ``<seg>/..`` pairs, so ``./tests/test_x.py`` ≡
+      ``tests/test_x.py`` and ``a/../b`` ≡ ``b`` — one baseline series per
+      ask regardless of on-disk existence (ORC-10). Engine-native patterns
+      still pass through structurally (only exact ``.`` / ``..`` segments are
+      touched); a path whose collapse escapes the anchor (leading ``..``)
+      is returned verbatim.
 
     ``::``-suffixed node ids (``tests/test_x.py::test_a``) normalize their
     path half and reattach the node half unchanged.
@@ -281,8 +317,6 @@ def normalize_target_expression(target_expression: str, anchor: Path) -> str:
         normalized = to_workspace_relative_posix(candidate, anchor)
     elif _has_all_dots_component(candidate):
         normalized = path_part
-    elif (anchor / candidate).exists():
-        normalized = to_workspace_relative_posix(anchor / candidate, anchor)
     else:
-        normalized = path_part
+        normalized = _lexical_relative_key(path_part, candidate)
     return f"{normalized}{sep}{node_part}" if sep else normalized

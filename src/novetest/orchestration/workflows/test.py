@@ -202,13 +202,14 @@ async def test_target_in_store(
         engine=engine_pair,
     )
 
-    # Step 3 — persist. ``store_run_evidence`` mutates artifact paths to
-    # Project-Store-relative form before write; mirror that here so the
-    # in-memory record matches what later derivations will see. The
+    # Step 3 — persist. Relativize artifact paths to Project-Store-relative
+    # POSIX form (``.as_posix()`` so record.json and the envelope carry
+    # forward slashes on every host — ORC-15) BEFORE handing the record to
+    # ``store_run_evidence``, which persists what it is given verbatim. The
     # returned Memory Entry is re-read once after ALL derivations complete
     # (see below), so we only need the persistence side effect here.
     relative_paths = {
-        name: str(Path(p).relative_to(store.path))
+        name: Path(p).relative_to(store.path).as_posix()
         for name, p in record.artifact_paths.items()
     }
     from dataclasses import replace as _replace

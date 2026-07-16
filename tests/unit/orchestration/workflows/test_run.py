@@ -225,6 +225,33 @@ async def test_engine_override_wins_without_repinning(
     assert refreshed.pinned_engine.engine_name == "pytest"
 
 
+async def test_persisted_artifact_paths_are_posix_relative_no_backslash(
+    store: Any, stub_execute: dict[str, Any]
+) -> None:
+    """ORC-15: persisted artifact paths are Project-Store-relative POSIX.
+
+    The workflow relativizes via ``.relative_to(store.path).as_posix()`` so
+    record.json and the run envelope carry forward slashes on every host — a
+    Windows ``str(Path(...))`` would leak ``\\`` into the path values and
+    break cross-host baseline/candidate matching. Asserted
+    platform-independently: the stub emits a nested
+    ``run/artifacts/run_<id>/native/...`` artifact, so a correct
+    relativization is multi-segment, forward-slash separated, and never
+    absolute; a regression to ``str()`` fails the no-backslash assertion on
+    the Windows CI cell. ``test.py``'s identical relativization is covered by
+    the same idiom (and the grep guard on ``str(Path(p).relative_to(...))``).
+    """
+
+    outcome = await run_target_in_store("", store)
+    artifact_paths = outcome.memory_entry.run_record.artifact_paths
+    assert artifact_paths  # the stub emits exactly one artifact
+    for value in artifact_paths.values():
+        assert "\\" not in value, value
+        assert "/" in value  # multi-segment, forward-slash separated
+        assert not Path(value).is_absolute()
+        assert not value.startswith(str(store.path))
+
+
 async def test_pinless_store_raises_engine_missing(tmp_path: Path) -> None:
     """A legacy pin-less store cannot execute: EngineNotReadyError, no scan."""
 
