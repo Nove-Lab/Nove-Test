@@ -94,7 +94,18 @@ jobs:
       # `uv run pytest -q` is the Phase 0 DoD baseline command (verbatim).
       # We collect both `tests/unit` and `tests/integration` per the
       # `[tool.pytest.ini_options].testpaths` setting in pyproject.toml.
+      #
+      # NOVETEST_REQUIRE_ENGINES promotes engine-gated skips to failures for the
+      # engines this job actually equips (XCT-08/09). `pytest` is the parent
+      # interpreter (always present); `jest` is installed above via setup-node +
+      # the fixture `npm install` step, so the jest run/coverage integration
+      # tests MUST run on every cell. If that lane silently regresses (the npm
+      # step breaks, PATH drift), the build now fails instead of quietly
+      # shrinking the skip count. Dormant everywhere the var is unset — the gate
+      # itself lives in `tests/conftest.py`.
       - name: pytest
+        env:
+          NOVETEST_REQUIRE_ENGINES: pytest,jest
         run: uv run pytest -q
 
       # mypy --strict is required by foundations.md §1 ("Type hints everywhere").
@@ -111,28 +122,35 @@ jobs:
         if: runner.os != 'Windows'
         run: uv run pytest -q tests/release
 
-  # Non-blocking performance lane — coverage benchmark NFR-COV-002
-  # (`compare_coverage_facts` at 50k covered locations). The benchmark lives
-  # under `tests/perf/`, which is OUTSIDE `[tool.pytest.ini_options].testpaths`
-  # in pyproject.toml — so the `test` job's `uv run pytest -q` never collects
-  # it. This lane opts in explicitly with the `tests/perf` path argument.
+  # Performance lane — the NFR perf benchmarks under `tests/perf/` (coverage
+  # NFR-COV-002 `compare_coverage_facts` at 50k covered locations, plus the
+  # localization NFR-LOC-002 derive benchmarks). `tests/perf/` is OUTSIDE
+  # `[tool.pytest.ini_options].testpaths` in pyproject.toml — so the `test`
+  # job's `uv run pytest -q` never collects it; this lane opts in explicitly
+  # with the `tests/perf` path argument.
   #
-  # NON-BLOCKING by two independent guarantees:
-  #   1. It is a separate `job` (not a `test`-matrix cell) and brand new, so
-  #      it is not on branch protection's required-status-check set.
-  #   2. `continue-on-error: true` keeps a failed run from failing the
-  #      workflow run — the 5s NFR budget is measured on shared GitHub
-  #      runners with ±30-40% wall-clock variance, so a slow run must never
-  #      gate a PR merge.
+  # BLOCKING as of S44 (XCT-10): `continue-on-error` is removed, so a budget
+  # breach now turns this job — and the whole workflow run — red instead of
+  # letting an NFR regression merge unnoticed. This is safe against the
+  # ±30-40% wall-clock variance of shared runners because the budgets carry
+  # very large headroom: at slice time the measured medians on a comparable
+  # host were coverage 0.023s (budget 3.0s), localization sbfl_aggregate
+  # 0.029s / failure_proximity 0.016s / sbfl_per_test 0.879s (budget 5.0s,
+  # generous NFR ceiling 8.0s). The tightest lane still has >5x margin, so a
+  # merely-slow run cannot flake the build; a red here means a real O(n^2)-class
+  # regression, not runner noise.
   #
-  # Single cell: ubuntu-latest / Python 3.13. The benchmark is pure-Python
-  # (it generates `CoverageFactSet`s programmatically), so no Node.js / jest
-  # fixture install is needed — those steps are deliberately omitted. Action
-  # majors match the `test` job (`checkout@v6`, `setup-uv@v7`).
+  # NOTE (repo-settings action, out of workflow-content scope): making this
+  # job a branch-protection REQUIRED status check must be done in the repo
+  # settings by an admin — flagged to the orchestrator/CEO, not attempted here.
+  #
+  # Single cell: ubuntu-latest / Python 3.13. The benchmarks are pure-Python
+  # (they generate fact sets / SBFL inputs programmatically), so no Node.js /
+  # jest fixture install is needed — those steps are deliberately omitted.
+  # Action majors match the `test` job (`checkout@v6`, `setup-uv@v7`).
   perf:
-    name: perf (coverage NFR-COV-002, non-blocking)
+    name: perf (NFR-COV-002 / NFR-LOC-002)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
 
