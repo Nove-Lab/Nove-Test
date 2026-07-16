@@ -53,10 +53,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import time
 from pathlib import Path
 from typing import Any
 
+from novetest.run.adapters._harness import (
+    prepare_artifact_dirs,
+    run_and_capture,
+    write_failure_log,
+)
 from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
@@ -154,13 +158,10 @@ async def run_cargo(
     LCOV file registers under the artifact key ``coverage_lcov``.
     """
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. See pytest_adapter.py for the full rationale.
-    # Idempotent on absolute paths.
-    artifact_dir = artifact_dir.resolve()
-
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness; the
+    # resolve hardens against a relative ``artifact_dir`` — rationale in
+    # ``_harness.prepare_artifact_dirs``).
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
     events_path = native_dir / EVENTS_JSONL_FILENAME
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
@@ -282,13 +283,15 @@ async def run_cargo(
         argv.append(target_expression)
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=test_target.workspace_path,
             env=env,
             timeout=timeout,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            timeout_label="cargo nextest",
         )
     except FileNotFoundError as exc:
         # TOCTOU fallback — `cargo` was resolved above but removed
@@ -299,16 +302,6 @@ async def run_cargo(
             kind="missing-binary",
             install_hint="install Rust toolchain from https://rustup.rs",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    stdout_path.write_bytes(result.stdout)
-    stderr_path.write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"cargo nextest exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # Stream-parse stdout line by line. libtest-json emits NDJSON; never
     # parse the buffer as a single JSON document. We read bytes after
@@ -371,12 +364,18 @@ async def run_cargo(
                 output_buffers.setdefault(name, []).append(stream_text)
 
         if ev_event == "failed":
-            buffer = output_buffers.get(name, [])
-            safe_name = _safe_failure_log_name(name)
-            failures_dir.mkdir(parents=True, exist_ok=True)
-            failure_path = failures_dir / f"{safe_name}.log"
-            failure_path.write_text("".join(buffer), encoding="utf-8")
-            failure_logs[name] = str(failure_path.relative_to(artifact_dir))
+            # Skip-if-empty (RUN-17): cargo used to always write a 0-byte
+            # log here; now an empty capture registers nothing, matching
+            # gotest/junit. Union escape charset (RUN-06) + POSIX relative
+            # path (RUN-04) via the shared harness. libtest-json ``name``
+            # carries only ``::`` / ``/`` — no engine-specific extras.
+            write_failure_log(
+                node_id=name,
+                content="".join(output_buffers.get(name, [])),
+                failures_dir=failures_dir,
+                artifact_dir=artifact_dir,
+                failure_logs=failure_logs,
+            )
 
     # Build-failure detection (RUN-05).
     #
@@ -526,32 +525,6 @@ async def run_cargo(
         completed_at_ms=completed_ms,
         engine_version=engine_version,
         metadata=metadata,
-    )
-
-
-def _safe_failure_log_name(name: str) -> str:
-    """Convert a libtest-json ``name`` (e.g. ``crate::tests::foo``) into a
-    filesystem-safe basename.
-
-    Replacement rules (documented choice; alternatives are URL-encoding
-    or base64 — both less readable):
-
-    - ``/`` → ``_``  (Unix path separator; appears in integration-test
-      binary paths emitted in some nextest versions)
-    - ``:`` → ``_``  (Rust's ``::`` module separator becomes ``__``
-      naturally; also covers the Windows-illegal ``:`` character in
-      drive prefixes)
-    - ``\\`` → ``_`` (Windows path separator — defensive; nextest emits
-      forward slashes only)
-
-    A double-underscore in the result therefore signals "this is where
-    the original ``::`` module separator was"; consumers that need a
-    round-trip can store the unescaped ``name`` separately (the
-    ``failure_logs`` payload key does exactly that).
-    """
-
-    return (
-        name.replace("/", "_").replace(":", "_").replace("\\", "_")
     )
 
 

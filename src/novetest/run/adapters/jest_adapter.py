@@ -33,13 +33,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import time
 from pathlib import Path
 
+from novetest.run.adapters._harness import prepare_artifact_dirs, run_and_capture
 from novetest.run.adapters._target_guard import reject_shell_metachar_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
-from novetest.utils.asyncio_subprocess import run_subprocess
 
 
 JEST_REPORT_FILENAME = "jest-results.json"
@@ -81,15 +80,10 @@ async def run_jest(
     # use.
     reject_shell_metachar_target(test_target.target_expression, engine_label="jest")
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
-    # the contract here is path-shape-agnostic but downstream construction
-    # (``native_dir = artifact_dir / "native"`` and below) does not
-    # re-resolve. Idempotent on absolute paths.
-    artifact_dir = artifact_dir.resolve()
-
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness; the
+    # resolve hardens against a relative ``artifact_dir`` — rationale in
+    # ``_harness.prepare_artifact_dirs``).
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
     report_path = native_dir / JEST_REPORT_FILENAME
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
@@ -151,13 +145,15 @@ async def run_jest(
         argv.extend(["--", test_target.target_expression])
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=test_target.workspace_path,
             env=env,
             timeout=timeout,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            timeout_label="jest",
         )
     except FileNotFoundError as exc:
         # `npx` was resolved above, so this is a narrow fallback: a TOCTOU
@@ -170,16 +166,6 @@ async def run_jest(
             kind="missing-binary",
             install_hint="install Node.js >=18 and ensure `node`/`npx` are on PATH",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    stdout_path.write_bytes(result.stdout)
-    stderr_path.write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"jest exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # jest exit codes: 0 = all passed, 1 = some tests failed (report still
     # valid), >=2 = config / no-tests-found / runtime error. The report file

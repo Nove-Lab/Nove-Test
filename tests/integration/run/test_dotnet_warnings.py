@@ -280,6 +280,18 @@ async def test_xunit_v3_deferral_emits_envelope_warning_via_adapter(
 
     monkeypatch.setattr(dotnet_adapter, "run_subprocess", stub_run_subprocess)
 
+    # W2/S13: the ``dotnet test`` main spawn runs through the shared harness
+    # (``_harness.run_and_capture`` → ``_harness.run_subprocess``) now; route
+    # that seam back to the adapter-level stub so the single stub keeps
+    # covering both the version probe and the main ``dotnet test`` call
+    # (otherwise the real NuGet restore of the mutated v3 fixture runs).
+    from novetest.run.adapters import _harness
+
+    async def _route_main_spawn(*args: object, **kwargs: object) -> _StubResult:
+        return await stub_run_subprocess(*args, **kwargs)
+
+    monkeypatch.setattr(_harness, "run_subprocess", _route_main_spawn)
+
     target = resolve_test_target("", workspace)
     artifact_dir = tmp_path / "art"
     result = await asyncio.wait_for(

@@ -18,7 +18,9 @@ from typing import Any
 import pytest
 
 from novetest.run.adapters import junit_adapter
+from novetest.run.adapters._harness import safe_failure_log_name
 from novetest.run.adapters.junit_adapter import (
+    _FAILURE_LOG_EXTRA_CHARS,
     _build_tool_launcher,
     _detect_build_tool,
     _detects_junit4_in_manifest,
@@ -29,7 +31,6 @@ from novetest.run.adapters.junit_adapter import (
     _maven_pom_declares_jacoco,
     _normalize_test_case,
     _parse_surefire_reports_dir,
-    _safe_failure_log_name,
     _stage_coverage_xml,
     _stage_reports_dir,
     _strip_trailing_parens,
@@ -39,6 +40,30 @@ from novetest.run.errors import AdapterInvocationError
 from novetest.run.target_resolver import resolve_test_target
 from novetest.run.types import TestTarget
 from novetest.utils.asyncio_subprocess import SubprocessResult
+
+
+@pytest.fixture(autouse=True)
+def _route_harness_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the shared-harness main-spawn seam back to this adapter (W2/S13).
+
+    The Maven/Gradle spawns moved into ``_harness.run_and_capture`` (which
+    calls ``_harness.run_subprocess``); these tests still stub the seam on
+    ``junit_adapter.run_subprocess``. Baseline the harness seam to the
+    adapter's ``run_subprocess`` (late-bound) so one per-test stub covers
+    both the build+run spawn and the version-probe calls. The REAL
+    ``run_subprocess`` is the baseline so an unstubbed test never recurses.
+    """
+
+    import novetest.run.adapters.junit_adapter as _adapter
+    from novetest.run.adapters import _harness
+    from novetest.utils.asyncio_subprocess import run_subprocess as _real
+
+    monkeypatch.setattr(_adapter, "run_subprocess", _real, raising=False)
+
+    async def _delegate(*args: object, **kwargs: object) -> object:
+        return await _adapter.run_subprocess(*args, **kwargs)
+
+    monkeypatch.setattr(_harness, "run_subprocess", _delegate)
 
 
 # ---------------------------------------------------------------------------
@@ -733,7 +758,7 @@ class TestStageCoverageXml:
 
 
 # ---------------------------------------------------------------------------
-# _summarize_tests + _safe_failure_log_name (mechanical)
+# _summarize_tests + failure-log basename sanitizer (mechanical)
 # ---------------------------------------------------------------------------
 
 
@@ -764,21 +789,27 @@ class TestSummarizeTests:
 
 
 class TestSafeFailureLogName:
+    """The junit adapter now sanitizes via the shared harness helper with
+    its engine-specific ``_FAILURE_LOG_EXTRA_CHARS`` (``#`` + ``[](),``);
+    these pins confirm the junit escape contract survives the extraction."""
+
     def test_replaces_class_method_separator(self) -> None:
         assert (
-            _safe_failure_log_name("com.example.Foo#testBar")
+            safe_failure_log_name(
+                "com.example.Foo#testBar", _FAILURE_LOG_EXTRA_CHARS
+            )
             == "com.example.Foo_testBar"
         )
 
     def test_strips_parametrized_brackets(self) -> None:
-        result = _safe_failure_log_name("X#test[1, foo](int)")
+        result = safe_failure_log_name("X#test[1, foo](int)", _FAILURE_LOG_EXTRA_CHARS)
         assert "[" not in result
         assert "]" not in result
         assert "(" not in result
         assert "," not in result
 
     def test_handles_subtest_slash(self) -> None:
-        result = _safe_failure_log_name("X#parent/child")
+        result = safe_failure_log_name("X#parent/child", _FAILURE_LOG_EXTRA_CHARS)
         assert "/" not in result
 
 

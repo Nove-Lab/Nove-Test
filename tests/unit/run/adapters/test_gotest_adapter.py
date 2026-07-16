@@ -46,6 +46,30 @@ def _stub_go_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: _FAKE_GO)
 
 
+@pytest.fixture(autouse=True)
+def _route_harness_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the shared-harness main-spawn seam back to this adapter (W2/S13).
+
+    The main engine spawn moved into ``_harness.run_and_capture`` (which
+    calls ``_harness.run_subprocess``); these tests still stub the seam on
+    ``gotest_adapter.run_subprocess``. Baseline the harness seam to the
+    adapter's ``run_subprocess`` (late-bound) so one per-test stub covers
+    both the main spawn and the version-probe calls. The REAL
+    ``run_subprocess`` is the baseline so an unstubbed test never recurses.
+    """
+
+    import novetest.run.adapters.gotest_adapter as _adapter
+    from novetest.run.adapters import _harness
+    from novetest.utils.asyncio_subprocess import run_subprocess as _real
+
+    monkeypatch.setattr(_adapter, "run_subprocess", _real, raising=False)
+
+    async def _delegate(*args: object, **kwargs: object) -> object:
+        return await _adapter.run_subprocess(*args, **kwargs)
+
+    monkeypatch.setattr(_harness, "run_subprocess", _delegate)
+
+
 def _ndjson_bytes(events: list[dict[str, Any]]) -> bytes:
     """Serialize a list of go-test events as NDJSON bytes (one per line)."""
 

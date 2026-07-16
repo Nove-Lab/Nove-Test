@@ -19,13 +19,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
+from novetest.run.adapters._harness import prepare_artifact_dirs, run_and_capture
 from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
-from novetest.utils.asyncio_subprocess import run_subprocess
 
 
 PYTEST_REPORT_FILENAME = "pytest-report.json"
@@ -59,18 +58,10 @@ async def run_pytest(
     change.
     """
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. Production callers (the orchestration layer) build
-    # absolute paths under ``.novetest/run/artifacts/run_<ulid>/``, but the
-    # entry-point contract is path-shape-agnostic and downstream code
-    # composes ``artifact_dir / "native"`` etc. without re-resolving. A
-    # relative input would silently write artifacts under whatever cwd
-    # ``run_subprocess`` inherits — invisible at the unit boundary, painful
-    # to debug. Idempotent on absolute paths (no-op + symlink follow).
-    artifact_dir = artifact_dir.resolve()
-
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness; the
+    # resolve hardens against a relative ``artifact_dir`` — rationale in
+    # ``_harness.prepare_artifact_dirs``).
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
     report_path = native_dir / PYTEST_REPORT_FILENAME
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
@@ -118,23 +109,15 @@ async def run_pytest(
         argv.append(test_target.target_expression)
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
-    result = await run_subprocess(
+    result, started_ms, completed_ms = await run_and_capture(
         argv,
         cwd=test_target.workspace_path,
         env=env,
         timeout=timeout,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        timeout_label="pytest",
     )
-    completed_ms = int(time.time() * 1000)
-
-    stdout_path.write_bytes(result.stdout)
-    stderr_path.write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"pytest exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # pytest exit codes: 0 ok, 1 tests failed (report still valid), 2 usage,
     # 3 internal, 4 usage (deprecated), 5 no tests collected.

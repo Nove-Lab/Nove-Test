@@ -123,11 +123,15 @@ import json
 import os
 import re
 import shutil
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Final
 
+from novetest.run.adapters._harness import (
+    prepare_artifact_dirs,
+    run_and_capture,
+    write_failure_log,
+)
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import AdapterWarning, NativeResult, TestTarget
 from novetest.utils.asyncio_subprocess import run_subprocess
@@ -139,6 +143,16 @@ FAILURES_DIR_NAME = "failures"
 RESULTS_DIR_NAME = "TestResults"
 TRX_FILENAME = "results.trx"
 RUNSETTINGS_FILENAME = "coverlet.runsettings"
+
+# Failure-log basename extras beyond the shared-harness default
+# (Windows-reserved ``<>:"/\|?*`` + whitespace, which already covers
+# ``<>:"/\`` and space/tab). xUnit's parametrized display names surface
+# ``#`` (defensive, kept symmetric with junit), the ``[](),`` bracket /
+# separator set, and ``=`` / ``'`` inside ``TestParametrized(a: 1, b: 2)``
+# style names (RUN-06).
+_FAILURE_LOG_EXTRA_CHARS: Final[tuple[str, ...]] = (
+    "#", "[", "]", "(", ")", ",", "=", "'",
+)
 
 # Per-engine name string. Pinned because engine_selector, normalizer,
 # coverage derive dispatch, and CLI envelope all match on the literal.
@@ -277,18 +291,12 @@ async def run_xunit(
     detail is needed for argv composition.
     """
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
-    # downstream code composes the runsettings path, results dir, and
-    # failures dir without re-resolving, and the runsettings absolute
-    # path is passed as ``--settings`` to ``dotnet test`` (the .NET CLI
-    # tolerates either shape but the contract surface should be
-    # invariant). Idempotent on absolute paths.
-    artifact_dir = artifact_dir.resolve()
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness); the
+    # resolved runsettings path is later passed as ``--settings`` to
+    # ``dotnet test`` so the contract surface stays absolute.
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
 
     workspace = test_target.workspace_path
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
     failures_dir = native_dir / FAILURES_DIR_NAME
     results_dir = native_dir / RESULTS_DIR_NAME
 
@@ -511,13 +519,15 @@ async def run_xunit(
         target_type=test_target.target_type,
     )
 
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=workspace,
             env=env,
             timeout=timeout,
+            stdout_path=native_dir / STDOUT_LOG_FILENAME,
+            stderr_path=native_dir / STDERR_LOG_FILENAME,
+            timeout_label="dotnet test",
         )
     except FileNotFoundError as exc:
         # TOCTOU between `shutil.which("dotnet")` and the actual exec.
@@ -527,16 +537,6 @@ async def run_xunit(
             kind="missing-binary",
             install_hint="install .NET SDK 8.0+ per scripts/dev-host-setup.md §6",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    (native_dir / STDOUT_LOG_FILENAME).write_bytes(result.stdout)
-    (native_dir / STDERR_LOG_FILENAME).write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"dotnet test exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # 6. TRX parsing.
     trx_path = results_dir / TRX_FILENAME
@@ -1276,9 +1276,6 @@ def _normalize_unit_test_result(
 
     # Per-test failure log file (matches gotest / cargo / junit pattern).
     if status in ("failed", "errored"):
-        safe_name = _safe_failure_log_name(identity)
-        failures_dir.mkdir(parents=True, exist_ok=True)
-        failure_path = failures_dir / f"{safe_name}.log"
         log_lines: list[str] = []
         if failure_payload is not None:
             if failure_payload.get("message"):
@@ -1289,8 +1286,19 @@ def _normalize_unit_test_result(
             log_lines.append(f"[stdout]\n{stdout_text}")
         if stderr_text:
             log_lines.append(f"[stderr]\n{stderr_text}")
-        failure_path.write_text("\n".join(log_lines), encoding="utf-8")
-        failure_logs[identity] = str(failure_path.relative_to(artifact_dir))
+        # Shared harness: skip-if-empty (RUN-17) — dotnet previously wrote
+        # a 0-byte log when no message/stack/stdout/stderr was captured;
+        # now it registers nothing, matching the other adapters. Union +
+        # dotnet-specific escape charset (RUN-06), POSIX relative path
+        # (RUN-04).
+        write_failure_log(
+            node_id=identity,
+            content="\n".join(log_lines),
+            failures_dir=failures_dir,
+            artifact_dir=artifact_dir,
+            failure_logs=failure_logs,
+            extra_chars=_FAILURE_LOG_EXTRA_CHARS,
+        )
 
     entry: dict[str, object] = {
         "identity": identity,
@@ -1386,35 +1394,6 @@ def _summarize_tests(tests: list[dict[str, object]]) -> dict[str, int]:
         elif status == "errored":
             summary["errored"] += 1
     return summary
-
-
-def _safe_failure_log_name(identity: str) -> str:
-    """Map a test identity to a filesystem-safe basename.
-
-    The set of substitutions covers the characters xUnit emits in
-    parametrized display names:
-    - ``(`` / ``)`` / ``,`` / ``:`` / ``=`` / `` `` / ``"`` / ``'`` —
-      parens and separators in ``TestParametrized(a: 1, b: 2)`` etc.
-    - ``/`` / ``\\`` — path separators on Unix / Windows
-    - ``#`` — Maven/Gradle separator (defensive — TRX doesn't use this
-      but keeps us symmetric with the JUnit adapter)
-    - ``<`` / ``>`` — generic type parameters (defensive — TRX rarely
-      surfaces these in testName)
-    - whitespace (``\\t``) — defensive
-
-    A double-underscore in the result therefore signals "this is where
-    a separator lived"; consumers needing a round-trip can store the
-    unescaped identity separately (the ``failure_logs`` mapping does
-    exactly that).
-    """
-
-    out = identity
-    for bad in (
-        "/", "\\", ":", "#", "[", "]", "(", ")", ",", "=", '"', "'",
-        "<", ">", " ", "\t",
-    ):
-        out = out.replace(bad, "_")
-    return out
 
 
 # ---------------------------------------------------------------------------

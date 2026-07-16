@@ -50,10 +50,14 @@ import json
 import os
 import re
 import shutil
-import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from novetest.run.adapters._harness import (
+    prepare_artifact_dirs,
+    run_and_capture,
+    write_failure_log,
+)
 from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
@@ -88,13 +92,10 @@ async def run_gotest(
     the artifact key ``coverage_profile``.
     """
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. See pytest_adapter.py for the full rationale.
-    # Idempotent on absolute paths.
-    artifact_dir = artifact_dir.resolve()
-
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness; the
+    # resolve hardens against a relative ``artifact_dir`` — rationale in
+    # ``_harness.prepare_artifact_dirs``).
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
     events_path = native_dir / EVENTS_JSONL_FILENAME
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
@@ -159,13 +160,15 @@ async def run_gotest(
     argv.extend(_go_target_args(test_target))
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=test_target.workspace_path,
             env=env,
             timeout=timeout,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            timeout_label="go test",
         )
     except FileNotFoundError as exc:
         # `go` was resolved above, so this is a narrow fallback: a TOCTOU
@@ -177,16 +180,6 @@ async def run_gotest(
             kind="missing-binary",
             install_hint="install Go 1.21+ from https://go.dev/dl/",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    stdout_path.write_bytes(result.stdout)
-    stderr_path.write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"go test exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # Stream-parse stdout line by line. `go test -json` emits NDJSON
     # (one event per line); never parse the buffer as a single JSON
@@ -246,10 +239,11 @@ async def run_gotest(
             saw_run_action = True
 
         # On a failing terminal action, drain the buffer to a per-test
-        # failure log file. URL-style escaping is not needed — replace
-        # `/` (subtest separator) with `_` and `:` (package-path colon
-        # in module paths like `example.com/foo:tools`) with `_` so the
-        # filename is unambiguous and filesystem-safe everywhere.
+        # failure log file via the shared harness: skip-if-empty (RUN-17),
+        # union escape charset (RUN-06), and a POSIX relative path so
+        # Memory's path-rewriting layer treats it like any other artifact
+        # (RUN-04). ``go test`` node ids only carry ``/`` and ``:``, both
+        # in the harness default charset — no engine-specific extras.
         if (
             action == "fail"
             and isinstance(package, str)
@@ -257,18 +251,14 @@ async def run_gotest(
             and isinstance(test, str)
             and test
         ):
-            buffer = output_buffers.get((package, test))
-            if buffer:
-                node_id = f"{package}::{test}"
-                safe_name = _safe_failure_log_name(node_id)
-                failures_dir.mkdir(parents=True, exist_ok=True)
-                failure_path = failures_dir / f"{safe_name}.log"
-                failure_path.write_text("".join(buffer), encoding="utf-8")
-                # Store the path RELATIVE to artifact_dir so Memory's
-                # path-rewriting layer treats it like any other artifact.
-                failure_logs[node_id] = str(
-                    failure_path.relative_to(artifact_dir)
-                )
+            buffer = output_buffers.get((package, test), [])
+            write_failure_log(
+                node_id=f"{package}::{test}",
+                content="".join(buffer),
+                failures_dir=failures_dir,
+                artifact_dir=artifact_dir,
+                failure_logs=failure_logs,
+            )
 
     # Build-failure detection. `go test -json` does not emit *any*
     # NDJSON events when `go build` fails before test setup — the build
@@ -437,32 +427,6 @@ def _has_all_dots_component(expression: str) -> bool:
     return any(
         part != ".." and set(part) == {"."}
         for part in PurePosixPath(expression).parts
-    )
-
-
-def _safe_failure_log_name(node_id: str) -> str:
-    """Convert ``<Package>::<Test>`` (incl. subtest ``Parent/Child``) into a
-    filesystem-safe basename.
-
-    Replacement rules (documented choice; alternatives are URL-encoding or
-    base64 — both less readable):
-
-    - ``/`` → ``_``  (covers both module-path separators in ``Package``
-      and the ``Parent/Child`` subtest separator)
-    - ``:`` → ``_``  (covers the ``::`` join between Package and Test, and
-      Windows-illegal `:` characters generally)
-    - ``\\`` → ``_`` (Windows path separator — defensive, not strictly
-      needed because Go always uses forward slashes in test names, but
-      cheap to add)
-
-    A double-underscore in the result therefore signals "this is where
-    the original `::` separator was"; consumers that need a round-trip
-    should store the unescaped ``node_id`` separately (the
-    ``failure_logs`` payload key does exactly that).
-    """
-
-    return (
-        node_id.replace("/", "_").replace(":", "_").replace("\\", "_")
     )
 
 

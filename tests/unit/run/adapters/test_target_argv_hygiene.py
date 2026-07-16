@@ -39,6 +39,7 @@ from typing import Any
 
 import pytest
 
+from novetest.run.adapters import _harness
 from novetest.run.adapters.dotnet_adapter import _build_argv as build_dotnet_argv
 from novetest.run.adapters.gotest_adapter import run_gotest
 from novetest.run.adapters.jest_adapter import run_jest
@@ -103,9 +104,10 @@ async def test_pytest_rejects_dash_leading_target_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import novetest.run.adapters.pytest_adapter as adapter
-
-    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    # W2/S13: the main spawn runs through the shared harness now, so the
+    # "must-never-spawn" bomb guards the harness seam (the rejection guard
+    # fires before any spawn regardless).
+    monkeypatch.setattr(_harness, "run_subprocess", _bomb_subprocess())
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
@@ -127,10 +129,8 @@ async def test_gotest_rejects_dash_leading_target_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import novetest.run.adapters.gotest_adapter as adapter
-
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/go")
-    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _bomb_subprocess())
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
@@ -147,10 +147,8 @@ async def test_cargo_rejects_dash_leading_target_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import novetest.run.adapters.cargo_adapter as adapter
-
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/cargo")
-    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _bomb_subprocess())
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
@@ -175,10 +173,8 @@ async def test_jest_pins_dash_leading_target_after_separator(
     """jest keeps dash-leading patterns expressible: the value lands as the
     final positional, immediately after ``--``, never in flag position."""
 
-    import novetest.run.adapters.jest_adapter as adapter
-
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/npx")
-    monkeypatch.setattr(adapter, "run_subprocess", _capturing_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _capturing_subprocess())
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
@@ -214,9 +210,7 @@ async def test_junit_embeds_dash_leading_target_in_dtest_property(
         encoding="utf-8",
     )
 
-    import novetest.run.adapters.junit_adapter as adapter
-
-    monkeypatch.setattr(adapter, "run_subprocess", _capturing_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _capturing_subprocess())
 
     target = resolve_test_target(dash_target, workspace)
     with pytest.raises(_ArgvCaptured) as exc_info:
@@ -283,10 +277,8 @@ async def test_jest_rejects_shell_metachar_target_before_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import novetest.run.adapters.jest_adapter as adapter
-
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/npx")
-    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _bomb_subprocess())
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
@@ -316,9 +308,7 @@ async def test_junit_rejects_shell_metachar_target_before_spawn(
         encoding="utf-8",
     )
 
-    import novetest.run.adapters.junit_adapter as adapter
-
-    monkeypatch.setattr(adapter, "run_subprocess", _bomb_subprocess())
+    monkeypatch.setattr(_harness, "run_subprocess", _bomb_subprocess())
 
     target = resolve_test_target(metachar_target, workspace)
     with pytest.raises(AdapterInvocationError) as exc_info:

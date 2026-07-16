@@ -69,6 +69,31 @@ def _stub_dotnet_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: _FAKE_DOTNET)
 
 
+@pytest.fixture(autouse=True)
+def _route_harness_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the shared-harness main-spawn seam back to this adapter (W2/S13).
+
+    The ``dotnet test`` spawn moved into ``_harness.run_and_capture`` (which
+    calls ``_harness.run_subprocess``); these tests still stub the seam on
+    ``dotnet_adapter.run_subprocess``. Baseline the harness seam to the
+    adapter's ``run_subprocess`` (late-bound) so one per-test stub covers
+    the main spawn plus the restore / coverlet-probe / SDK-version calls.
+    The REAL ``run_subprocess`` is the baseline so an unstubbed test never
+    recurses.
+    """
+
+    import novetest.run.adapters.dotnet_adapter as _adapter
+    from novetest.run.adapters import _harness
+    from novetest.utils.asyncio_subprocess import run_subprocess as _real
+
+    monkeypatch.setattr(_adapter, "run_subprocess", _real, raising=False)
+
+    async def _delegate(*args: object, **kwargs: object) -> object:
+        return await _adapter.run_subprocess(*args, **kwargs)
+
+    monkeypatch.setattr(_harness, "run_subprocess", _delegate)
+
+
 # ---------------------------------------------------------------------------
 # Canned TRX content used by parser tests
 # ---------------------------------------------------------------------------

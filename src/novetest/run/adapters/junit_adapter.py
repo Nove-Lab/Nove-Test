@@ -46,11 +46,15 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Final
 
+from novetest.run.adapters._harness import (
+    prepare_artifact_dirs,
+    run_and_capture,
+    write_failure_log,
+)
 from novetest.run.adapters._target_guard import reject_shell_metachar_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import AdapterWarning, NativeResult, TestTarget
@@ -62,6 +66,12 @@ from ._vendor import LAUNCHER_JAR_SHA256, LAUNCHER_VERSION
 STDOUT_LOG_FILENAME = "stdout.log"
 STDERR_LOG_FILENAME = "stderr.log"
 FAILURES_DIR_NAME = "failures"
+
+# Failure-log basename extras beyond the shared-harness default
+# (Windows-reserved ``<>:"/\|?*`` + whitespace). JUnit identities carry
+# ``#`` (the ``<classname>#<name>`` separator) and the ``[](),`` set that
+# JUnit 5 ``@ParameterizedTest`` display names surface heavily (RUN-06).
+_FAILURE_LOG_EXTRA_CHARS: Final[tuple[str, ...]] = ("#", "[", "]", "(", ")", ",")
 
 # Per-engine name string. Pinned because the engine_selector,
 # normalizer, coverage derive dispatch, and CLI envelope all match on
@@ -138,15 +148,9 @@ async def run_junit(
     # the Maven and Gradle branches).
     reject_shell_metachar_target(test_target.target_expression, engine_label="junit")
 
-    # Defensive resolve: hardens against future callers passing a relative
-    # ``artifact_dir``. See pytest_adapter.py for the full rationale —
-    # downstream code composes ``native_dir = artifact_dir / "native"``
-    # and forwards ``artifact_dir`` into ``_run_maven`` / ``_run_gradle``
-    # which itself derive further paths. Idempotent on absolute paths.
-    artifact_dir = artifact_dir.resolve()
-
-    native_dir = artifact_dir / "native"
-    native_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve ``artifact_dir`` + create ``native/`` (shared harness); the
+    # resolved dirs are forwarded into ``_run_maven`` / ``_run_gradle``.
+    artifact_dir, native_dir = prepare_artifact_dirs(artifact_dir)
     failures_dir = native_dir / FAILURES_DIR_NAME
 
     workspace = test_target.workspace_path
@@ -359,13 +363,15 @@ async def _run_maven(
             shutil.rmtree(stale_reports_dir)
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=workspace,
             env=env,
             timeout=timeout,
+            stdout_path=native_dir / STDOUT_LOG_FILENAME,
+            stderr_path=native_dir / STDERR_LOG_FILENAME,
+            timeout_label="mvn test",
         )
     except FileNotFoundError as exc:
         # TOCTOU between `which("mvn")` and the actual exec.
@@ -375,16 +381,6 @@ async def _run_maven(
             kind="missing-binary",
             install_hint="install Maven 3.9+ per scripts/dev-host-setup.md §5",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    (native_dir / STDOUT_LOG_FILENAME).write_bytes(result.stdout)
-    (native_dir / STDERR_LOG_FILENAME).write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"mvn test exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # Glob Surefire report directories. For multi-module projects each
     # module has its own `target/surefire-reports/`; for single-module
@@ -696,13 +692,15 @@ async def _run_gradle(
         argv.append("jacocoTestReport")
 
     env = _build_child_env()
-    started_ms = int(time.time() * 1000)
     try:
-        result = await run_subprocess(
+        result, started_ms, completed_ms = await run_and_capture(
             argv,
             cwd=workspace,
             env=env,
             timeout=timeout,
+            stdout_path=native_dir / STDOUT_LOG_FILENAME,
+            stderr_path=native_dir / STDERR_LOG_FILENAME,
+            timeout_label="gradle test",
         )
     except FileNotFoundError as exc:
         raise AdapterInvocationError(
@@ -711,16 +709,6 @@ async def _run_gradle(
             kind="missing-binary",
             install_hint="install Gradle 7.6+ per scripts/dev-host-setup.md §5",
         ) from exc
-    completed_ms = int(time.time() * 1000)
-
-    (native_dir / STDOUT_LOG_FILENAME).write_bytes(result.stdout)
-    (native_dir / STDERR_LOG_FILENAME).write_bytes(result.stderr)
-
-    if result.timed_out:
-        raise AdapterInvocationError(
-            f"gradle test exceeded {timeout}s timeout",
-            kind="timed-out",
-        )
 
     # No pre-run stale-report clean here, unlike the Maven branch
     # (RUN-02, W1/S2 — C3 empirical check, 2026-07-07): Gradle's `Test`
@@ -992,9 +980,6 @@ def _normalize_test_case(
     # consumer (e.g. Localization's failure-proximity mode) can
     # re-read it without the original XML.
     if status in ("failed", "errored") and failure_payload is not None:
-        safe_name = _safe_failure_log_name(identity)
-        failures_dir.mkdir(parents=True, exist_ok=True)
-        failure_path = failures_dir / f"{safe_name}.log"
         log_lines: list[str] = []
         if failure_payload.get("message"):
             log_lines.append(f"[message] {failure_payload['message']}")
@@ -1006,8 +991,16 @@ def _normalize_test_case(
             log_lines.append(f"[system-out]\n{stdout_text}")
         if stderr_text:
             log_lines.append(f"[system-err]\n{stderr_text}")
-        failure_path.write_text("\n".join(log_lines), encoding="utf-8")
-        failure_logs[identity] = str(failure_path.relative_to(artifact_dir))
+        # Shared harness: skip-if-empty (RUN-17), union + junit-specific
+        # escape charset (RUN-06), POSIX relative path (RUN-04).
+        write_failure_log(
+            node_id=identity,
+            content="\n".join(log_lines),
+            failures_dir=failures_dir,
+            artifact_dir=artifact_dir,
+            failure_logs=failure_logs,
+            extra_chars=_FAILURE_LOG_EXTRA_CHARS,
+        )
 
     entry: dict[str, object] = {
         "identity": identity,
@@ -1071,24 +1064,6 @@ def _strip_trailing_parens(name: str) -> str:
     if name.endswith("()"):
         return name[:-2]
     return name
-
-
-def _safe_failure_log_name(identity: str) -> str:
-    """Map ``<classname>#<name>`` to a filesystem-safe basename.
-
-    Same posture as the gotest adapter: replace path-unfriendly
-    characters with ``_`` rather than URL-encode. The substitution set
-    covers ``/`` (subtest separators), ``:`` (Windows-illegal),
-    ``\\`` (Windows path), ``#`` (the canonical Maven/Gradle separator
-    between class and method), ``[`` / ``]`` / ``(`` / ``)`` / ``,``
-    (parametrized test display names — JUnit 5's `@ParameterizedTest`
-    surfaces these heavily), and whitespace.
-    """
-
-    out = identity
-    for bad in ("/", ":", "\\", "#", "[", "]", "(", ")", ",", " ", "\t"):
-        out = out.replace(bad, "_")
-    return out
 
 
 # ---------------------------------------------------------------------------
