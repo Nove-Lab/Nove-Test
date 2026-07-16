@@ -57,6 +57,19 @@ jobs:
         with:
           node-version: "20"
 
+      # Go powers the go-test Native Engine adapter. Linux-only: the go
+      # integration tests (`test_gotest_*`) run under the `go` require token
+      # on the three ubuntu cells (Q1=B, ratified 2026-07-16). macOS/Windows
+      # cells stay `pytest,jest` (see the pytest step's require-engines
+      # expression). Pin a version >= the go adapter's readiness floor
+      # (`run/readiness.py`: "install Go 1.21+"); the go fixtures declare
+      # `go 1.21` and are pure-stdlib (no module downloads, no network).
+      - name: Install Go
+        if: runner.os == 'Linux'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
       # Install each jest fixture's `node_modules` so the integration tests'
       # `_require_node_and_local_jest()` guard finds a local jest install.
       # Iterate over every fixture carrying a `package.json` instead of
@@ -99,13 +112,16 @@ jobs:
       # engines this job actually equips (XCT-08/09). `pytest` is the parent
       # interpreter (always present); `jest` is installed above via setup-node +
       # the fixture `npm install` step, so the jest run/coverage integration
-      # tests MUST run on every cell. If that lane silently regresses (the npm
-      # step breaks, PATH drift), the build now fails instead of quietly
-      # shrinking the skip count. Dormant everywhere the var is unset — the gate
-      # itself lives in `tests/conftest.py`.
+      # tests MUST run on every cell. `go` is added ONLY on the Linux cells
+      # (setup-go is Linux-guarded above; Q1=B, 2026-07-16), so the go-test
+      # integration tests (`test_gotest_*`) MUST run there. macOS/Windows keep
+      # exactly `pytest,jest` — byte-identical to before. If any required lane
+      # silently regresses (npm step breaks, PATH drift, setup-go removed), the
+      # build now fails instead of quietly shrinking the skip count. Dormant
+      # everywhere the var is unset — the gate itself lives in `tests/conftest.py`.
       - name: pytest
         env:
-          NOVETEST_REQUIRE_ENGINES: pytest,jest
+          NOVETEST_REQUIRE_ENGINES: ${{ runner.os == 'Linux' && 'pytest,jest,go' || 'pytest,jest' }}
         run: uv run pytest -q
 
       # mypy --strict is required by foundations.md §1 ("Type hints everywhere").
