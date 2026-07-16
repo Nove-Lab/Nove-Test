@@ -6,6 +6,16 @@ do not deadlock on full stdout/stderr pipes (a documented Windows
 ``subprocess.Popen`` failure mode). Every native adapter and readiness probe
 routes through this single helper.
 
+**Ownership (MOD-05).** This module physically lives under the shared
+``utils/`` tree but is Run-owned infrastructure: its only consumers are the
+six Native Engine adapters (``run/adapters/``) and ``run/readiness.py``. The
+physical move into ``run/`` is deliberately deferred — it would collide with
+in-flight adapter work and buys little — so the ownership boundary is
+recorded here instead: other teams change ``run_subprocess`` only via a
+run-team-reviewed slice. The Run-specific subprocess contract (child ``env``
+handling, timeout / process-tree-kill semantics, capture caps) is Run's, not
+a general shared surface.
+
 Subprocess lifecycle hardening (W1/S3, findings RUN-15/MOD-01, RUN-27/MOD-02):
 
 * **Tree kill on timeout.** POSIX spawns the child in its own session

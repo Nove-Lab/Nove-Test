@@ -87,7 +87,13 @@ class ReplayResult:
                                      (0 <= reruns_failed <= reruns_total).
     - ``test_id``                 — focal divergent test nodeid when exactly
                                      one test caused an ``inconsistent``
-                                     result; ``None`` otherwise.
+                                     result; ``None`` otherwise. ``test_id``
+                                     names the SAME native-engine test nodeid
+                                     concept as ``TestResult.node_id`` /
+                                     ``TestTransition.node_id`` (MOD-04); the
+                                     ``test_id`` vs ``node_id`` naming
+                                     divergence is historical and wire-frozen
+                                     in v1.
     - ``replayed_run_reference``  — the reference of the first PARSED
                                      replay-execution Run Record (``None``
                                      when no parseable replay run was

@@ -69,6 +69,10 @@ class TestTransition:
     ``target_outcome`` is ``None`` exactly when ``category == "removed"``.
     Failure references and duration values are independently nullable
     because the native engine may not have provided them.
+
+    ``node_id`` names the SAME native-engine test nodeid concept that
+    ``ReplayResult.test_id`` and ``EvidenceCitation`` selectors spell as
+    ``test_id`` (MOD-04) — a wire-frozen v1 naming divergence.
     """
 
     CURRENT_SCHEMA_VERSION: ClassVar[int] = SCHEMA_VERSION

@@ -166,6 +166,11 @@ class EvidenceCitation:
 
     The ``regression_fact`` kind is reserved for the aggregate-mode slice
     (where the FLUCCS-style regression-aware reweighting fires).
+
+    The ``test_id`` selector key names the SAME native-engine test nodeid
+    concept as ``TestResult.node_id`` / ``TestTransition.node_id`` (MOD-04);
+    the ``test_id`` vs ``node_id`` naming divergence is historical and
+    wire-frozen in v1.
     """
 
     kind: str
@@ -222,6 +227,11 @@ class LocalizationEntry:
     finite per-fact-set ceiling — see ``localization/sbfl/dstar.py``).
     Compare values across LOCATIONS under one formula without
     re-deriving; never compare, average, or max values ACROSS formulas.
+
+    ``related_failed_tests`` carries native-engine test nodeids — the SAME
+    identifier concept ``TestResult.node_id`` / ``TestTransition.node_id``
+    name and ``ReplayResult.test_id`` / the ``test_id`` selector key spell
+    as ``test_id`` (MOD-04); the naming divergence is wire-frozen in v1.
     """
 
     rank: int

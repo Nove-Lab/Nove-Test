@@ -6,11 +6,13 @@ comments mentioning module paths cannot false-positive):
 1. **Public-surface ratchet (XCT-12).** Consumers outside ``memory/`` must
    import from ``novetest.memory`` only; the submodule paths
    (``novetest.memory.store`` / ``novetest.memory.project_store``) are
-   private. The pre-existing deep imports in the four derived engines are
-   pinned in ``_DEEP_IMPORT_ALLOWLIST`` below; the assertion is
-   **offenders ⊆ allowlist** — deliberately SUBSET, not equality, because
-   the flips land in parallel worktrees and merge in any order (an equality
-   pin would fail merge-order-dependently). The allowlist may only SHRINK.
+   private. The four derived engines (coverage/localization/regression/
+   replay) once carried an allowlisted set of deep imports; every flip has
+   shipped (S31/S37/S34/S40), so the guard is now **equality** — the
+   offender set MUST be empty. Note this ratchet scopes only the four
+   derived engines; the deliberate ``orchestration``/``cli`` deep imports of
+   ``memory.project_store`` are a separate surface out of scope here (they
+   pull symbols the audit below proves are re-exported).
 
 2. **Layering pin (XCT-13).** No module under ``src/novetest/memory/``
    imports ``novetest.run`` (the former ``set_pinned_engine`` deferred
@@ -39,37 +41,8 @@ _SRC_NOVETEST = Path(__file__).resolve().parents[3] / "src" / "novetest"
 _PRIVATE_MEMORY_MODULES = ("novetest.memory.store", "novetest.memory.project_store")
 
 # The four derived engines XCT-12 inventoried (run/orchestration/cli already
-# consume the public surface or none at all).
+# consume the public surface or deep-import a separate, out-of-scope surface).
 _DERIVED_ENGINE_DIRS = ("coverage", "localization", "regression", "replay")
-
-# FULL offender set at this slice's base (`993ff59`) — 16 files, 27 import
-# statements. Routing of the flips (do NOT grow this list; only shrink it):
-#   - localization/*, regression/*  → flipped THIS cycle as S31/S37 riders
-#     (parallel worktrees; subset semantics absorb any merge order);
-#   - coverage/*                    → routed to S34;
-#   - replay/*                      → routed to S39/S40.
-# When every entry is gone, drop the allowlist and tighten the assertion to
-# equality with the empty set.
-_DEEP_IMPORT_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "coverage/availability.py",
-        "coverage/compare.py",
-        "coverage/derive.py",
-        "coverage/persistence.py",
-        "coverage/retrieval.py",
-        "localization/derive.py",
-        "localization/failure_proximity.py",
-        "localization/persistence.py",
-        "localization/retrieval.py",
-        "regression/compare.py",
-        "regression/persistence.py",
-        "regression/retrieval.py",
-        "replay/context.py",
-        "replay/engine.py",
-        "replay/persistence.py",
-        "replay/retrieval.py",
-    }
-)
 
 
 def _imported_modules(path: Path) -> list[ast.stmt]:
@@ -97,7 +70,10 @@ def _is_under(module_path: str, package: str) -> bool:
     return module_path == package or module_path.startswith(package + ".")
 
 
-def test_derived_engine_deep_imports_are_a_subset_of_the_allowlist() -> None:
+def test_derived_engines_have_no_deep_memory_imports() -> None:
+    # Guard is now EQUALITY (S45): every allowlisted flip has shipped, so the
+    # offender set must be EMPTY — a derived engine must import Memory symbols
+    # from `novetest.memory`, never from its private submodules.
     offenders: set[str] = set()
     for engine_dir in _DERIVED_ENGINE_DIRS:
         for py_file in sorted((_SRC_NOVETEST / engine_dir).rglob("*.py")):
@@ -109,11 +85,9 @@ def test_derived_engine_deep_imports_are_a_subset_of_the_allowlist() -> None:
                 ):
                     offenders.add(py_file.relative_to(_SRC_NOVETEST).as_posix())
                     break
-    new_offenders = offenders - _DEEP_IMPORT_ALLOWLIST
-    assert not new_offenders, (
-        "New deep imports of private Memory submodules (import from "
-        f"`novetest.memory` instead): {sorted(new_offenders)}. The allowlist "
-        "in this test only ever shrinks."
+    assert not offenders, (
+        "Deep imports of private Memory submodules in derived engines "
+        f"(import from `novetest.memory` instead): {sorted(offenders)}."
     )
 
 
@@ -133,10 +107,11 @@ def test_no_memory_module_imports_novetest_run() -> None:
 
 
 def test_every_deep_imported_symbol_is_exported_at_the_public_surface() -> None:
-    # The XCT-12 flip precondition, kept live: whatever symbols the
-    # allowlisted offenders still pull from the private submodules must
-    # already be importable from `novetest.memory`, so each flip (S31/S37
-    # now, S34/S39/S40 later) is a pure import-line rewrite.
+    # Standing re-export guard (belt-and-suspenders beside the equality pin):
+    # should a derived engine ever deep-import a symbol from a private Memory
+    # submodule, that symbol must already be re-exported from `novetest.memory`
+    # so the fix is a pure import-line rewrite, never an `__all__` addition.
+    # Vacuously green while the equality guard above holds (zero offenders).
     missing: set[str] = set()
     for engine_dir in _DERIVED_ENGINE_DIRS:
         for py_file in sorted((_SRC_NOVETEST / engine_dir).rglob("*.py")):

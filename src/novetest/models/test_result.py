@@ -28,7 +28,10 @@ class TestResult:
     """One test outcome as normalized from a Native Result.
 
     - `node_id` mirrors the native engine's stable test identifier (pytest
-      nodeid, jest test path, JUnit fully-qualified method name, etc.).
+      nodeid, jest test path, JUnit fully-qualified method name, etc.). The
+      SAME identifier concept is spelled ``test_id`` on ``ReplayResult`` and
+      in ``EvidenceCitation`` selectors (MOD-04) — a wire-frozen v1 naming
+      divergence, not a distinct concept.
     - `outcome` is the normalized result: typically one of
       ``passed | failed | skipped | xfailed | xpassed | errored``. The set
       is intentionally not enum-locked at v1 to keep new engines from forcing
