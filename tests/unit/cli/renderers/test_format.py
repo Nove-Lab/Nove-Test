@@ -9,7 +9,6 @@ from novetest.cli.renderers._format import (
     availability_glyph,
     format_table,
     format_timestamp,
-    indent_block,
     percent,
     run_status_glyph,
     target_label,
@@ -56,7 +55,3 @@ def test_format_table_left_aligned_columns() -> None:
 
 def test_format_table_header_only() -> None:
     assert format_table(["run_id", "status"], []) == "run_id  status"
-
-
-def test_indent_block_prefixes_every_line() -> None:
-    assert indent_block("x\ny", "  ") == "  x\n  y"

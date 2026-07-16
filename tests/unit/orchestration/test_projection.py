@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from novetest.cli import app as app_module
+from novetest.cli.output import Envelope
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.compare import CoverageDelta, FileCoverageDelta
 from novetest.localization import LocalizationFinding, LocalizationUnavailable
@@ -674,3 +675,101 @@ def test_inspect_view_to_dict_uses_shared_projections() -> None:
         "localization": "unavailable",
         "replay": "unavailable",
     }
+
+
+# ---------------------------------------------------------------------------
+# 4) Strip-allowlist sync guard (W2/S28, ORC-27)
+#
+# ``orchestration/projection.py`` strips ``schema_version`` from every
+# persisted-record body before it reaches the v1 envelope's ``data`` block
+# (envelope versioning lives at the top-level ``schema`` field, never inside
+# individual data blocks). That strip was a hardcoded ``body.pop("schema_version")``
+# literal repeated per-projector, with NO single source tying the stripped
+# field name back to the models that emit it and no drift guard. This section
+# centralizes the strip allowlist into ONE constant and fails loudly on either
+# drift direction:
+#
+#   - a model dropping/renaming ``schema_version`` would turn the pop into a
+#     silent no-op (Guard A catches it: strip list ⊆ persisted body keys);
+#   - a projector that stopped stripping would leak the persisted field onto
+#     the wire (Guard B catches it);
+#   - the transport envelope growing/losing a top-level field would silently
+#     shift what the snapshot convention pins (Guard C catches it — a new
+#     top-level envelope field must consciously join the frozen set).
+# ---------------------------------------------------------------------------
+
+
+# Single source of truth for the persisted-body key(s) the wire projection
+# strips. Adding a projector strip => add the field here (and vice versa).
+WIRE_PROJECTION_STRIPPED_KEYS: frozenset[str] = frozenset({"schema_version"})
+
+# The frozen v1 envelope top-level wire keys (``Envelope.to_dict``). Bumping is
+# a deliberate, versioned change requiring a ``decisions/`` entry.
+ENVELOPE_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
+    {"schema", "command", "ok", "data", "errors", "warnings"}
+)
+
+# Every persisted-record body a projector pops WIRE_PROJECTION_STRIPPED_KEYS out
+# of (the ``body = outcome.to_dict(); body.pop(...)`` sites in projection.py).
+_STRIP_SITE_BODY_FACTORIES = (
+    _coverage_delta,
+    _regression_fact_set,
+    _localization_finding,
+    _replay_result,
+)
+
+# (projector, factory) pairs for every schema-bearing wire projection — the
+# payloads that must never carry a persisted ``schema_version``.
+_SCHEMA_BEARING_PROJECTIONS = (
+    (projection.coverage_outcome_payload, _coverage_fact_set),
+    (projection.coverage_delta_payload, _coverage_delta),
+    (projection.regression_outcome_payload, _regression_fact_set),
+    (projection.localization_outcome_payload, _localization_finding),
+    (projection.replay_outcome_payload, _replay_result),
+)
+
+
+def test_strip_keys_are_live_persisted_body_fields() -> None:
+    """Guard A — the stripped key names ARE live fields on every strip-site body.
+
+    If a model stops emitting ``schema_version`` the ``body.pop`` becomes a
+    silent no-op; this fails loudly, by name, when the allowlist drifts off the
+    persisted shape (strip list ⊆ persisted body keys).
+    """
+    for factory in _STRIP_SITE_BODY_FACTORIES:
+        body_keys = set(factory().to_dict().keys())
+        missing = WIRE_PROJECTION_STRIPPED_KEYS - body_keys
+        assert not missing, (
+            f"{factory.__name__}().to_dict() no longer emits {sorted(missing)}; "
+            "the projection strip would silently become a no-op — reconcile "
+            "WIRE_PROJECTION_STRIPPED_KEYS with the persisted body shape."
+        )
+
+
+def test_wire_projections_strip_every_allowlisted_key() -> None:
+    """Guard B — no schema-bearing projection leaks an allowlisted key onto the wire."""
+    for projector, factory in _SCHEMA_BEARING_PROJECTIONS:
+        payload = projector(factory())
+        leaked = WIRE_PROJECTION_STRIPPED_KEYS & set(payload.keys())
+        assert not leaked, (
+            f"{projector.__name__} leaked {sorted(leaked)} onto the wire; a "
+            "persisted schema_version must never reach the envelope data block."
+        )
+
+
+def test_envelope_top_level_keys_frozen_and_disjoint_from_strip_list() -> None:
+    """Guard C — pin the transport envelope's top-level key set; keep the strip
+    allowlist disjoint from it.
+
+    A new top-level envelope field must consciously join ENVELOPE_TOP_LEVEL_KEYS
+    (and the snapshot/strip convention updated) rather than silently drift; and
+    the wire-projection strip targets nested persisted-body fields only, so it
+    can never remove a transport field.
+    """
+    actual = set(Envelope(command="x", ok=True).to_dict().keys())
+    assert actual == ENVELOPE_TOP_LEVEL_KEYS, (
+        "v1 envelope top-level keys drifted from the frozen set "
+        f"{sorted(ENVELOPE_TOP_LEVEL_KEYS)}; got {sorted(actual)} — a schema "
+        "change requires a decisions/ entry (schema: novetest/v1 bump)."
+    )
+    assert WIRE_PROJECTION_STRIPPED_KEYS.isdisjoint(ENVELOPE_TOP_LEVEL_KEYS)

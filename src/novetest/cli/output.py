@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TextIO
 
+from novetest.models import FAIL_LIKE_OUTCOMES
+
 SCHEMA = "novetest/v1"
 
 EXIT_OK = 0
@@ -39,7 +41,7 @@ def run_status_to_ok_exit(status: str) -> tuple[bool, int]:
     """
     if status == "passed":
         return (True, EXIT_OK)
-    if status in ("failed", "errored"):
+    if status in FAIL_LIKE_OUTCOMES:
         return (True, EXIT_USER_TESTS_FAILED)
     return (False, EXIT_GENERIC)
 
@@ -133,16 +135,3 @@ def emit_envelope(envelope: Envelope, mode: OutputMode, stream: TextIO | None = 
     flush = getattr(target, "flush", None)
     if callable(flush):
         flush()
-
-
-def not_implemented_envelope(command: str) -> Envelope:
-    return Envelope(
-        command=command,
-        ok=False,
-        errors=(
-            EnvelopeError(
-                code="not-implemented",
-                message=f"{command} is not yet implemented",
-            ),
-        ),
-    )

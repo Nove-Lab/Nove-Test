@@ -10,7 +10,6 @@ from novetest.cli.output import (
     Envelope,
     EnvelopeError,
     EnvelopeWarning,
-    not_implemented_envelope,
 )
 from novetest.cli.renderers import render_text
 
@@ -48,7 +47,23 @@ def test_error_with_install_hint_detail(snapshot: SnapshotAssertion) -> None:
 
 
 def test_error_not_implemented_stub(snapshot: SnapshotAssertion) -> None:
-    assert render_text(not_implemented_envelope("future.verb")) == snapshot
+    # Envelope reconstructed inline: the ``not_implemented_envelope`` helper was
+    # removed as dead production code in W2/S28 (ORC-19) once every verb was
+    # promoted off the Phase-1 stub path. This renderer-dispatch test still pins
+    # the generic error block for a ``not-implemented``-shaped envelope; the
+    # payload is byte-identical to the former helper output, so the snapshot is
+    # unchanged.
+    envelope = Envelope(
+        command="future.verb",
+        ok=False,
+        errors=(
+            EnvelopeError(
+                code="not-implemented",
+                message="future.verb is not yet implemented",
+            ),
+        ),
+    )
+    assert render_text(envelope) == snapshot
 
 
 def test_warnings_appended_after_body(

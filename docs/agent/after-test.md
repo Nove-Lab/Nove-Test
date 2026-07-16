@@ -250,24 +250,7 @@ Each citation has a `kind` discriminator. The closed `kind` set is
       {
         "category": "investigate_location",
         "priority": 2,
-        "recommendation_id": "rec_01KVYRRSF48RMYV84MTB4XQ6P9_9a8e9aae",
-        "slots": {
-          "file": "calc/arithmetic.py",
-          "formula": "ochiai",
-          "line_range": [1, 2],
-          "mode": "sbfl_per_test",
-          "primary_line": 2,
-          "rank": 2,
-          "score_normalized": 0.0,
-          "symbol": "add"
-        },
-        "summary": "Investigate `add`@2 in `calc/arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).",
-        "evidence_citations": [ "…localization_finding, elided…" ]
-      },
-      {
-        "category": "investigate_location",
-        "priority": 2,
-        "recommendation_id": "rec_01KVYRRSF48RMYV84MTB4XQ6P9_eeff3348",
+        "recommendation_id": "rec_01KXMC59XX0GVW3R2STYVTXW2A_eeff3348",
         "slots": {
           "file": "calc/arithmetic.py",
           "formula": "ochiai",
@@ -280,11 +263,39 @@ Each citation has a `kind` discriminator. The closed `kind` set is
         },
         "summary": "Investigate `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).",
         "evidence_citations": [ "…localization_finding + test_result, elided…" ]
+      },
+      {
+        "category": "investigate_location",
+        "priority": 2,
+        "recommendation_id": "rec_01KXMC59XX0GVW3R2STYVTXW2A_a1e32879",
+        "slots": {
+          "file": "tests/test_arithmetic.py",
+          "formula": "ochiai",
+          "line_range": [12, 13],
+          "mode": "sbfl_per_test",
+          "primary_line": 13,
+          "rank": 1,
+          "score_normalized": 1.0,
+          "symbol": "test_subtract"
+        },
+        "summary": "Investigate `test_subtract`@13 in `tests/test_arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).",
+        "evidence_citations": [ "…localization_finding + test_result, elided…" ]
+      },
+      {
+        "category": "unavailable_analysis",
+        "priority": 6,
+        "recommendation_id": "rec_01KXMC59XX0GVW3R2STYVTXW2A_de494676",
+        "slots": {
+          "reason_per_stage": { "regression": "no-comparable-baseline" },
+          "run_reference": "01KXMC59XX0GVW3R2STYVTXW2A",
+          "unavailable_stages": ["regression"]
+        },
+        "summary": "Failing tests but downstream analysis incomplete: regression (no-comparable-baseline).",
+        "evidence_citations": [ "…run_reference, elided…" ]
       }
-      // …3 more investigate_location recommendations…
     ],
-    "run_reference": { "created_at": 1782370297316, "run_id": "01KVYRRSF48RMYV84MTB4XQ6P9", "schema_version": 1 },
-    "stage_eligibility": { "coverage": "available", "localization": "sbfl_per_test", "regression": "available", "replay": "not_run" }
+    "run_reference": { "created_at": 1784169015229, "run_id": "01KXMC59XX0GVW3R2STYVTXW2A", "schema_version": 1 },
+    "stage_eligibility": { "coverage": "available", "localization": "sbfl_per_test", "regression": "unavailable", "replay": "not_run" }
   },
   "errors": [],
   "ok": true,
@@ -293,11 +304,17 @@ Each citation has a `kind` discriminator. The closed `kind` set is
 }
 ```
 
-Exit code: **3** (`ok: true`). Five `investigate_location` (priority 2)
-recommendations. The array is **not** score-ordered — `recommendations[0]`
-is `add`@2 (rank 2, `score_normalized: 0.0`); the culprit `subtract`@6
-(rank 1, `score_normalized: 1.0`) is selected by `slots.rank` /
-`score_normalized`, per the routing tree above.
+Exit code: **3** (`ok: true`). Three recommendations: two
+`investigate_location` (priority 2) — the culprit `subtract`@6 and its
+failing test `test_subtract`@13, both rank 1 (`score_normalized: 1.0`,
+tied) — followed by one `unavailable_analysis` (priority 6), because this
+first run of the target has no regression baseline yet
+(`stage_eligibility.regression: "unavailable"`). Zero-score locations
+(e.g. `add`, which no failing test exercises) are filtered out of the
+findings entirely, so they never surface as recommendations. Route by
+`category` then `priority`, and within a location-bearing category rank by
+`slots.rank` (then `score_normalized`) rather than array position — the
+array is not guaranteed to be score-ordered.
 
 ---
 

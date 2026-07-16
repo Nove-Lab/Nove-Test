@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import Annotated, Any, Callable, NoReturn
+from typing import Annotated, Any, NoReturn
 
 from cyclopts import App, Parameter
 
@@ -21,7 +21,6 @@ from novetest.cli.output import (
     OutputMode,
     apply_no_color,
     emit_envelope,
-    not_implemented_envelope,
     resolve_output_mode,
     run_status_to_ok_exit,
 )
@@ -118,21 +117,6 @@ app = App(
 )
 
 _active_mode: OutputMode = OutputMode.JSON
-
-
-# ---------------------------------------------------------------------------
-# Stub helpers (still used for Phase 1 commands without an orchestration path)
-# ---------------------------------------------------------------------------
-
-
-def _make_stub(command_path: str) -> Callable[..., None]:
-    def _stub(*args: Any, **kwargs: Any) -> None:
-        emit_envelope(not_implemented_envelope(command_path), _active_mode)
-        sys.exit(EXIT_USAGE)
-
-    _stub.__name__ = command_path.replace(".", "_")
-    _stub.__doc__ = f"Stub for {command_path}; not yet implemented."
-    return _stub
 
 
 # ---------------------------------------------------------------------------
@@ -1709,30 +1693,6 @@ def replay_cmd(run_id: str, *, reruns: int = 1, timeout: float = 600.0) -> None:
         _emit_and_exit(_store_corrupt_envelope("replay", str(exc)), EXIT_STORAGE)
     envelope, exit_code = _build_replay_envelope(original_ref, outcome)
     _emit_and_exit(envelope, exit_code)
-
-
-# ---------------------------------------------------------------------------
-# Remaining stubs (not in Phase 1 Run+Memory scope)
-# ---------------------------------------------------------------------------
-
-
-def _register_flat_stub(name: str) -> None:
-    stub = _make_stub(name)
-    app.command(stub, name=name)
-
-
-def _register_group_stub(group: str, verbs: tuple[str, ...]) -> None:
-    sub = App(name=group, help=f"{group} commands (stub - not yet implemented).")
-    app.command(sub)
-    for verb in verbs:
-        stub = _make_stub(f"{group}.{verb}")
-        sub.command(stub, name=verb)
-
-
-# ``compare`` promoted to a real verb above.
-# ``regression`` promoted to a real sub-app above.
-# ``test`` promoted to a real verb (Phase 6 entry).
-# ``replay`` promoted to a real verb above (Phase 5 entry).
 
 
 # ---------------------------------------------------------------------------

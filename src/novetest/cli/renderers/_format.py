@@ -114,12 +114,6 @@ def format_engine_readiness(readiness: Mapping[str, Any]) -> str:
     return f"engine readiness: {state} — {engine_part}"
 
 
-def indent_block(text: str, prefix: str = "  ") -> str:
-    """Prefix every line of a (possibly multi-line) string with ``prefix``."""
-
-    return "\n".join(prefix + line for line in text.split("\n"))
-
-
 def format_table(headers: list[str], rows: list[list[str]]) -> str:
     """Render a left-aligned, space-padded column table.
 
