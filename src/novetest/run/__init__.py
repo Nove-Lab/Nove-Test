@@ -29,7 +29,7 @@ from novetest.run.errors import (
     RunEngineError,
 )
 from novetest.run.normalizer import normalize_native_result
-from novetest.run.readiness import assess_engine_readiness, probe_engine
+from novetest.run.readiness import probe_engine
 from novetest.run.reference import assign_run_reference
 from novetest.run.target_resolver import resolve_test_target
 from novetest.run.types import (
@@ -53,7 +53,6 @@ __all__ = [
     "NativeResult",
     "RunEngineError",
     "TestTarget",
-    "assess_engine_readiness",
     "assign_run_reference",
     "detect_engine_candidates",
     "execute",

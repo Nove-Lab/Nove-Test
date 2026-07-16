@@ -51,7 +51,7 @@ class EngineCandidate:
 
     Produced by `detect_engine_candidates` purely from filesystem markers.
     Whether the candidate is actually usable is decided by
-    `assess_engine_readiness`.
+    `probe_engine`.
     """
 
     ecosystem: str
@@ -61,7 +61,7 @@ class EngineCandidate:
 
 @dataclass(slots=True, frozen=True)
 class EngineReadinessResult:
-    """Output of `assess_engine_readiness`.
+    """Output of `probe_engine` (and the per-engine readiness probes).
 
     ``state`` is one of ``ready`` | ``engine-missing`` | ``engine-misconfigured``.
     ``engine_context`` is populated when a supported adapter was detected

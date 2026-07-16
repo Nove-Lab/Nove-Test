@@ -414,9 +414,10 @@ def test_execute_engine_parameter_is_required_keyword_only() -> None:
     param = inspect.signature(execute).parameters["engine"]
     assert param.kind is inspect.Parameter.KEYWORD_ONLY
     assert param.default is inspect.Parameter.empty
-    # The deleted auto-detect seams must not resurface on the module.
+    # The deleted auto-detect dispatch seam must not resurface on the
+    # module (the first-candidate readiness auto-scan it once paired with
+    # was itself removed from the Run public surface in W2/S12).
     assert not hasattr(engine_module, "select_native_engine")
-    assert not hasattr(engine_module, "assess_engine_readiness")
 
 
 def test_adapter_dispatch_matches_supported_engine_matrix() -> None:
@@ -440,17 +441,11 @@ async def test_execute_with_explicit_engine_skips_detection(
     """`execute(engine=(eco, name))` must not detect: no marker scan runs
     on the pinned path. With `probe_engine` stubbed at the engine seam,
     any surviving detection would have to reach the readiness module's
-    bound scan seams (`detect_engine_candidates` /
-    `assess_engine_readiness`) — both are bombed. Readiness is probed for
-    exactly the supplied pair and its ready context (version included)
-    feeds dispatch.
+    bound scan seam (`detect_engine_candidates`) — which is bombed.
+    Readiness is probed for exactly the supplied pair and its ready
+    context (version included) feeds dispatch.
     """
 
-    monkeypatch.setattr(
-        readiness_module,
-        "assess_engine_readiness",
-        _bomb("assess_engine_readiness"),
-    )
     monkeypatch.setattr(
         readiness_module,
         "detect_engine_candidates",

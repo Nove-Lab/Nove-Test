@@ -10,7 +10,7 @@ consolidates one passing test and one (intentionally) failing test.
 
 A `go test -json` Run loop with the `go test` Native Engine:
 
-- `assess_engine_readiness` should classify this workspace as `ready` once
+- `probe_engine(<this dir>, "go", "go-test")` should classify this workspace as `ready` once
   `go` is on `PATH` (no dependency-install step needed; `go test` resolves
   the standard library only).
 - `novetest run` should detect the failing case and emit a Run Record with

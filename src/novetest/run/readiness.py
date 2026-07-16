@@ -7,12 +7,11 @@ Workflow per `design/interace-contract/run.md` §1 + `design/workflows/run.md`:
    is the only ordering authority (decision
    `2026-07-03-engine-selection-policy.md` §"Kills the two-priority-lists
    latent bug by design").
-2. `assess_engine_readiness` probes the FIRST candidate — the canonical
-   winner of the marker table (dispatch itself is pin-driven through
-   `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict).
-   `probe_engine` probes ONE explicitly named engine instead (the store
-   pin, a transient ``--engine`` override, or init's per-candidate
-   readiness pass). Per-engine, the probe does a deeper check:
+2. `probe_engine` probes ONE explicitly named engine (the store pin, a
+   transient ``--engine`` override, or init's per-candidate readiness
+   pass over `detect_engine_candidates`); dispatch itself is pin-driven
+   through `engine.py`'s `_ADAPTER_ENTRY_POINTS` dict. Per-engine, the
+   probe does a deeper check:
    - pytest: pytest config present + pytest + pytest-json-report importable
      from the resolved interpreter.
    - jest: ``node`` on PATH + jest declared in ``package.json``
@@ -59,36 +58,6 @@ from novetest.run.types import (
     NativeEngineContext,
 )
 from novetest.utils.asyncio_subprocess import run_subprocess
-
-
-async def assess_engine_readiness(project_workspace: Path) -> EngineReadinessResult:
-    """Decide whether ``project_workspace`` is ready for a Native Engine run.
-
-    Returns one of three states:
-    - ``ready``: a supported engine adapter applies and its tooling resolves.
-    - ``engine-missing``: no supported engine adapter applies (or the only
-      adapter that applies has no actual engine configuration in the
-      workspace — e.g. a Python project without a pytest setup).
-    - ``engine-misconfigured``: a supported engine applies but its required
-      tooling is unavailable (e.g. pytest not importable from the resolved
-      interpreter, ``pytest-json-report`` plugin missing).
-
-    Polyglot disambiguation: the first candidate in canonical table order
-    wins — derived from the same `engine_selector._ENGINE_MARKER_TABLE`
-    that orders detection everywhere (dispatch runs the pinned pair via
-    `engine.py`'s `_ADAPTER_ENTRY_POINTS`), so readiness and dispatch
-    cannot disagree.
-    """
-
-    candidates = detect_engine_candidates(project_workspace)
-    if not candidates:
-        return EngineReadinessResult(
-            state="engine-missing",
-            engine_context=None,
-            evidence=(),
-            issues=("no supported (ecosystem, native engine) pair detected in workspace",),
-        )
-    return await _probe_candidate(project_workspace, candidates[0])
 
 
 async def probe_engine(
@@ -1093,9 +1062,9 @@ async def _probe_dotnet_sdk_version(workspace: Path) -> str | None:
 # Per-engine readiness probes, keyed by the supported (ecosystem,
 # engine_name) pairs. Deliberately UNORDERED (a dict, not a list):
 # disambiguation order lives solely in `engine_selector._ENGINE_MARKER_TABLE`
-# — `assess_engine_readiness` takes the first detected candidate and this
-# registry only answers "which probe implements that pair". The divergence
-# guard in `tests/unit/run/test_engine_selector.py` pins registry keys ==
+# — `probe_engine` targets one named pair and this registry only answers
+# "which probe implements that pair". The divergence guard in
+# `tests/unit/run/test_engine_selector.py` pins registry keys ==
 # `list_supported_engine_pairs()`.
 _READINESS_PROBES: dict[
     tuple[str, str],

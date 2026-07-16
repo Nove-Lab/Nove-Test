@@ -4,7 +4,7 @@ Pytest-based fixture project containing one intentional bug, used to validate No
 
 ## What this fixture validates
 
-- `assess_engine_readiness` should classify this workspace as `ready` with pytest detected.
+- `probe_engine(<this dir>, "python", "pytest")` should classify this workspace as `ready` with pytest detected.
 - `novetest run tests/` should complete with a non-zero native pytest exit code but a successful Nove Test envelope (the run was executed and observed — the failure is in the SuT, not in Nove Test).
 - The persisted Run Record must capture the failing `Test Result` with:
   - `nodeid` resolving to `tests/test_counter.py::test_count_up_to_includes_endpoint`

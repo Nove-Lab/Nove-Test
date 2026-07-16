@@ -6,7 +6,7 @@ Minimal pytest-based fixture project used by Nove Test as software under test.
 
 A clean happy-path Run + Memory loop with the pytest Native Engine:
 
-- `assess_engine_readiness` should classify this workspace as `ready` with pytest detected.
+- `probe_engine(<this dir>, "python", "pytest")` should classify this workspace as `ready` with pytest detected.
 - `novetest run tests/` should succeed: 3 passing tests, no failures.
 - A Run Record should be persisted under `.novetest/memory/runs/.../record.json` with a stable Run Reference; native artifacts under `.novetest/run/artifacts/.../`.
 - `novetest memory list` / `memory show` should return this run with the derived-fact availability flags all set to `false`.

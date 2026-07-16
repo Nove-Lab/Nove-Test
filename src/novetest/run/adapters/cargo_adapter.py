@@ -378,16 +378,23 @@ async def run_cargo(
             failure_path.write_text("".join(buffer), encoding="utf-8")
             failure_logs[name] = str(failure_path.relative_to(artifact_dir))
 
-    # Build-failure detection.
+    # Build-failure detection (RUN-05).
     #
     # cargo can fail to compile before any test runs. Detection: "no
     # `started` event for any test AND non-zero returncode" → typed
-    # `unparseable-output`. Skip in coverage mode: `cargo llvm-cov` may
-    # consume stdout for its own bookkeeping in some versions, leaving
-    # us with no parseable events even on successful runs. The
-    # `coverage_path` existence check below catches actual coverage
-    # failures more reliably in that mode.
-    if not collect_coverage and not saw_test_started and result.returncode != 0:
+    # `unparseable-output`. This runs in BOTH modes: a coverage-mode
+    # compile failure has the same signature (no `started` event, non-zero
+    # exit) and must be diagnosed as a build failure, NOT deferred to the
+    # `coverage_path`-absent branch below — that branch would mis-headline
+    # a source compile error as "cargo llvm-cov did not write the LCOV
+    # file", sending the consumer chasing llvm-cov setup instead of the
+    # compile error. The `returncode != 0` guard already excludes a
+    # *successful* coverage run whose stdout `cargo llvm-cov` consumed for
+    # its own bookkeeping (rc == 0 → not a build failure); the genuine
+    # coverage-artifact-absence case (tests started, or rc == 0 with no
+    # lcov) is reserved for the `coverage_path` check further down.
+    mode_label = "llvm-cov nextest" if collect_coverage else "nextest"
+    if not saw_test_started and result.returncode != 0:
         stderr_text = result.stderr.decode("utf-8", errors="replace")
         stdout_text = result.stdout.decode("utf-8", errors="replace")
         detail_source = stderr_text if stderr_text else stdout_text
@@ -396,10 +403,12 @@ async def run_cargo(
         # the typed error guides root-cause analysis to the right
         # spot. Falls through to the generic ``unparseable-output``
         # branch for true compile errors, which never reference the
-        # env-var name.
+        # env-var name. ``mode_label`` names the actual spawn path (plain
+        # vs llvm-cov) so the coverage-mode message stays accurate now
+        # that this block runs in both modes.
         if _NEXTEST_LIBTEST_JSON_ENV_LITERAL in stderr_text:
             raise _libtest_json_env_misconfigured_error(
-                mode="nextest",
+                mode=mode_label,
                 returncode=result.returncode,
                 stderr_tail=detail_source[-400:],
             )

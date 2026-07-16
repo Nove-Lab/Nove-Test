@@ -1,4 +1,4 @@
-"""Unit tests for the JUnit branch of `assess_engine_readiness`.
+"""Unit tests for the JUnit branch of `probe_engine`.
 
 Covers the brief §5 + §10 doctor probe table for the JUnit path:
 - Missing JDK / Maven / Gradle → `engine-misconfigured`.
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from novetest.run.readiness import assess_engine_readiness
+from novetest.run.readiness import probe_engine
 
 
 _SKIP_IF_WINDOWS = pytest.mark.skipif(
@@ -76,7 +76,7 @@ async def test_ready_when_java_and_mvn_present(
         "novetest.run.readiness.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(maven_workspace)
+    result = await probe_engine(maven_workspace, "java", "junit")
     assert result.state == "ready"
     assert result.engine_context is not None
     assert result.engine_context.ecosystem == "java"
@@ -93,7 +93,7 @@ async def test_missing_jdk(
         "novetest.run.readiness.shutil.which",
         lambda name: None if name == "java" else f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(maven_workspace)
+    result = await probe_engine(maven_workspace, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("java" in issue for issue in result.issues)
 
@@ -106,7 +106,7 @@ async def test_missing_mvn(
         "novetest.run.readiness.shutil.which",
         lambda name: None if name == "mvn" else f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(maven_workspace)
+    result = await probe_engine(maven_workspace, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("mvn" in issue.lower() for issue in result.issues)
 
@@ -126,7 +126,7 @@ async def test_missing_jupiter(
         "novetest.run.readiness.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("Jupiter" in issue or "jupiter" in issue for issue in result.issues)
 
@@ -151,7 +151,7 @@ async def test_junit4_specific_diagnostic(
         "novetest.run.readiness.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("JUnit 4" in issue for issue in result.issues)
 
@@ -174,7 +174,7 @@ async def test_testng_specific_diagnostic(
         "novetest.run.readiness.shutil.which",
         lambda name: f"/usr/bin/{name}",
     )
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("TestNG" in issue for issue in result.issues)
 
@@ -202,7 +202,7 @@ async def test_gradle_wrapper_path(
         return f"/usr/bin/{name}"
 
     monkeypatch.setattr("novetest.run.readiness.shutil.which", fake_which)
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "java", "junit")
     assert result.state == "ready"
     assert result.engine_context is not None
     assert result.engine_context.engine_name == "junit"
@@ -219,6 +219,6 @@ async def test_windows_os_gate(
         lambda name: f"/usr/bin/{name}",
     )
     monkeypatch.setattr("novetest.run.readiness.sys.platform", "win32")
-    result = await assess_engine_readiness(maven_workspace)
+    result = await probe_engine(maven_workspace, "java", "junit")
     assert result.state == "engine-misconfigured"
     assert any("Windows" in issue for issue in result.issues)

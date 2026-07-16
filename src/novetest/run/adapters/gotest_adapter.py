@@ -124,16 +124,28 @@ async def run_gotest(
 
     # `-count=1` disables Go's per-test result cache (§4 edge cases) so a
     # re-invocation of the adapter always re-runs the test bodies.
-    # `-timeout` mirrors the subprocess-level timeout at the engine level
-    # — `go test` will kill long-running tests itself rather than waiting
-    # for our parent to do it.
-    timeout_seconds = int(timeout) if timeout is not None else 600
+    #
+    # RUN-20: go's `-timeout` is set STRICTLY BELOW the subprocess wall
+    # clock (`timeout`, enforced by `run_subprocess`). The two clocks are
+    # not aligned — the subprocess clock starts at spawn and includes the
+    # compile step, while go's `-timeout` only starts once the built test
+    # binary runs. If both used the same value the parent's hard
+    # `proc.kill()` would usually win the race, discarding go's graceful
+    # panic-dump self-termination. A 10% reserve (`int(timeout * 0.9)`,
+    # floored at 1s) gives go the earlier deadline so its diagnosable dump
+    # fires first; the parent kill stays the outer safety belt. When the
+    # caller passes `timeout=None` there is no subprocess wall clock, so
+    # go's timeout is the sole guard and keeps the 600s default.
+    if timeout is not None:
+        go_timeout_seconds = max(1, int(timeout * 0.9))
+    else:
+        go_timeout_seconds = 600
     argv: list[str] = [
         go_path,
         "test",
         "-json",
         "-count=1",
-        f"-timeout={timeout_seconds}s",
+        f"-timeout={go_timeout_seconds}s",
     ]
     if collect_coverage:
         argv.extend(

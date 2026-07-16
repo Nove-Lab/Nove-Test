@@ -2,8 +2,15 @@
 
 Marker-detection tests moved to ``test_engine_selector.py`` when the
 2026-07-03 pin-driven-dispatch slice consolidated detection into
-`engine_selector`. This module covers the probes: `assess_engine_readiness`
-(auto-scan, first canonical candidate) and `probe_engine` (pin-targeted).
+`engine_selector`. This module covers `probe_engine` — pin-targeted
+readiness of one named engine, the surviving public readiness surface
+after W2/S12 removed the zero-caller first-candidate auto-scan.
+Each per-engine probe (ready / engine-missing / engine-misconfigured) is
+exercised through `probe_engine`, which drives the same `_probe_candidate`
+internals the removed auto-scan did. The "no supported engine in the
+workspace" case is covered via `detect_engine_candidates` returning an
+empty candidate set — the signal orchestration's `novetest init` maps to
+`no-engine-detected`.
 """
 
 from __future__ import annotations
@@ -14,28 +21,43 @@ from pathlib import Path
 import pytest
 
 from novetest.run import readiness as readiness_module
+from novetest.run.engine_selector import detect_engine_candidates
 from novetest.run.errors import EngineNotSupportedError
-from novetest.run.readiness import assess_engine_readiness, probe_engine
+from novetest.run.readiness import probe_engine
 
 
 async def test_pytest_basic_is_ready(basic_workspace: Path) -> None:
-    readiness = await assess_engine_readiness(basic_workspace)
+    readiness = await probe_engine(basic_workspace, "python", "pytest")
     assert readiness.state == "ready"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "pytest"
     assert readiness.engine_context.ecosystem == "python"
 
 
-async def test_empty_no_engine_is_missing(empty_workspace: Path) -> None:
-    readiness = await assess_engine_readiness(empty_workspace)
+async def test_empty_no_engine_workspace_probes_missing(
+    empty_workspace: Path,
+) -> None:
+    """The empty-no-engine fixture carries a bare ``pyproject.toml`` — a
+    generic python marker that makes pytest the sole DETECTED candidate,
+    but with no pytest actually configured/importable the pytest probe
+    reports ``engine-missing`` (context None). This is the exact scenario
+    the removed first-candidate auto-scan covered by probing candidate[0];
+    it is preserved here by probing the detected pair directly."""
+
+    assert [
+        (c.ecosystem, c.engine_name) for c in detect_engine_candidates(empty_workspace)
+    ] == [("python", "pytest")]
+
+    readiness = await probe_engine(empty_workspace, "python", "pytest")
     assert readiness.state == "engine-missing"
     assert readiness.engine_context is None
 
 
-async def test_truly_unknown_workspace_is_missing(tmp_path: Path) -> None:
-    readiness = await assess_engine_readiness(tmp_path)
-    assert readiness.state == "engine-missing"
-    assert readiness.engine_context is None
+async def test_truly_unknown_workspace_has_no_candidates(tmp_path: Path) -> None:
+    """A bare directory with no markers at all → empty candidate set (the
+    signal orchestration's `novetest init` maps to `no-engine-detected`)."""
+
+    assert detect_engine_candidates(tmp_path) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +103,7 @@ async def test_jest_workspace_without_node_is_engine_missing(
     )
     _patch_node_on_path(monkeypatch, available=False)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "javascript-typescript", "jest")
     assert readiness.state == "engine-missing"
     assert readiness.engine_context is None
     assert any("Node.js" in issue for issue in readiness.issues)
@@ -95,7 +117,7 @@ async def test_jest_workspace_with_node_but_no_jest_dep_is_misconfigured(
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     _patch_node_on_path(monkeypatch, available=True)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "javascript-typescript", "jest")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "jest"
@@ -117,7 +139,7 @@ async def test_jest_workspace_declared_but_not_installed_is_misconfigured(
     )
     _patch_node_on_path(monkeypatch, available=True)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "javascript-typescript", "jest")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "jest"
@@ -145,7 +167,7 @@ async def test_jest_workspace_with_node_and_local_bin_is_ready(
     )
     _patch_node_on_path(monkeypatch, available=True)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "javascript-typescript", "jest")
     assert readiness.state == "ready"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "jest"
@@ -209,7 +231,7 @@ async def test_go_workspace_without_go_on_path_is_engine_missing(
     (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
     _patch_go_on_path(monkeypatch, available=False)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "go", "go-test")
     assert readiness.state == "engine-missing"
     assert readiness.engine_context is None
     assert any("https://go.dev/dl/" in issue for issue in readiness.issues)
@@ -224,7 +246,7 @@ async def test_go_workspace_with_go_on_path_is_ready(
     _patch_go_on_path(monkeypatch, available=True)
     _patch_go_version_subprocess(monkeypatch)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "go", "go-test")
     assert readiness.state == "ready"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "go-test"
@@ -249,7 +271,7 @@ async def test_go_workspace_with_failing_go_version_is_misconfigured(
         stderr_bytes=b"go: cannot find GOROOT\n",
     )
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "go", "go-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "go-test"
@@ -331,7 +353,7 @@ async def test_cargo_workspace_without_cargo_on_path_is_engine_missing(
     )
     _patch_cargo_on_path(monkeypatch, available=False)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "engine-missing"
     assert readiness.engine_context is None
     assert any("https://rustup.rs" in issue for issue in readiness.issues)
@@ -359,7 +381,7 @@ async def test_cargo_workspace_without_nextest_is_misconfigured(
         nextest_stderr=b"error: no such command: `nextest`\n",
     )
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "cargo-test"
@@ -380,7 +402,7 @@ async def test_cargo_workspace_with_cargo_and_nextest_is_ready(
     _patch_cargo_on_path(monkeypatch, available=True)
     _patch_cargo_subprocesses(monkeypatch)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "ready"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "cargo-test"
@@ -410,7 +432,7 @@ async def test_cargo_workspace_with_failing_cargo_version_is_misconfigured(
         cargo_stderr=b"cargo: cannot find rustc\n",
     )
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "cargo-test"
@@ -423,8 +445,8 @@ async def test_cargo_workspace_with_failing_cargo_version_is_misconfigured(
 # `shutil.which` can pass and the binary then vanish / lose its exec bit
 # before the probe's spawn — `run_subprocess` raises FileNotFoundError.
 # Every probe must degrade to a readiness RESULT (the dotnet probe's
-# pre-existing posture), never crash `assess_engine_readiness` with an
-# uncaught exception.
+# pre-existing posture), never crash `probe_engine` with an uncaught
+# exception.
 # ---------------------------------------------------------------------------
 
 
@@ -459,7 +481,7 @@ async def test_pytest_probe_exec_failure_degrades_to_misconfigured(
         monkeypatch, FileNotFoundError(2, "No such file or directory")
     )
 
-    readiness = await assess_engine_readiness(basic_workspace)
+    readiness = await probe_engine(basic_workspace, "python", "pytest")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "pytest"
@@ -478,7 +500,7 @@ async def test_go_probe_exec_failure_degrades_to_misconfigured(
         monkeypatch, FileNotFoundError(2, "No such file or directory: 'go'")
     )
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "go", "go-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "go-test"
@@ -500,7 +522,7 @@ async def test_cargo_nextest_probe_exec_failure_degrades_to_misconfigured(
         monkeypatch, PermissionError(13, "Permission denied: 'cargo'")
     )
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "cargo-test"
@@ -540,7 +562,7 @@ async def test_cargo_version_probe_exec_failure_degrades_to_misconfigured(
 
     monkeypatch.setattr(readiness_module, "run_subprocess", nextest_ok_then_raise)
 
-    readiness = await assess_engine_readiness(tmp_path)
+    readiness = await probe_engine(tmp_path, "rust", "cargo-test")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
     assert readiness.engine_context.engine_name == "cargo-test"
@@ -548,43 +570,47 @@ async def test_cargo_version_probe_exec_failure_degrades_to_misconfigured(
 
 
 # ---------------------------------------------------------------------------
-# Polyglot disambiguation (2026-07-03 pin-driven-dispatch slice)
+# Detection ↔ probe coherence (2026-07-03 pin-driven-dispatch slice)
 #
-# `assess_engine_readiness` probes the FIRST candidate in canonical table
-# order — the same `engine_selector._ENGINE_MARKER_TABLE` order that
-# `detect_engine_candidates` reports (and that a pin created from
-# detection dispatches), so readiness and dispatch cannot disagree
-# (question 2026-07-02 §4.1).
+# Detection order is the sole ordering SSoT (`engine_selector._ENGINE_MARKER_TABLE`),
+# and pinned execution probes exactly the named pair via `probe_engine`, so
+# readiness and dispatch structurally cannot disagree on a polyglot workspace
+# (question 2026-07-02 §4.1). Pre-W2/S12 a first-candidate auto-scan probed the
+# first candidate; that scan is gone, but the ordering guarantee it leaned on
+# survives in `detect_engine_candidates`.
 # ---------------------------------------------------------------------------
 
 
-async def test_assess_and_detection_agree_on_pom_plus_gomod_workspace(
+async def test_detection_and_probe_agree_on_pom_plus_gomod_workspace(
     tmp_path: Path,
 ) -> None:
-    """The §4.1 mismatch workspace: readiness must probe what detection ranks
-    first (the pair a pin created from detection would dispatch).
+    """The §4.1 mismatch workspace: detection ranks java/junit first (the
+    pair a pin created from detection would dispatch), and probing THAT
+    pair classifies it — never a go-test probe result.
 
     Pre-fix, readiness's hand-ordered chain probed go (rank 3) while the
-    selector dispatched java (rank 3 in ITS list) — a `pom.xml`+`go.mod`
-    workspace could have Go readiness-verified but JUnit dispatched. Now
-    both consume the selector table, so readiness names junit here on any
-    host: the bare pom.xml has no Jupiter (and the host may lack a JDK,
-    Maven, or be Windows-OS-gated), so every path lands
-    ``engine-misconfigured`` with the junit context — never a go-test
-    probe result.
+    selector dispatched java — a `pom.xml`+`go.mod` workspace could have
+    Go readiness-verified but JUnit dispatched. Now detection is the sole
+    ordering SSoT and pinned execution probes exactly the named pair via
+    `probe_engine`, so the two structurally cannot disagree. The bare
+    pom.xml has no Jupiter (and the host may lack a JDK, Maven, or be
+    Windows-OS-gated), so probing java/junit lands ``engine-misconfigured``
+    with the junit context.
     """
-
-    from novetest.run.engine_selector import detect_engine_candidates
 
     (tmp_path / "pom.xml").write_text("<project/>", encoding="utf-8")
     (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
 
-    readiness = await assess_engine_readiness(tmp_path)
+    first = detect_engine_candidates(tmp_path)[0]
+    assert (first.ecosystem, first.engine_name) == ("java", "junit")
+
+    readiness = await probe_engine(tmp_path, "java", "junit")
     assert readiness.state == "engine-misconfigured"
     assert readiness.engine_context is not None
-    probed = (readiness.engine_context.ecosystem, readiness.engine_context.engine_name)
-
-    first = detect_engine_candidates(tmp_path)[0]
+    probed = (
+        readiness.engine_context.ecosystem,
+        readiness.engine_context.engine_name,
+    )
     assert probed == (first.ecosystem, first.engine_name) == ("java", "junit")
 
 
@@ -605,8 +631,6 @@ async def test_probe_engine_tooling_only_package_json_is_candidate_but_not_ready
     defined over. `novetest init` must not count this workspace's jest
     candidate toward `engine-ambiguous`.
     """
-
-    from novetest.run.engine_selector import detect_engine_candidates
 
     (tmp_path / "package.json").write_text(
         json.dumps({"devDependencies": {"prettier": "^3.0.0"}}),
@@ -630,7 +654,7 @@ async def test_probe_engine_targets_named_engine_not_first_candidate(
 ) -> None:
     """`probe_engine` replaces scan-until-first-success for pinned flows:
     on a python+go workspace, probing the go pin must run the go probe —
-    python (the higher-priority candidate `assess_engine_readiness` would
+    python (the higher-priority candidate a first-candidate auto-scan would
     take) is not consulted at all.
     """
 

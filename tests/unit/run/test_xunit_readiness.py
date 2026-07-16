@@ -1,4 +1,4 @@
-"""Unit tests for the xunit / .NET branch of ``assess_engine_readiness``.
+"""Unit tests for the xunit / .NET branch of ``probe_engine``.
 
 Covers the brief §3.1 doctor probe table for the xunit path:
 - Missing dotnet → ``engine-missing``.
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from novetest.run.readiness import assess_engine_readiness
+from novetest.run.readiness import probe_engine
 
 
 _CSPROJ_V2 = """\
@@ -148,7 +148,7 @@ async def test_v2_workspace_with_dotnet_returns_ready(
     stub_dotnet_version: None,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(workspace_with_xunit_v2)
+    result = await probe_engine(workspace_with_xunit_v2, "dotnet", "xunit")
     assert result.state == "ready"
     assert result.engine_context is not None
     assert result.engine_context.ecosystem == "dotnet"
@@ -167,7 +167,7 @@ async def test_v3_workspace_with_dotnet_returns_ready(
     are misconfigured (no tests run) but JUnit Jupiter is ready."""
 
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(workspace_with_xunit_v3)
+    result = await probe_engine(workspace_with_xunit_v3, "dotnet", "xunit")
     assert result.state == "ready"
     assert result.engine_context is not None
     assert result.engine_context.engine_name == "xunit"
@@ -183,7 +183,7 @@ async def test_dotnet_missing_returns_engine_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: None)
-    result = await assess_engine_readiness(workspace_with_xunit_v2)
+    result = await probe_engine(workspace_with_xunit_v2, "dotnet", "xunit")
     assert result.state == "engine-missing"
     assert result.engine_context is None
     assert any("dotnet" in issue for issue in result.issues)
@@ -207,7 +207,7 @@ async def test_csproj_gone_at_assessment_time_returns_misconfigured(
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     # Add a .sln to trigger candidate detection.
     (tmp_path / "MyLib.sln").write_text("# minimal", encoding="utf-8")
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "dotnet", "xunit")
     assert result.state == "engine-misconfigured"
     assert result.engine_context is not None
     assert result.engine_context.engine_name == "xunit"
@@ -219,7 +219,7 @@ async def test_mstest_diagnostic(
     stub_dotnet_version: None,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(workspace_with_mstest)
+    result = await probe_engine(workspace_with_mstest, "dotnet", "xunit")
     assert result.state == "engine-misconfigured"
     assert any("MSTest" in issue for issue in result.issues)
     assert any("xUnit v2" in issue for issue in result.issues)
@@ -231,7 +231,7 @@ async def test_nunit_diagnostic(
     stub_dotnet_version: None,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(workspace_with_nunit)
+    result = await probe_engine(workspace_with_nunit, "dotnet", "xunit")
     assert result.state == "engine-misconfigured"
     assert any("NUnit" in issue for issue in result.issues)
 
@@ -242,7 +242,7 @@ async def test_neither_xunit_nor_mstest_nor_nunit_diagnostic(
     stub_dotnet_version: None,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(workspace_with_neither)
+    result = await probe_engine(workspace_with_neither, "dotnet", "xunit")
     assert result.state == "engine-misconfigured"
     assert any("xUnit is not declared" in issue for issue in result.issues)
 
@@ -287,7 +287,7 @@ async def test_run14_readiness_probes_the_adapter_chosen_specs_csproj(
     assert adapter_chosen.name == "A.Specs.csproj"
 
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "dotnet", "xunit")
 
     assert result.state == "engine-misconfigured"
     # The diagnostic names the adapter's choice — proof readiness read
@@ -326,7 +326,7 @@ async def test_run14_reverse_specs_only_xunit_workspace_is_ready(
     assert adapter_chosen.name == "Zeta.Specs.csproj"
 
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-    result = await assess_engine_readiness(tmp_path)
+    result = await probe_engine(tmp_path, "dotnet", "xunit")
 
     assert result.state == "ready", (
         f"readiness diverged from the adapter: the adapter runs "
@@ -365,7 +365,7 @@ async def test_sdk_version_none_when_dotnet_version_fails(
         )
 
     monkeypatch.setattr("novetest.run.readiness.run_subprocess", stub)
-    result = await assess_engine_readiness(workspace_with_xunit_v2)
+    result = await probe_engine(workspace_with_xunit_v2, "dotnet", "xunit")
     # Readiness stays green; engine_version is None.
     assert result.state == "ready"
     assert result.engine_context is not None

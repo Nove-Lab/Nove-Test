@@ -4,7 +4,7 @@ A project workspace with no detectable native test engine. Used to validate the 
 
 ## What this fixture validates
 
-- `assess_engine_readiness(<this dir>)` must return state `engine-missing` — no supported `(ecosystem, Native Engine)` pair from `run/list_supported_engine_pairs` is detectable.
+- `probe_engine(<this dir>, "python", "pytest")` must return state `engine-missing` — the workspace has no *usable* supported `(ecosystem, Native Engine)` pair from `run/list_supported_engine_pairs` (the bare `pyproject.toml` marks a generic Python project but no pytest is configured/importable, so the pytest probe reports `engine-missing`).
   - The bare `pyproject.toml` is a generic Python project marker, **not** a pytest marker: there is no `pytest` dependency, no `[tool.pytest.ini_options]`, no `pytest.ini` / `tox.ini`, no test files, no `conftest.py`.
   - No `package.json` (jest), no `pom.xml` / `build.gradle` (JUnit), no `go.mod` (`go test`), no `Cargo.toml` (`cargo test`), no `*.csproj` (xUnit / `dotnet test`).
 - `novetest init` here must produce `storeState: ready` (the Project Store is created — readiness is informational) **plus** `engine_readiness: engine-missing` in the envelope. No native engine is installed or downloaded as a side effect.

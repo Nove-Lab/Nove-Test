@@ -7,7 +7,8 @@ Parallel to `pytest-basic` for the JavaScript / TypeScript ecosystem.
 
 A clean happy-path Run loop with the jest Native Engine:
 
-- `assess_engine_readiness` should classify this workspace as `ready` once
+- `probe_engine(<this dir>, "javascript-typescript", "jest")` should classify
+  this workspace as `ready` once
   `node` is on `PATH` AND `node_modules/.bin/jest` is present (i.e. after
   a one-time `npm install`). Before `npm install` lands, readiness is
   `engine-misconfigured` (jest declared in `package.json` but not installed

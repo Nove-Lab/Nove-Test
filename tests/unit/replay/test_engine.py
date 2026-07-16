@@ -7,8 +7,8 @@ pin the engine's COMPOSITION contract without spawning any native engine:
 - **ANA-13 (readiness gate):** ``replay_run`` gates on exactly the RECORDED
   engine via ``run/probe_engine(workspace, ecosystem, engine_name)`` — never
   on the workspace's first auto-detected candidate. In a polyglot workspace
-  the two can differ; the pre-S38 ``assess_engine_readiness(workspace)`` call
-  probed ``detect_engine_candidates(...)[0]`` and mis-gated both directions.
+  the two can differ; the pre-S38 first-candidate auto-scan probed
+  ``detect_engine_candidates(...)[0]`` and mis-gated both directions.
 - **ANA-14 (rerun accounting, Q2-A):** a rerun that raises
   ``AdapterInvocationError`` is counted as an ERRORED ATTEMPT
   (``CrashedRerun`` in the classifier's input set) instead of being silently

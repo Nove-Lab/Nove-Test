@@ -4,8 +4,8 @@ This module owns THE single source of truth for engine detection: the
 ordered marker/priority table `_ENGINE_MARKER_TABLE`. Everything that
 needs to know "what markers identify each ecosystem, and who wins on a
 polyglot workspace" derives from that one constant —
-`detect_engine_candidates`, and through it the disambiguation inside
-`readiness.assess_engine_readiness`. The supported PAIR matrix itself
+`detect_engine_candidates`, and through it the per-candidate readiness in
+`readiness.probe_engine`. The supported PAIR matrix itself
 lives one layer down in `models.engine_matrix.SUPPORTED_ENGINE_PAIRS`
 (XCT-13 / S43); `list_supported_engine_pairs` returns that domain
 constant since S11 collapsed the run-side derived copy, and divergence
@@ -79,8 +79,9 @@ def detect_engine_candidates(project_workspace: Path) -> tuple[EngineCandidate, 
     `_ADAPTER_ENTRY_POINTS` dispatch runs). The caller decides how to
     disambiguate: `novetest init` treats ≥2 READY candidates as
     `engine-ambiguous` (decision 2026-07-03-engine-selection-policy D1,
-    with per-candidate readiness via `readiness.probe_engine`), while
-    `assess_engine_readiness` probes the first candidate.
+    with per-candidate readiness via `readiness.probe_engine`); pinned /
+    ``--engine``-overridden executions probe exactly the named pair via
+    `readiness.probe_engine`.
     """
 
     candidates: list[EngineCandidate] = []

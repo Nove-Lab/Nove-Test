@@ -12,8 +12,8 @@ failing test, and one integration-binary test.
 A `cargo nextest run --message-format=libtest-json` loop with the
 `cargo-test` Native Engine:
 
-- `assess_engine_readiness` should classify this workspace as `ready`
-  once `cargo` + `cargo-nextest` are on `PATH` (no project-side
+- `probe_engine(<this dir>, "rust", "cargo-test")` should classify this
+  workspace as `ready` once `cargo` + `cargo-nextest` are on `PATH` (no project-side
   dependency install needed; the crate has zero `[dependencies]`).
 - `novetest run` should detect the failing case and emit a Run Record
   with `summary_counts.passed=2` and `summary_counts.failed=1` (one

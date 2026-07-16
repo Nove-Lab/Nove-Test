@@ -123,10 +123,10 @@ async def run_junit(
        ``run_subprocess``, parse the resulting JUnit XML directory, and
        return a ``NativeResult`` per ``task brief §1.4``.
 
-    The readiness gate (`assess_engine_readiness`) is expected to have
-    ALREADY classified the workspace as ``ready`` before this function is
-    called. The adapter itself only re-detects the build tool because
-    that detail is needed for the argv composition.
+    The readiness gate (`probe_engine` on the pinned pair) is expected to
+    have ALREADY classified the workspace as ``ready`` before this
+    function is called. The adapter itself only re-detects the build tool
+    because that detail is needed for the argv composition.
     """
 
     # RUN-10 (Windows launcher injection): the ``-Dtest=<expr>`` (Maven)

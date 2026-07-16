@@ -1691,9 +1691,10 @@ class TestPreRestore:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Direct invocation of the helper MUST call run_subprocess with
-        the canonical 3-token argv + 300s timeout. Locking the timeout
-        prevents accidental regressions where a short timeout would
-        truncate cold-NuGet-cache restores on fresh hosts."""
+        the canonical 3-token argv, the caller-clamped timeout (RUN-08),
+        and the sanitized child env (RUN-18). ``timeout=None`` preserves
+        the 300s default so a cold-NuGet-cache restore is not truncated
+        when the caller sets no bound; a small caller timeout clamps it."""
 
         captured_args: list[Any] = []
         captured_kwargs: list[dict[str, Any]] = []
@@ -1702,19 +1703,191 @@ class TestPreRestore:
             argv: Any, *, cwd: Any, env: Any | None = None, timeout: float | None = None,
         ) -> SubprocessResult:
             captured_args.append(list(argv))
-            captured_kwargs.append({"cwd": cwd, "timeout": timeout})
+            captured_kwargs.append({"cwd": cwd, "env": env, "timeout": timeout})
             return SubprocessResult(returncode=0, stdout=b"", stderr=b"", timed_out=False)
 
         monkeypatch.setattr(adapter, "run_subprocess", capture_stub)
         csproj_path = tmp_path / "Tests" / "Tests.csproj"
         csproj_path.parent.mkdir(parents=True, exist_ok=True)
         csproj_path.write_text("<Project/>")
+        child_env = adapter._build_child_env()
+
+        # timeout=None → the 300s default stands (min(300, unbounded)).
         await _ensure_csproj_restored(
-            "/usr/bin/dotnet", csproj_path, tmp_path
+            "/usr/bin/dotnet", csproj_path, tmp_path, env=child_env, timeout=None
         )
         assert captured_args == [["/usr/bin/dotnet", "restore", str(csproj_path)]]
         assert captured_kwargs[0]["cwd"] == tmp_path
         assert captured_kwargs[0]["timeout"] == 300.0
+        # RUN-18: the sanitized child env reaches the seam.
+        assert captured_kwargs[0]["env"]["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
+
+        # RUN-08: a small caller timeout clamps the restore budget to it.
+        captured_kwargs.clear()
+        await _ensure_csproj_restored(
+            "/usr/bin/dotnet", csproj_path, tmp_path, env=child_env, timeout=12.0
+        )
+        assert captured_kwargs[0]["timeout"] == 12.0
+
+
+# ---------------------------------------------------------------------------
+# TestPreflightBudgetAndEnv (RUN-08 + RUN-18 — W2/S12)
+# ---------------------------------------------------------------------------
+
+
+class TestPreflightBudgetAndEnv:
+    """The coverage pre-flight subprocesses (restore / coverlet probe /
+    SDK-version read) must clamp their budgets to the caller's ``timeout``
+    (RUN-08) and carry the sanitized child env (RUN-18), exercised through
+    the real ``run_xunit`` coverage path so the seam wiring is pinned."""
+
+    _COVERLET_JSON = (
+        b'{"version":1,"parameters":"","projects":[{"path":"x.csproj",'
+        b'"frameworks":[{"framework":"net8.0",'
+        b'"topLevelPackages":[{"id":"coverlet.collector",'
+        b'"requestedVersion":"6.0.2","resolvedVersion":"6.0.2"}],'
+        b'"transitivePackages":[]}]}]}'
+    )
+
+    @classmethod
+    def _capture_stub(cls, calls: list[dict[str, Any]]) -> Any:
+        """Route the four coverage-path dotnet calls (restore / list-json /
+        main / version) to canned responses while recording each call's
+        ``env`` + ``timeout`` at the seam."""
+
+        async def stub(
+            argv: Any, *, cwd: Any, env: Any | None = None,
+            timeout: float | None = None,
+        ) -> SubprocessResult:
+            def record(kind: str) -> None:
+                calls.append({"kind": kind, "env": env, "timeout": timeout})
+
+            if (
+                isinstance(argv, (list, tuple))
+                and len(argv) == 2
+                and argv[-1] == "--version"
+            ):
+                record("version")
+                return SubprocessResult(
+                    returncode=0, stdout=b"8.0.421\n", stderr=b"", timed_out=False
+                )
+            if (
+                isinstance(argv, (list, tuple))
+                and len(argv) >= 2
+                and argv[1] == "restore"
+            ):
+                record("restore")
+                return SubprocessResult(
+                    returncode=0, stdout=b"", stderr=b"", timed_out=False
+                )
+            if (
+                isinstance(argv, (list, tuple))
+                and "list" in argv
+                and "package" in argv
+                and "--format" in argv
+            ):
+                record("list-json")
+                return SubprocessResult(
+                    returncode=0, stdout=cls._COVERLET_JSON, stderr=b"", timed_out=False
+                )
+            if (
+                isinstance(argv, (list, tuple))
+                and "list" in argv
+                and "package" in argv
+            ):
+                record("list-tabular")
+                return SubprocessResult(
+                    returncode=0, stdout=b"", stderr=b"", timed_out=False
+                )
+            # main `dotnet test`
+            record("main")
+            results_dir: Path | None = None
+            for i, tok in enumerate(argv):
+                if (
+                    isinstance(tok, str)
+                    and tok == "--results-directory"
+                    and i + 1 < len(argv)
+                ):
+                    results_dir = Path(argv[i + 1])
+                    break
+            if results_dir is not None:
+                results_dir.mkdir(parents=True, exist_ok=True)
+                (results_dir / TRX_FILENAME).write_text(_MINIMAL_TRX, encoding="utf-8")
+                guid_dir = results_dir / "deadbeef-0000-4000-8000-000000000001"
+                guid_dir.mkdir(parents=True, exist_ok=True)
+                (guid_dir / "coverage.cobertura.xml").write_text(
+                    '<?xml version="1.0" encoding="utf-8"?>\n'
+                    '<coverage line-rate="1" lines-covered="2" lines-valid="2">'
+                    '<sources/><packages/></coverage>\n',
+                    encoding="utf-8",
+                )
+            return SubprocessResult(
+                returncode=0, stdout=b"", stderr=b"", timed_out=False
+            )
+
+        return stub
+
+    async def test_preflight_clamps_timeout_and_carries_sanitized_env(
+        self,
+        dotnet_test_basic_coverage_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RUN-08: a small caller ``timeout`` clamps EACH coverage pre-flight
+        budget to ``min(default, caller)`` at the seam — a cold-cache restore
+        can no longer block up to 300s under a 5s caller contract. RUN-18:
+        every pre-flight call carries the sanitized child env.
+
+        A/B: drop the ``_clamp_preflight_timeout`` wrap on the restore (back
+        to a literal 300.0) → the restore-timeout assertion fails; drop
+        ``env=env`` on the restore call → the telemetry-optout assertion
+        fails.
+        """
+
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(adapter, "run_subprocess", self._capture_stub(calls))
+        target = resolve_test_target("", dotnet_test_basic_coverage_workspace)
+        await run_xunit(
+            target, artifact_dir=tmp_path / "art", timeout=5.0, collect_coverage=True
+        )
+
+        by_kind = {c["kind"]: c for c in calls}
+        assert "restore" in by_kind
+        assert "list-json" in by_kind
+        assert "version" in by_kind
+        # RUN-08: each pre-flight budget clamped to min(default, 5.0) == 5.0.
+        assert by_kind["restore"]["timeout"] == 5.0
+        assert by_kind["list-json"]["timeout"] == 5.0
+        assert by_kind["version"]["timeout"] == 5.0
+        # The main `dotnet test` gets the full caller budget verbatim.
+        assert by_kind["main"]["timeout"] == 5.0
+        # RUN-18: the restore (FIRST dotnet call on the coverage path)
+        # carries the sanitized child env.
+        assert by_kind["restore"]["env"]["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
+        assert by_kind["restore"]["env"]["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] == "1"
+        assert by_kind["list-json"]["env"]["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
+        assert by_kind["version"]["env"]["DOTNET_CLI_TELEMETRY_OPTOUT"] == "1"
+
+    async def test_preflight_timeout_none_keeps_hardcoded_defaults(
+        self,
+        dotnet_test_basic_coverage_workspace: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RUN-08: ``timeout=None`` (no caller bound) preserves the historical
+        per-preflight defaults (restore 300 / probe 30 / version 10) — the
+        clamp is ``min(default, caller)`` and a None caller is unbounded."""
+
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(adapter, "run_subprocess", self._capture_stub(calls))
+        target = resolve_test_target("", dotnet_test_basic_coverage_workspace)
+        await run_xunit(
+            target, artifact_dir=tmp_path / "art", timeout=None, collect_coverage=True
+        )
+        by_kind = {c["kind"]: c for c in calls}
+        assert by_kind["restore"]["timeout"] == 300.0
+        assert by_kind["list-json"]["timeout"] == 30.0
+        assert by_kind["version"]["timeout"] == 10.0
 
 
 # ---------------------------------------------------------------------------

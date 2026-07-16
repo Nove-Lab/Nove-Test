@@ -68,7 +68,7 @@ async def replay_run(
     # ``reconstruct_replay_context``). The gate probes exactly the RECORDED
     # engine (``context.engine_context``) — the engine every rerun re-executes
     # with — NOT the workspace's first auto-detected candidate: in a polyglot
-    # workspace the two can differ and ``assess_engine_readiness`` would gate
+    # workspace the two can differ and a first-candidate auto-scan would gate
     # the wrong engine (ANA-13, W2/S38). A missing/misconfigured recorded
     # engine is a hard exit-4 surface — distinct from a runnable engine
     # producing an errored run (which the classifier maps to

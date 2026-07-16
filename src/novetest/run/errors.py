@@ -1,6 +1,6 @@
 """Typed errors surfaced from the Run engine.
 
-`assess_engine_readiness` and `execute` both report adapter-side problems
+`probe_engine` and `execute` both report adapter-side problems
 through the same hierarchy so the CLI can map them to exit-code 4
 (``engine missing/misconfigured``) per
 `design/implementation-plan/foundations.md` §2.

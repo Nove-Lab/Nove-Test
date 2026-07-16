@@ -151,7 +151,7 @@ The **baseline**; see [quick-start.md](./quick-start.md).
   No plugin isolation; workspace `jest.config.js` honored as written.
 - **Coverage:** Istanbul `coverage_json`
   (`--coverage --coverageReporters=json`).
-- **node_id:** `<file>::<ancestors>::<title>`.
+- **node_id:** `<workspace-relative POSIX file>::<ancestors>::<title>`.
 - **Misconfig messages:** no node/npx → `engine-missing`
   `"Node.js (\`node\`/\`npx\`) not found on PATH; install Node.js >=18
   …"`; jest absent → `engine-misconfigured`

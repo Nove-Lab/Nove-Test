@@ -271,10 +271,10 @@ async def run_xunit(
        metadata (xunit_version + coverlet_version + native_exit_code
        provenance, etc).
 
-    The readiness gate (``assess_engine_readiness``) is expected to have
-    classified the workspace as ``ready`` BEFORE this function is called.
-    The adapter re-detects the project minimally because that detail is
-    needed for argv composition.
+    The readiness gate (``probe_engine`` on the pinned pair) is expected
+    to have classified the workspace as ``ready`` BEFORE this function is
+    called. The adapter re-detects the project minimally because that
+    detail is needed for argv composition.
     """
 
     # Defensive resolve: hardens against future callers passing a relative
@@ -368,6 +368,15 @@ async def run_xunit(
             )
         )
 
+    # Deterministic, telemetry-opted-out child env (RUN-18). Built ONCE
+    # here so every dotnet subprocess this adapter spawns — the coverage
+    # pre-flight (restore / coverlet probe), the main ``dotnet test``, and
+    # the SDK-version read — shares the same sanitized env. Passing it to
+    # the pre-flight helpers makes the telemetry opt-out / first-run skip /
+    # NOLOGO settings apply to the FIRST dotnet call on the coverage path
+    # (the restore), not just the main invocation.
+    env = _build_child_env()
+
     # 3. Coverlet version detection (only when coverage requested + xUnit
     # v2). Determines whether to use the per-test template (forward-compat)
     # or the aggregate template (degraded), and surfaces a warning when
@@ -409,9 +418,11 @@ async def run_xunit(
         # ``collect_coverage and not is_xunit_v3``). Non-coverage runs
         # pay nothing extra. The probe itself shares the same gate, so
         # restore-before-probe is the natural composition.
-        await _ensure_csproj_restored(dotnet_path, chosen_csproj, workspace)
+        await _ensure_csproj_restored(
+            dotnet_path, chosen_csproj, workspace, env=env, timeout=timeout
+        )
         coverlet_version = await _probe_coverlet_version(
-            dotnet_path, chosen_csproj, workspace
+            dotnet_path, chosen_csproj, workspace, env=env, timeout=timeout
         )
         if coverlet_version is None:
             coverlet_absent_msg = (
@@ -500,7 +511,6 @@ async def run_xunit(
         target_type=test_target.target_type,
     )
 
-    env = _build_child_env()
     started_ms = int(time.time() * 1000)
     try:
         result = await run_subprocess(
@@ -571,7 +581,9 @@ async def run_xunit(
             coverage_mapping_granularity = "aggregate"
 
     # 8. NativeResult assembly.
-    dotnet_version_str = await _read_dotnet_version(dotnet_path, workspace)
+    dotnet_version_str = await _read_dotnet_version(
+        dotnet_path, workspace, env=env, timeout=timeout
+    )
     summary = _summarize_tests(parsed_tests)
     payload: dict[str, object] = {
         "csproj": str(chosen_csproj.relative_to(workspace))
@@ -768,8 +780,33 @@ def _detect_xunit_resolved_version(csproj_content: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _clamp_preflight_timeout(
+    default_budget: float, caller_timeout: float | None
+) -> float:
+    """Cap a coverage pre-flight subprocess budget by the caller's timeout.
+
+    RUN-08: ``run_xunit``'s ``timeout`` governs the whole invocation, but
+    the coverage pre-flight subprocesses (restore / coverlet probe / SDK
+    version) historically used fixed budgets (300 / 30 / 10 s) that could
+    each dwarf a small caller timeout — a cold-cache ``dotnet restore``
+    alone could block up to 300 s despite a caller asking for 30 s. Clamp
+    every pre-flight budget to ``min(default, caller)`` so no single
+    pre-flight step can exceed the caller's contract. ``caller_timeout is
+    None`` (no bound) keeps the historical default.
+    """
+
+    if caller_timeout is None:
+        return default_budget
+    return min(default_budget, caller_timeout)
+
+
 async def _ensure_csproj_restored(
-    dotnet_path: str, csproj_path: Path, workspace: Path
+    dotnet_path: str,
+    csproj_path: Path,
+    workspace: Path,
+    *,
+    env: dict[str, str],
+    timeout: float | None,
 ) -> None:
     """Run ``dotnet restore <csproj>`` to materialize ``obj/project.assets.json``.
 
@@ -795,11 +832,16 @@ async def _ensure_csproj_restored(
     restore fails (e.g. offline + cold cache); we want to give that
     path a chance to succeed before degrading to no-coverage.
 
-    The 300-second timeout matches the upper bound for a cold NuGet
+    The 300-second default matches the upper bound for a cold NuGet
     cache pulling all of xunit + Microsoft.NET.Test.Sdk + coverlet.collector
     on a slow connection. Restore should never take longer than this
-    in practice; the timeout is a safety belt rather than an expected
-    latency budget.
+    in practice; the budget is a safety belt rather than an expected
+    latency budget. RUN-08: the default is clamped to the caller's
+    ``timeout`` (``min(300, caller)``) so a small caller budget is not
+    silently blown by a slow restore; ``timeout=None`` keeps the 300 s
+    default. ``env`` carries the sanitized child env (RUN-18) so the
+    telemetry opt-out / first-run skip applies to this FIRST dotnet call
+    on the coverage path.
 
     A ``FileNotFoundError`` during exec (TOCTOU after
     ``shutil.which`` resolved earlier in ``run_xunit``) is allowed to
@@ -813,7 +855,8 @@ async def _ensure_csproj_restored(
     await run_subprocess(
         [dotnet_path, "restore", str(csproj_path)],
         cwd=workspace,
-        timeout=300.0,
+        env=env,
+        timeout=_clamp_preflight_timeout(300.0, timeout),
     )
 
 
@@ -823,7 +866,12 @@ async def _ensure_csproj_restored(
 
 
 async def _probe_coverlet_version(
-    dotnet_path: str, csproj_path: Path, workspace: Path
+    dotnet_path: str,
+    csproj_path: Path,
+    workspace: Path,
+    *,
+    env: dict[str, str],
+    timeout: float | None,
 ) -> tuple[int, int, int] | None:
     """Probe the user's resolved ``coverlet.collector`` version.
 
@@ -836,14 +884,19 @@ async def _probe_coverlet_version(
        line-wrapping (Windows terminals + narrow consoles).
     3. Return parsed ``(major, minor, patch)`` tuple, or None if not
        found in the package graph.
+
+    RUN-08: each probe's 30 s budget is clamped to the caller's ``timeout``
+    (``min(30, caller)``). RUN-18: ``env`` is the sanitized child env.
     """
 
+    probe_timeout = _clamp_preflight_timeout(30.0, timeout)
     # Path 1: JSON format.
     json_result = await run_subprocess(
         [dotnet_path, "list", str(csproj_path), "package",
          "--include-transitive", "--format", "json"],
         cwd=workspace,
-        timeout=30.0,
+        env=env,
+        timeout=probe_timeout,
     )
     if json_result.returncode == 0:
         version = _parse_coverlet_version_from_json(json_result.stdout)
@@ -855,7 +908,8 @@ async def _probe_coverlet_version(
         [dotnet_path, "list", str(csproj_path), "package",
          "--include-transitive"],
         cwd=workspace,
-        timeout=30.0,
+        env=env,
+        timeout=probe_timeout,
     )
     if text_result.returncode == 0:
         return _parse_coverlet_version_from_text(
@@ -1433,19 +1487,29 @@ def _safe_read_text(path: Path) -> str:
         return ""
 
 
-async def _read_dotnet_version(dotnet_path: str, workspace: Path) -> str | None:
+async def _read_dotnet_version(
+    dotnet_path: str,
+    workspace: Path,
+    *,
+    env: dict[str, str],
+    timeout: float | None,
+) -> str | None:
     """Best-effort SDK version read via ``dotnet --version``.
 
     Returns ``"8.0.421"`` shape strings. None silently on any subprocess
     failure (informational metadata only; never load-bearing for the
     Run Record's correctness).
+
+    RUN-08: the 10 s budget is clamped to the caller's ``timeout``
+    (``min(10, caller)``). RUN-18: ``env`` is the sanitized child env.
     """
 
     try:
         result = await run_subprocess(
             [dotnet_path, "--version"],
             cwd=workspace,
-            timeout=10.0,
+            env=env,
+            timeout=_clamp_preflight_timeout(10.0, timeout),
         )
     except (OSError, FileNotFoundError):
         return None

@@ -1279,6 +1279,62 @@ async def test_collect_coverage_missing_lcov_raises_unparseable(
     assert exc_info.value.kind == "unparseable-output"
 
 
+async def test_collect_coverage_compile_failure_diagnosed_as_build_failure(
+    cargo_test_basic_coverage_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RUN-05 regression pin. A COVERAGE-mode compile failure (no test
+    started, non-zero exit, no lcov written) must surface the
+    build-failure diagnosis, NOT the "cargo llvm-cov did not write ..."
+    coverage-artifact-absence message. The pre-fix gate
+    (``not collect_coverage and not saw_test_started and returncode != 0``)
+    skipped the build-failure block entirely in coverage mode, so a source
+    compile error was mis-headlined as an llvm-cov failure — sending the
+    consumer chasing llvm-cov setup instead of the compile error.
+
+    A/B honesty proof: restore the ``not collect_coverage`` conjunct on the
+    gate → this test fails ("build failure" absent; the "did not write"
+    message wins).
+    """
+
+    import novetest.run.adapters.cargo_adapter as adapter
+
+    monkeypatch.setattr(
+        adapter,
+        "run_subprocess",
+        _make_stub_subprocess(
+            returncode=101,
+            stdout_bytes=b"",
+            stderr_bytes=(
+                b"error[E0425]: cannot find function `nonexistent` in this scope\n"
+                b"error: could not compile `cargo_test_basic` (lib test) "
+                b"due to 1 previous error\n"
+            ),
+            write_coverage_lcov=False,
+        ),
+    )
+
+    target = resolve_test_target("", cargo_test_basic_coverage_workspace)
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        await run_cargo(
+            target, artifact_dir=tmp_path, timeout=60.0, collect_coverage=True
+        )
+
+    assert exc_info.value.kind == "unparseable-output"
+    message = str(exc_info.value)
+    # The build-failure diagnosis wins over the coverage-artifact-absence
+    # ("did not write") message.
+    assert "build failure" in message.lower(), (
+        f"coverage-mode compile failure must be diagnosed as a build "
+        f"failure; got: {message!r}"
+    )
+    assert "did not write" not in message, (
+        f"the llvm-cov coverage-artifact-absence message must NOT win over "
+        f"a genuine compile failure; got: {message!r}"
+    )
+
+
 async def test_collect_coverage_env_var_literal_surfaces_misconfigured_environment(
     cargo_test_basic_coverage_workspace: Path,
     tmp_path: Path,

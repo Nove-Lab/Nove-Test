@@ -303,6 +303,59 @@ async def test_argv_uses_default_target_when_expression_empty(
     assert captured_argv[-1] == "./..."
 
 
+async def test_argv_go_timeout_is_below_subprocess_budget(
+    gotest_basic_workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RUN-20 regression pin. go's ``-timeout`` is set strictly BELOW the
+    subprocess wall-clock budget (a 10% reserve, floored at 1s) so go's
+    graceful panic-dump self-termination wins the race against the parent's
+    hard ``proc.kill()``. With a 60s caller budget the derived flag is
+    ``-timeout=54s`` (``int(60 * 0.9)``); a ``timeout=None`` caller (no
+    subprocess wall clock) keeps go's ``-timeout=600s`` default as the sole
+    guard.
+
+    A/B honesty proof: restore ``int(timeout)`` for go's ``-timeout`` →
+    the 54s assertion fails (the flag equals the 60s subprocess budget).
+    """
+
+    import novetest.run.adapters.gotest_adapter as adapter
+
+    captured_argv: list[str] = []
+
+    async def capturing_stub(
+        argv: Any,
+        *,
+        cwd: Any,
+        env: Any | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        if isinstance(argv, (list, tuple)) and len(argv) == 2 and argv[-1] == "version":
+            return SubprocessResult(
+                returncode=0, stdout=b"go version go1.23.4 linux/amd64\n",
+                stderr=b"", timed_out=False,
+            )
+        captured_argv.clear()
+        captured_argv.extend(argv)
+        return SubprocessResult(
+            returncode=0, stdout=_ndjson_bytes(_passing_events()),
+            stderr=b"", timed_out=False,
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
+    target = resolve_test_target("", gotest_basic_workspace)
+
+    await run_gotest(target, artifact_dir=tmp_path / "a", timeout=60.0)
+    assert "-timeout=54s" in captured_argv
+    assert "-timeout=60s" not in captured_argv
+
+    # timeout=None → no subprocess wall clock; go's -timeout is the sole
+    # guard and keeps the 600s default.
+    await run_gotest(target, artifact_dir=tmp_path / "b", timeout=None)
+    assert "-timeout=600s" in captured_argv
+
+
 async def test_argv_converts_directory_dot_to_recursive_wildcard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
