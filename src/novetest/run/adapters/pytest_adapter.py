@@ -5,6 +5,13 @@ Invokes ``python -m pytest`` against a workspace, capturing the
 `run/engine.execute`; not registered through a generic registry yet
 because Phase 1 only ships this one adapter.
 
+Foundations §3 child-process contract (RUN-11): the interpreter is
+resolved venv-first (``_resolve_pytest_interpreter`` — the SuT's
+``.venv`` pytest when present, else ``sys.executable``; never bare
+``pytest`` off PATH), and the child env is sanitized on an allow-add
+model with deterministic pins (``PYTHONHASHSEED=0`` / ``CI=1`` /
+``FORCE_COLOR=0``) and an inherited ``PYTHONPATH`` dropped (RUN-24).
+
 Foundations §6 guarantees: child gets ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1``
 so the dev venv's plugins do not leak in. The pytest-json-report plugin
 is loaded explicitly with ``-p pytest_jsonreport``. When
@@ -66,8 +73,9 @@ async def run_pytest(
     stdout_path = native_dir / STDOUT_LOG_FILENAME
     stderr_path = native_dir / STDERR_LOG_FILENAME
 
+    interpreter = _resolve_pytest_interpreter(test_target.workspace_path)
     argv = [
-        sys.executable,
+        interpreter,
         "-m",
         "pytest",
         "-p",
@@ -239,13 +247,59 @@ def _write_coverage_rc(artifact_dir: Path) -> Path:
     return rc_path
 
 
+def _resolve_pytest_interpreter(workspace: Path) -> str:
+    """Resolve the interpreter to run ``-m pytest`` with (RUN-11).
+
+    Venv-first, per ``foundations.md`` §3: if the target ``workspace`` ships
+    a ``.venv`` whose pytest console script is present
+    (``.venv/bin/pytest`` on POSIX, ``.venv/Scripts/pytest.exe`` on
+    Windows), return that venv's Python interpreter so the child runs the
+    SuT's own pytest and its plugins. Otherwise fall back to
+    ``sys.executable`` (the interpreter running novetest). Never a bare
+    ``pytest`` off PATH — PATH leakage is a recurring bug source.
+
+    Why probe the console script but return the sibling *python*: the
+    script's presence is the signal that pytest is installed in the venv,
+    but we invoke ``<python> -m pytest`` (not the script directly) to keep
+    the ``-m`` module-resolution semantics of the existing argv. A
+    well-formed venv with pytest installed always carries the sibling
+    python next to the script.
+
+    This is deployment-mode-critical: under the ``foundations.md`` §7 PyApp
+    standalone binary, ``sys.executable`` is the bundled CPython unpacked
+    into the user data-dir, which cannot see a SuT's venv-only pytest — the
+    exact failure RUN-11 describes. Falling back to ``sys.executable`` when
+    no venv pytest exists preserves the pipx-into-venv deployment path
+    (novetest's own interpreter carries pytest) unchanged.
+    """
+
+    venv = workspace / ".venv"
+    if sys.platform == "win32":
+        pytest_script = venv / "Scripts" / "pytest.exe"
+        venv_python = venv / "Scripts" / "python.exe"
+    else:
+        pytest_script = venv / "bin" / "pytest"
+        venv_python = venv / "bin" / "python"
+    if pytest_script.exists():
+        return str(venv_python)
+    return sys.executable
+
+
 def _build_child_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env["NO_COLOR"] = "1"
+    # Deterministic-env contract (RUN-11, foundations.md §3): pin the hash
+    # seed, mark CI, and force color off so runs are reproducible.
+    env["PYTHONHASHSEED"] = "0"
+    env["CI"] = "1"
+    env["FORCE_COLOR"] = "0"
     env.pop("PYTEST_ADDOPTS", None)
+    # RUN-24: drop an inherited PYTHONPATH so a host-profile 3.x tree cannot
+    # leak onto the child's sys.path ahead of the SuT's own dependencies.
+    env.pop("PYTHONPATH", None)
     return env
 
 

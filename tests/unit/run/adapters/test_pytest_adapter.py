@@ -526,3 +526,163 @@ async def test_argv_appends_valid_target_bare_without_separator(
 
     assert captured_argv[-1] == "tests/test_math_utils.py::test_add_positive"
     assert "--" not in captured_argv
+
+
+# ---------------------------------------------------------------------------
+# Venv-first interpreter resolution + deterministic child env (RUN-11, RUN-24)
+# ---------------------------------------------------------------------------
+#
+# foundations.md §3: run the SuT's own ``.venv`` pytest when present (critical
+# for the §7 PyApp standalone binary, whose ``sys.executable`` is a bundled
+# CPython that cannot see a project-venv-only pytest), else fall back to the
+# current interpreter — never a bare ``pytest`` off PATH. The child env pins
+# the deterministic trio (``PYTHONHASHSEED`` / ``CI`` / ``FORCE_COLOR``) and
+# drops an inherited ``PYTHONPATH`` (RUN-24). Our fixtures carry no ``.venv``,
+# so the in-repo gate exercises the fallback path unchanged; these tests
+# synthesize both the POSIX and Windows ``.venv`` layouts.
+
+
+def test_resolve_interpreter_prefers_posix_venv_pytest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    monkeypatch.setattr(adapter.sys, "platform", "linux")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "pytest").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert adapter._resolve_pytest_interpreter(tmp_path) == str(venv_bin / "python")
+
+
+def test_resolve_interpreter_prefers_windows_venv_pytest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows layout: probe ``.venv/Scripts/pytest.exe``, return the sibling
+    ``python.exe``. Exercised via the direct helper because ``sys.platform``
+    is not ``win32`` on the CI matrix cell running this file."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    monkeypatch.setattr(adapter.sys, "platform", "win32")
+    venv_scripts = tmp_path / ".venv" / "Scripts"
+    venv_scripts.mkdir(parents=True)
+    (venv_scripts / "pytest.exe").write_bytes(b"MZ")
+
+    assert adapter._resolve_pytest_interpreter(tmp_path) == str(
+        venv_scripts / "python.exe"
+    )
+
+
+def test_resolve_interpreter_falls_back_to_sys_executable(tmp_path: Path) -> None:
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    # No .venv in the workspace → the current interpreter (never bare pytest).
+    assert adapter._resolve_pytest_interpreter(tmp_path) == sys.executable
+
+
+def test_resolve_interpreter_falls_back_when_venv_lacks_pytest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.venv`` present but WITHOUT pytest installed → fall back.
+
+    Using novetest's own interpreter (which carries pytest) keeps the run
+    working, matching the pre-RUN-11 behavior for a SuT that has a venv but
+    never installed pytest into it. The probe keys on the pytest console
+    script, not the mere existence of ``.venv``.
+    """
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    monkeypatch.setattr(adapter.sys, "platform", "linux")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")  # no pytest
+
+    assert adapter._resolve_pytest_interpreter(tmp_path) == sys.executable
+
+
+async def test_venv_pytest_flows_into_spawn_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: a synthetic POSIX ``.venv`` makes the spawned ``argv[0]``
+    the venv python, proving the resolution reaches the harness spawn.
+
+    The ``-m pytest`` prefix is preserved — we invoke the venv's python with
+    ``-m``, never the console script directly.
+    """
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    monkeypatch.setattr(adapter.sys, "platform", "linux")
+    workspace = tmp_path / "ws"
+    venv_bin = workspace / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "pytest").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    captured_argv: list[str] = []
+
+    async def capturing_stub(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        assert isinstance(argv, list)
+        captured_argv.extend(argv)
+        report_arg = next(
+            a
+            for a in argv
+            if isinstance(a, str) and a.startswith("--json-report-file=")
+        )
+        report_path = Path(report_arg.split("=", 1)[1])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(
+                {"exitcode": 0, "summary": {"total": 1, "passed": 1}, "tests": []}
+            ),
+            encoding="utf-8",
+        )
+        return SubprocessResult(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+    monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
+
+    target = resolve_test_target("", workspace)
+    await run_pytest(target, artifact_dir=tmp_path / "art", timeout=60.0)
+
+    assert captured_argv[0] == str(venv_bin / "python")
+    assert captured_argv[1:3] == ["-m", "pytest"]
+
+
+def test_build_child_env_sets_deterministic_trio() -> None:
+    """RUN-11: the child env carries the deterministic pins on top of the
+    pre-existing sanitization, none of which is dropped."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    env = adapter._build_child_env()
+    # New deterministic trio.
+    assert env["PYTHONHASHSEED"] == "0"
+    assert env["CI"] == "1"
+    assert env["FORCE_COLOR"] == "0"
+    # Pre-existing pins preserved.
+    assert env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["NO_COLOR"] == "1"
+
+
+def test_build_child_env_drops_inherited_pythonpath(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RUN-24: an inherited ``PYTHONPATH`` must not reach the pytest child —
+    a host-profile 3.x tree would otherwise land ahead of the SuT's deps."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    monkeypatch.setenv("PYTHONPATH", "/host/py310/site-packages")
+    env = adapter._build_child_env()
+    assert "PYTHONPATH" not in env
