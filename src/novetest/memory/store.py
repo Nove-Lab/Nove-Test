@@ -42,6 +42,14 @@ from novetest.utils.ulid import date_path_for_timestamp_ms
 RECORD_FILENAME = "record.json"
 RUN_DIR_PREFIX = "run_"
 
+# Single not-found message for a run_id-addressed lookup miss (S18). A
+# ``str.format``-able template with a ``{run_id}`` placeholder, memory-owned so
+# every run_id-addressed CLI/orchestration verb renders the identical wording.
+# The ``!r`` conversion reproduces the historical f-string
+# (``f"No Memory Entry for run_id={run_id!r}"``) byte-for-byte, so folding the
+# duplicated verb sites onto this constant is a zero-wire-delta change.
+RUN_ID_NOT_FOUND_MESSAGE = "No Memory Entry for run_id={run_id!r}"
+
 
 class RunEvidenceNotFoundError(LookupError):
     """Raised when a Run Reference resolves to neither a live nor a tombstoned record."""
@@ -168,6 +176,40 @@ def list_run_history(
         reverse=True,
     )
     return entries
+
+
+def find_entry_by_run_id(
+    store: ProjectStore,
+    run_id: str,
+    *,
+    skipped: list[SkippedRecord] | None = None,
+) -> MemoryEntry | None:
+    """Return the Memory Entry whose Run Reference matches ``run_id``, or ``None``.
+
+    First entry in history order (the newest-first ``list_run_history`` walk)
+    whose ``run_record.run_reference.run_id == run_id``. run_ids are ULIDs
+    (unique), so first-match is exact — no prefix or fuzzy matching. This folds
+    the linear scan duplicated across the run_id-addressed CLI/orchestration
+    verbs (``memory show`` / ``memory delete`` / the coverage/regression/
+    localization/replay/inspect ``run_id`` resolvers) into ONE Memory-owned
+    predicate.
+
+    Unparseable records are skipped, never fatal — the walk goes through
+    ``list_run_history``'s MEM-05 isolation. Callers that need to distinguish a
+    genuine miss from a corrupt-on-disk record whose ``run_id`` matches (the
+    S42 Q1-A ``store-corrupt`` escalation) pass a ``skipped`` collector: a
+    ``None`` return alongside a ``SkippedRecord`` whose ``run_id`` equals the
+    requested id means "present but corrupt", not "absent". Use
+    ``RUN_ID_NOT_FOUND_MESSAGE`` for the genuine-miss wording.
+    """
+    return next(
+        (
+            entry
+            for entry in list_run_history(store, skipped=skipped)
+            if entry.run_record.run_reference.run_id == run_id
+        ),
+        None,
+    )
 
 
 def find_runs_for_target(

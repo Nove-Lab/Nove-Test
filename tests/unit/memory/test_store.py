@@ -21,10 +21,12 @@ from novetest.memory.project_store import (
 from novetest.memory.store import (
     RECORD_FILENAME,
     RUN_DIR_PREFIX,
+    RUN_ID_NOT_FOUND_MESSAGE,
     RunEvidenceAlreadyExistsError,
     RunEvidenceNotFoundError,
     SkippedRecord,
     delete_run_evidence,
+    find_entry_by_run_id,
     find_runs_for_target,
     get_memory_entry_availability,
     list_run_history,
@@ -520,6 +522,90 @@ def test_find_runs_for_target_returns_both_when_target_types_differ(
     assert {e.entry_id for e in result} == {"01FILE", "01PKG"}
     target_types = {e.run_record.target_type for e in result}
     assert target_types == {"file", "package"}
+
+
+# --- S18: find_entry_by_run_id (run_id lookup API) ---------------------------
+#
+# One Memory-owned predicate folding the linear scan duplicated across the
+# run_id-addressed CLI/orchestration verbs. Semantics = first history-order
+# entry whose run_reference.run_id matches; ULIDs are unique so first == only.
+
+
+def test_find_entry_by_run_id_returns_matching_entry(store: ProjectStore) -> None:
+    store_run_evidence(store, _record(run_id="01FIRST", created_at=TS_2024_01_02))
+    stored = store_run_evidence(store, _record(run_id="01SECOND", created_at=TS_2026_05_13))
+
+    found = find_entry_by_run_id(store, "01SECOND")
+
+    assert found is not None
+    assert found.entry_id == "01SECOND"
+    assert found.run_record == stored.run_record
+
+
+def test_find_entry_by_run_id_missing_returns_none(store: ProjectStore) -> None:
+    store_run_evidence(store, _record(run_id="01REAL", created_at=TS_2024_01_02))
+
+    assert find_entry_by_run_id(store, "01NOPE") is None
+
+
+def test_find_entry_by_run_id_empty_store_returns_none(store: ProjectStore) -> None:
+    assert find_entry_by_run_id(store, "01ANY") is None
+
+
+def test_find_entry_by_run_id_finds_tombstoned_run(store: ProjectStore) -> None:
+    # Tombstoned runs stay findable (mirrors `memory show` on a deleted run).
+    gone = _record(run_id="01GONE", created_at=TS_2026_05_13)
+    store_run_evidence(store, gone)
+    delete_run_evidence(store, gone.run_reference)
+
+    found = find_entry_by_run_id(store, "01GONE")
+
+    assert found is not None
+    assert found.entry_id == "01GONE"
+    assert found.tombstoned_at is not None
+
+
+def test_find_entry_by_run_id_skips_corrupt_and_reports_via_collector(
+    store: ProjectStore,
+) -> None:
+    # A corrupt record whose run_id matches is NOT returned (it did not parse),
+    # but the `skipped` collector records it so a run_id-addressed caller can
+    # escalate corrupt-as-miss to store-corrupt (S42 Q1-A) instead of not-found.
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    torn_path = _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    skipped: list[SkippedRecord] = []
+    result = find_entry_by_run_id(store, "01TORN", skipped=skipped)
+
+    assert result is None
+    assert [s.path for s in skipped] == [torn_path]
+    assert skipped[0].run_id == "01TORN"
+
+
+def test_find_entry_by_run_id_without_collector_survives_corrupt(
+    store: ProjectStore,
+) -> None:
+    # No collector (the non-escalating callers): a corrupt neighbor must not
+    # poison the lookup of a healthy run.
+    store_run_evidence(store, _record(run_id="01OK", created_at=TS_2024_01_02))
+    _plant_torn_record(store, "01TORN", TS_2026_05_13)
+
+    found = find_entry_by_run_id(store, "01OK")
+
+    assert found is not None
+    assert found.entry_id == "01OK"
+
+
+def test_run_id_not_found_message_reproduces_historical_wording() -> None:
+    # Zero-wire-delta pin: the `{run_id!r}`-formatted template must render
+    # byte-identically to the historical f-string the four CLI sites emit
+    # (`f"No Memory Entry for run_id={run_id!r}"`).
+    run_id = "01HZY9K7"
+    assert (
+        RUN_ID_NOT_FOUND_MESSAGE.format(run_id=run_id)
+        == f"No Memory Entry for run_id={run_id!r}"
+        == "No Memory Entry for run_id='01HZY9K7'"
+    )
 
 
 # --- ordering determinism (XCT-07 / S36) --------------------------------------

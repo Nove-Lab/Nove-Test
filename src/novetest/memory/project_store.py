@@ -296,8 +296,9 @@ def set_pinned_engine(store: ProjectStore, ecosystem: str, engine_name: str) -> 
     ``models.engine_matrix.SUPPORTED_ENGINE_PAIRS`` domain constant — XCT-13
     killed the former upward import from ``run``); unsupported pairs raise
     ``ValueError`` before any disk mutation. The rewrite carries the same
-    write-safety guarantees as every existing ``store.json`` write (single
-    ``write_text``), and re-reads the metadata from disk first so a stale
+    write-safety guarantees as every existing ``store.json`` write (an atomic
+    same-directory temp write + ``os.replace`` — XCT-04, via
+    ``_write_metadata``), and re-reads the metadata from disk first so a stale
     handle cannot clobber fields changed since the handle was loaded.
     """
     pair = (ecosystem, engine_name)
@@ -341,6 +342,12 @@ def _read_metadata(store_path: Path) -> ProjectStore:
 
 
 def _write_metadata(metadata_path: Path, store: ProjectStore) -> None:
+    """Serialize ``store`` metadata and write it atomically to ``metadata_path``.
+
+    The single choke point for every ``store.json`` metadata write
+    (``create_project_store`` and ``set_pinned_engine`` both route here), so
+    the atomic-write guarantee below applies to all of them (XCT-04).
+    """
     payload: dict[str, Any] = {
         "schema_version": store.schema_version,
         "initialized_at": store.initialized_at,
@@ -350,7 +357,24 @@ def _write_metadata(metadata_path: Path, store: ProjectStore) -> None:
     # store.json never grows a key it did not have (see module docstring).
     if store.pinned_engine is not None:
         payload["pinned_engine"] = store.pinned_engine.to_dict()
-    metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(metadata_path, payload)
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write ``payload`` as JSON to ``path`` atomically (XCT-04).
+
+    The bytes are staged in a sibling ``<name>.tmp`` file in the SAME directory
+    and then ``os.replace``-d onto ``path`` — an atomic rename on POSIX and
+    Windows. A crash or a concurrent reader therefore never observes a torn
+    ``store.json``: the file is either the previous complete content or the new
+    complete content. This closes XCT-04's torn-write window (a bare
+    ``write_text`` could be interrupted mid-write and leave an unparseable
+    store, tripping ``ProjectStoreCorruptError`` on the next read). No fsync
+    ceremony is required — ``os.replace`` alone closes the finding's scenario.
+    """
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _parse_pinned_engine(store_path: Path, raw: object) -> PinnedEngine | None:

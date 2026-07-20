@@ -106,6 +106,20 @@ def test_no_memory_module_imports_novetest_run() -> None:
     )
 
 
+def test_s18_run_id_lookup_symbols_are_on_the_public_surface() -> None:
+    # S18: `find_entry_by_run_id` + `RUN_ID_NOT_FOUND_MESSAGE` are the run_id
+    # lookup contract the orchestration lane consumes from `novetest.memory`
+    # (it deletes four duplicated linear scans in favor of them). This guard
+    # keeps that contract load-bearing — the exports cannot silently vanish
+    # from the package surface, and the not-found template stays `{run_id}`-
+    # formattable so the wire wording is stable.
+    for symbol in ("find_entry_by_run_id", "RUN_ID_NOT_FOUND_MESSAGE"):
+        assert symbol in memory_public.__all__, symbol
+        assert hasattr(memory_public, symbol), symbol
+    rendered = memory_public.RUN_ID_NOT_FOUND_MESSAGE.format(run_id="01ABC")
+    assert rendered == "No Memory Entry for run_id='01ABC'"
+
+
 def test_every_deep_imported_symbol_is_exported_at_the_public_surface() -> None:
     # Standing re-export guard (belt-and-suspenders beside the equality pin):
     # should a derived engine ever deep-import a symbol from a private Memory

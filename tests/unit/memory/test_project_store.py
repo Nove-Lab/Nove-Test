@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -484,6 +485,100 @@ def test_pinned_handle_to_dict_includes_pin(tmp_path: Path) -> None:
         "ecosystem": "javascript-typescript",
         "engine_name": "jest",
     }
+
+
+# --- S19 / XCT-04: atomic store.json metadata write --------------------------
+#
+# Every `store.json` write routes through the single `_write_metadata` choke
+# point, which stages the JSON in a same-directory `<name>.tmp` file and
+# `os.replace`-s it onto `store.json`. `os.replace` is an atomic rename on
+# POSIX and Windows, so a crash between the temp write and the rename leaves
+# the PREVIOUS `store.json` intact and parseable — closing the torn-write
+# window a bare `write_text` left open (XCT-04). A/B: revert `_write_metadata`
+# to a bare `write_text` and `test_set_pinned_engine_failure_...` stops seeing
+# an intact store after the simulated failure.
+
+
+def _spy_on_os_replace(
+    monkeypatch: pytest.MonkeyPatch, calls: list[tuple[Path, Path]]
+) -> None:
+    """Record every `project_store.os.replace` src/dst, then delegate to it."""
+    real_replace = os.replace
+
+    def spy(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        calls.append((Path(str(src)), Path(str(dst))))
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("novetest.memory.project_store.os.replace", spy)
+
+
+def test_set_pinned_engine_writes_via_same_dir_temp_then_os_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = create_project_store(tmp_path)
+    metadata_path = store.path / STORE_METADATA_FILENAME
+    calls: list[tuple[Path, Path]] = []
+    _spy_on_os_replace(monkeypatch, calls)
+
+    set_pinned_engine(store, "python", "pytest")
+
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert dst == metadata_path
+    assert src.parent == metadata_path.parent  # temp lives in the SAME dir
+    assert src.name == metadata_path.name + ".tmp"
+    # The rename consumed the temp file — no residue.
+    assert not src.exists()
+    assert list(store.path.glob("*.tmp")) == []
+
+
+def test_create_project_store_writes_metadata_via_os_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, Path]] = []
+    _spy_on_os_replace(monkeypatch, calls)
+
+    store = create_project_store(tmp_path)
+
+    metadata_path = store.path / STORE_METADATA_FILENAME
+    assert [dst for _, dst in calls] == [metadata_path]
+    assert calls[0][0].name == metadata_path.name + ".tmp"
+    assert list(store.path.glob("*.tmp")) == []
+
+
+def test_set_pinned_engine_failure_before_replace_leaves_store_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The load-bearing XCT-04 invariant: a failure between the temp write and
+    # the `os.replace` leaves the previous `store.json` intact and parseable.
+    store = create_project_store(tmp_path)
+    before = _metadata_bytes(store.path)
+
+    def boom(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr("novetest.memory.project_store.os.replace", boom)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        set_pinned_engine(store, "python", "pytest")
+
+    # Previous content untouched, and still a valid parseable store.
+    assert _metadata_bytes(store.path) == before
+    reloaded = get_project_store_state(store.path)
+    assert reloaded.pinned_engine is None
+
+
+def test_metadata_writes_leave_no_temp_residue(tmp_path: Path) -> None:
+    # End-to-end: neither create nor set leaves a `.tmp` file behind.
+    store = create_project_store(tmp_path)
+    set_pinned_engine(store, "go", "go-test")
+    set_pinned_engine(store, "rust", "cargo-test")
+
+    assert list(store.path.glob("*.tmp")) == []
+    assert (store.path / STORE_METADATA_FILENAME).is_file()
+    assert get_pinned_engine(store) == PinnedEngine(
+        ecosystem="rust", engine_name="cargo-test"
+    )
 
 
 # --- find_nearest_store (decision D2 walk-up) --------------------------------
