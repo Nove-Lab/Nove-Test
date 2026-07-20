@@ -2,8 +2,9 @@
 
 Covers the orchestration-to-envelope projection for the two coverage
 verbs: lookup → engine call → envelope projection. The Coverage engine
-seams (`get_coverage_facts`, `compare_coverage_facts`) and Memory's
-`list_run_history` are monkeypatched so the unit tests never touch the
+seams (`get_coverage_facts`, `compare_coverage_facts`) and the Memory run_id
+lookup (`find_entry_by_run_id`, the single S18 predicate) are monkeypatched
+so the unit tests never touch the
 filesystem; envelopes are captured via pytest's `capsys` (per the prior
 slice's gotcha — fighting pytest's own stdout capture with a second
 monkeypatch leads to silently empty buffers).
@@ -135,8 +136,11 @@ def test_show_emits_fact_set_when_facts_present(
     stub_store: object,
 ) -> None:
     run_id = "01TESTTESTTESTTESTTESTTEST"
+    entry = _make_memory_entry(run_id)
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(run_id)]
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: entry if rid == run_id else None,
     )
     seen_ref: list[RunReference] = []
 
@@ -171,8 +175,11 @@ def test_show_emits_unavailable_when_facts_missing(
     REQ-COV-004 unavailable branch surfaced at the CLI for the first time.
     """
     run_id = "01TESTTESTTESTTESTTESTTEST"
+    entry = _make_memory_entry(run_id)
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(run_id)]
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: entry if rid == run_id else None,
     )
 
     def fake_get(_store: Any, ref: RunReference) -> CoverageUnavailable:
@@ -204,7 +211,11 @@ def test_show_returns_not_found_for_unknown_run_id(
     stub_store: object,
 ) -> None:
     """Mirror the `memory show` not-found pattern: exit 2, structured envelope."""
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
+    monkeypatch.setattr(
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: None,
+    )
 
     # If lookup fails, `get_coverage_facts` MUST NOT be called.
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
@@ -235,13 +246,14 @@ def test_diff_emits_delta_when_both_runs_have_facts(
 ) -> None:
     baseline_id = "01BASELINETESTTESTTESTTEST"
     target_id = "01TARGETTESTTESTTESTTESTTE"
+    entries = [_make_memory_entry(baseline_id), _make_memory_entry(target_id)]
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [
-            _make_memory_entry(baseline_id),
-            _make_memory_entry(target_id),
-        ],
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: next(
+            (e for e in entries if e.run_record.run_reference.run_id == rid),
+            None,
+        ),
     )
 
     seen_args: list[tuple[RunReference, RunReference]] = []
@@ -293,13 +305,14 @@ def test_diff_emits_unavailable_when_one_side_lacks_facts(
 ) -> None:
     baseline_id = "01BASELINETESTTESTTESTTEST"
     target_id = "01TARGETTESTTESTTESTTESTTE"
+    entries = [_make_memory_entry(baseline_id), _make_memory_entry(target_id)]
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [
-            _make_memory_entry(baseline_id),
-            _make_memory_entry(target_id),
-        ],
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: next(
+            (e for e in entries if e.run_record.run_reference.run_id == rid),
+            None,
+        ),
     )
 
     def fake_compare(
@@ -332,10 +345,14 @@ def test_diff_returns_not_found_when_target_run_id_unknown(
     stub_store: object,
 ) -> None:
     baseline_id = "01BASELINETESTTESTTESTTEST"
+    baseline_only = [_make_memory_entry(baseline_id)]
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [_make_memory_entry(baseline_id)],
+        "find_entry_by_run_id",
+        lambda _store, rid, *, skipped=None: next(
+            (e for e in baseline_only if e.run_record.run_reference.run_id == rid),
+            None,
+        ),
     )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:

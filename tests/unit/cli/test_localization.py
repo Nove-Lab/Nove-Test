@@ -5,9 +5,9 @@ validation → run_reference lookup → workflow call → envelope projection.
 The Localization engine seam (``derive_localization_findings``) is
 monkeypatched at the ``orchestration/workflows/localization.py`` module
 (where the flag-override policy calls it since W2/S22); Memory's
-``list_run_history`` is monkeypatched at the ``cli.app`` module (the
-run_id lookup stayed transport-side). The unit tests never touch the
-filesystem.
+``find_entry_by_run_id`` (the single S18 run_id predicate) is monkeypatched
+at the ``cli.app`` module (the run_id lookup stayed transport-side). The
+unit tests never touch the filesystem.
 
 NOTE: These tests require ``localization_run`` to be registered in
 ``cli/app.py`` as ``localization_app.default``. If the handler is not yet
@@ -183,11 +183,17 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
 
 @pytest.fixture
 def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Return a single known entry so ``_resolve_run_reference`` succeeds."""
+    """Resolve the known ``_RUN_ID`` so ``_resolve_run_reference`` succeeds.
+
+    Stubs the S18 run_id lookup (``find_entry_by_run_id``) — the single
+    Memory-owned predicate the run_id-addressed verbs now route through."""
+    entry = _make_memory_entry(_RUN_ID)
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [_make_memory_entry(_RUN_ID)],
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: (
+            entry if run_id == _RUN_ID else None
+        ),
     )
 
 
@@ -294,7 +300,11 @@ def test_localization_run_fake_run_id_returns_not_found(
     """A fake run_id short-circuits at ``_resolve_run_reference`` BEFORE the
     engine call fires — ``not-found`` envelope, exit 2."""
 
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
+    monkeypatch.setattr(
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: None,
+    )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("derive_localization_findings must not be called")

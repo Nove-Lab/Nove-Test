@@ -333,14 +333,11 @@ def build_test_outcome_from_run_id(
     Returns ``None`` when no Memory Entry matches ``run_id``.
     """
 
-    # Mirror ``inspect.py::build_inspect_view``'s resolution path.
-    from novetest.memory import list_run_history as _list_run_history
+    # Mirror ``inspect.py::build_inspect_view``'s resolution path — the ONE
+    # Memory-owned run_id predicate (ORC-05 / S18), not a re-implemented scan.
+    from novetest.memory import find_entry_by_run_id as _find_entry_by_run_id
 
-    history = _list_run_history(store)
-    target_entry = next(
-        (e for e in history if e.run_record.run_reference.run_id == run_id),
-        None,
-    )
+    target_entry = _find_entry_by_run_id(store, run_id)
     if target_entry is None:
         return None
     ref = target_entry.run_record.run_reference

@@ -11,8 +11,18 @@ Localization / Replay remain present-but-``unavailable`` markers, mirroring
 marker and add the matching detail block without changing this container
 shape.
 
-``inspect`` executes nothing — it is a pure read over Memory + Coverage +
-Regression caches.
+``inspect`` executes no TEST — it spawns no engine subprocess. It is NOT,
+however, strictly cache-only on the Regression axis: its Regression section
+COMPOSES ``resolve_baseline_for_run`` + ``compare_runs``, and ``compare_runs``
+DERIVES (and persists) the pair's facts on a cache miss — a corrupt or
+absent ``regression_facts.json`` self-heals on the next inspect. This is the
+intended ORC-25 asymmetry with ``status`` (Gate-1 D3=A, 2026-07-20):
+``status`` is strictly cache-only (``get_regression_facts``, never
+``compare_runs``) because it must be a cheap, side-effect-free "what is
+cached?" probe; ``inspect`` is a deliberate single-run deep-dive and its
+derive-capable Regression path was recorded (W2c2 Manual Test) as BETTER than
+a flat cache-only read — do not flatten it. Coverage / Localization / Replay
+sections ARE strictly cache-only reads (``get_*``); only Regression derives.
 """
 
 from __future__ import annotations
@@ -29,7 +39,7 @@ from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,
     SkippedRecord,
-    list_run_history,
+    find_entry_by_run_id,
     retrieve_run_evidence,
 )
 from novetest.models import MemoryEntry, ReplayResult
@@ -138,11 +148,7 @@ def build_inspect_view(
     without re-deriving.
     """
 
-    history = list_run_history(store, skipped=skipped)
-    target = next(
-        (e for e in history if e.run_record.run_reference.run_id == run_id),
-        None,
-    )
+    target = find_entry_by_run_id(store, run_id, skipped=skipped)
     if target is None:
         return None
     ref = target.run_record.run_reference

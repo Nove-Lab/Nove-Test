@@ -109,6 +109,12 @@
           'summary': 'Ranked suspicious code locations for a run.',
         }),
         dict({
+          'availableInPhase': 4,
+          'group': 'localization',
+          'name': 'novetest localization latest',
+          'summary': 'Ranked suspicious code locations for the latest analyzable run.',
+        }),
+        dict({
           'availableInPhase': 5,
           'group': 'replay',
           'name': 'novetest replay',

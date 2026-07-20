@@ -7,10 +7,18 @@ Implements the orchestration-side mechanics of
   to the nearest ``.novetest/`` (``resolve_workspace``, wrapping Memory's
   ``locate_project_store`` / ``find_nearest_store``). No verb ever scans
   downward; no verb ever guesses an engine.
-- **D6** — a pre-pin (legacy) store is migrated lazily on first contact:
-  one unambiguous engine choice at the anchor backfills the pin silently;
-  an ambiguous anchor raises ``EngineAmbiguousError`` instructing an
-  explicit ``novetest init --engine <name>`` re-pin.
+- **D6** — a pre-pin (legacy) store is migrated lazily, but ONLY on an
+  *execution* verb (``run`` / ``test``), which is the sole context that
+  needs an engine to dispatch on. The migration lives entirely in
+  ``resolve_execution_engine``: one unambiguous engine choice at the anchor
+  backfills the pin silently; an ambiguous anchor raises
+  ``EngineAmbiguousError`` instructing an explicit
+  ``novetest init --engine <name>`` re-pin. ``resolve_workspace`` — the seam
+  every verb (read AND execution) routes through — deliberately does NOT
+  migrate: read-only verbs proceed engine-less over a legacy store with
+  ZERO writes and never hard-fail on ambiguity (S19 seam split; Gate-1
+  D1=A / D2=A, 2026-07-20). Legacy stores get pinned on their next
+  execution verb, not on a read.
 - **D3** — explicit target expressions are normalized to anchor-relative
   canonical POSIX form (``normalize_target_expression``) so the same ask
   from any cwd, in any spelling, lands in one baseline series.
@@ -29,11 +37,11 @@ Implements the orchestration-side mechanics of
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from novetest.memory import ProjectStore, locate_project_store
-from novetest.memory.project_store import PinnedEngine, set_pinned_engine
+from novetest.memory.project_store import set_pinned_engine
 from novetest.run import (
     EngineCandidate,
     EngineNotReadyError,
@@ -144,42 +152,29 @@ async def resolve_workspace(cwd: Path) -> ProjectStore | None:
     """Resolve the governing Project Store for a verb invoked at ``cwd`` (D2).
 
     Walks upward via Memory's ``locate_project_store`` (which also honors
-    the ``NOVETEST_HOME`` short-circuit used by hermetic tests). Returns
-    ``None`` when no store exists on the walk — the CLI surfaces the
-    existing ``uninitialized`` error. Propagates
+    the ``NOVETEST_HOME`` short-circuit used by hermetic tests) and returns
+    the located store as-is. Returns ``None`` when no store exists on the
+    walk — the CLI surfaces the existing ``uninitialized`` error. Propagates
     ``ProjectStoreCorruptError`` unchanged (a broken store must error
     loudly, never be silently shadowed).
 
-    D6 migration: when the resolved store has no engine pin (created before
-    the 2026-07-03 anchored-pin decision), engine detection re-runs at the
-    anchor directory — a single choice backfills the pin silently via
-    ``set_pinned_engine``; an ambiguous anchor raises
-    ``EngineAmbiguousError``; a markerless anchor returns the store
-    unpinned (read-only verbs proceed; execution verbs surface
-    engine-missing when they find no pin to dispatch on).
+    This is a PURE resolution seam: it performs NO engine detection, NO pin
+    backfill, and raises NO ``EngineAmbiguousError`` (S19 seam split; Gate-1
+    D1=A / D2=A, 2026-07-20). A legacy pre-pin store therefore flows back to
+    the caller with ``pinned_engine is None``, and read-only verbs answer
+    from it engine-less and side-effect-free — a legacy store is never
+    written to on a read. The D6 migration (silent single-choice backfill
+    or the ambiguous-anchor ``EngineAmbiguousError``) is deferred to
+    ``resolve_execution_engine``, which the execution verbs (``run`` /
+    ``test``) call — the only context that actually needs an engine to
+    dispatch on, and so the only context that pins a legacy store.
 
-    The returned handle always reflects the post-migration pin state, so
-    callers may trust ``store.pinned_engine`` without re-reading disk.
+    Kept ``async`` (though it now awaits nothing) so its signature is stable
+    for the many callers that ``await`` it and for any future resolution
+    work that legitimately needs I/O.
     """
 
-    store = locate_project_store(cwd)
-    if store is None:
-        return None
-    if store.pinned_engine is not None:
-        return store
-    anchor = store.path.parent
-    choice = await choose_workspace_engine(anchor)
-    if choice is None:
-        return store
-    if isinstance(choice, AmbiguousEngines):
-        raise EngineAmbiguousError(choice.candidates)
-    set_pinned_engine(store, choice.ecosystem, choice.engine_name)
-    return replace(
-        store,
-        pinned_engine=PinnedEngine(
-            ecosystem=choice.ecosystem, engine_name=choice.engine_name
-        ),
-    )
+    return locate_project_store(cwd)
 
 
 async def resolve_execution_engine(
@@ -188,13 +183,16 @@ async def resolve_execution_engine(
     """Pick the ``(ecosystem, engine_name)`` pair an execution verb dispatches on (D3).
 
     A transient ``--engine`` override wins WITHOUT re-pinning; otherwise the
-    store pin governs. A pin-less handle (a legacy store reached WITHOUT the
-    CLI's ``resolve_workspace`` seam — direct workflow-API callers) gets the
-    same D6 migration the CLI seam applies: one unambiguous choice backfills
-    the pin and proceeds; ambiguity raises ``EngineAmbiguousError``. Both
-    layers call the same ``choose_workspace_engine`` rule, so they cannot
-    diverge — on the CLI path the store always arrives pinned and this
-    fallback is a no-op.
+    store pin governs. This is THE (and only) D6 migration site since the
+    S19 seam split (D1=A / D2=A): ``resolve_workspace`` no longer migrates,
+    so a legacy pin-less store now reaches this helper unpinned on every
+    execution verb (not just direct workflow-API callers). When there is no
+    pin, engine detection runs at the anchor — one unambiguous choice
+    backfills the pin via ``set_pinned_engine`` and proceeds; ambiguity
+    raises ``EngineAmbiguousError`` (the CLI maps it to ``engine-ambiguous``
+    at exit 2). So a legacy store gets pinned on its next ``run`` / ``test``,
+    never on a read. ``run`` / ``test`` call this before any subprocess
+    spawns, so the ambiguity surfaces without executing anything.
 
     A store with no pin AND no engine choice (markerless anchor) cannot
     execute anything: raise ``WorkspaceEngineUndetectedError`` (an

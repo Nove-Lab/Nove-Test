@@ -92,15 +92,46 @@ def _stub_history_with_corrupt_skip(
     run_id: str = _RUN_ID,
     path: Path = _FAKE_PATH,
 ) -> None:
-    """History scan that returns nothing but reports one corrupt skip."""
+    """run_id lookup that finds nothing but reports one corrupt skip.
+
+    Since S18 the run_id-addressed verbs resolve through the single
+    Memory-owned ``find_entry_by_run_id`` predicate (which walks
+    ``list_run_history`` internally, collecting corrupt skips), so the stub
+    stands in for THAT seam: return ``None`` (miss) while threading one
+    corrupt ``SkippedRecord`` into the collector — exactly the "present but
+    corrupt" shape ``_lookup_miss_exit`` escalates to exit 5 on an id match.
+    """
     error = f"Corrupt run record at {path}: Expecting value: line 1 column 1"
 
-    def fake_history(_store: Any, skipped: Any = None) -> list[MemoryEntry]:
+    def fake_find_entry(
+        _store: Any, _requested_id: str, *, skipped: Any = None
+    ) -> MemoryEntry | None:
         if skipped is not None:
             skipped.append(SkippedRecord(path=path, error=error, run_id=run_id))
-        return []
+        return None
 
-    monkeypatch.setattr(app_module, "list_run_history", fake_history)
+    monkeypatch.setattr(app_module, "find_entry_by_run_id", fake_find_entry)
+
+
+def _stub_find_entry(
+    monkeypatch: pytest.MonkeyPatch, entries: list[MemoryEntry]
+) -> None:
+    """Freeze the run_id lookup at a known result set (the S18 seam).
+
+    Stands in for ``find_entry_by_run_id``: returns the first entry whose
+    Run Reference id matches the requested id, else ``None`` — replicating
+    the real predicate over an injected list.
+    """
+
+    def fake_find_entry(
+        _store: Any, run_id: str, *, skipped: Any = None
+    ) -> MemoryEntry | None:
+        return next(
+            (e for e in entries if e.run_record.run_reference.run_id == run_id),
+            None,
+        )
+
+    monkeypatch.setattr(app_module, "find_entry_by_run_id", fake_find_entry)
 
 
 def _raise_corrupt(*_a: Any, **_k: Any) -> Any:
@@ -307,10 +338,8 @@ def test_memory_show_toctou_corrupt_targeted_read_maps_store_corrupt(
     workspace = tmp_path / "ws"
     workspace.mkdir()
     entry, record_path = _seed_then_corrupt(workspace)
-    # Freeze the scan at its pre-corruption result (the TOCTOU shape).
-    monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store, skipped=None: [entry]
-    )
+    # Freeze the lookup at its pre-corruption result (the TOCTOU shape).
+    _stub_find_entry(monkeypatch, [entry])
     monkeypatch.chdir(workspace)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -331,9 +360,7 @@ def test_memory_delete_toctou_corrupt_targeted_read_maps_store_corrupt(
     workspace = tmp_path / "ws"
     workspace.mkdir()
     entry, record_path = _seed_then_corrupt(workspace)
-    monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store, skipped=None: [entry]
-    )
+    _stub_find_entry(monkeypatch, [entry])
     monkeypatch.chdir(workspace)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -369,9 +396,7 @@ def test_coverage_show_maps_engine_store_corruption_to_exit_5(
     force_json_mode: None,
     stub_store: object,
 ) -> None:
-    monkeypatch.setattr(
-        app_module, "list_run_history", lambda _s, skipped=None: [_make_memory_entry()]
-    )
+    _stub_find_entry(monkeypatch, [_make_memory_entry()])
     monkeypatch.setattr(app_module, "get_coverage_facts", _raise_corrupt)
 
     with pytest.raises(SystemExit) as exc_info:
@@ -401,13 +426,9 @@ def test_compare_maps_store_corruption_to_exit_5(
     stub_store: object,
 ) -> None:
     baseline_id = "01BASELINE"
-    monkeypatch.setattr(
-        app_module,
-        "list_run_history",
-        lambda _s, skipped=None: [
-            _make_memory_entry(baseline_id),
-            _make_memory_entry(_RUN_ID),
-        ],
+    _stub_find_entry(
+        monkeypatch,
+        [_make_memory_entry(baseline_id), _make_memory_entry(_RUN_ID)],
     )
     monkeypatch.setattr(app_module, "build_compare_view", _raise_corrupt)
 
@@ -470,9 +491,7 @@ def test_replay_maps_store_corruption_to_exit_5(
     force_json_mode: None,
     stub_store: object,
 ) -> None:
-    monkeypatch.setattr(
-        app_module, "list_run_history", lambda _s, skipped=None: [_make_memory_entry()]
-    )
+    _stub_find_entry(monkeypatch, [_make_memory_entry()])
     monkeypatch.setattr(app_module, "replay_run", _raise_corrupt_async)
 
     with pytest.raises(SystemExit) as exc_info:

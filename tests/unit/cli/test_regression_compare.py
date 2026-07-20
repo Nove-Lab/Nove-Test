@@ -1,9 +1,10 @@
 """Unit tests for the `novetest regression compare` CLI handler.
 
 Covers the orchestration-to-envelope projection: lookup → engine call →
-envelope projection. The Regression engine seam (`compare_runs`) and
-Memory's `list_run_history` are monkeypatched at the `cli.app` module so
-the unit tests never touch the filesystem. Envelopes are captured via
+envelope projection. The Regression engine seam (`compare_runs`) and the
+Memory run_id lookup (`find_entry_by_run_id`, the single S18 predicate) are
+monkeypatched at the `cli.app` module so the unit tests never touch the
+filesystem. Envelopes are captured via
 `capsys` (per the inspect/coverage slices' gotcha — fighting pytest's own
 stdout capture with a second monkeypatch leads to silently empty buffers).
 """
@@ -138,13 +139,18 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
 
 @pytest.fixture
 def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub `list_run_history` to return both the baseline and target entries
-    so `_resolve_run_reference` succeeds for both IDs."""
+    """Stub the S18 run_id lookup (`find_entry_by_run_id`) to resolve both the
+    baseline and target entries so `_resolve_run_reference` succeeds for both
+    IDs."""
 
+    entries = [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)]
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)],
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: next(
+            (e for e in entries if e.run_record.run_reference.run_id == run_id),
+            None,
+        ),
     )
 
 
@@ -362,7 +368,11 @@ def test_regression_compare_returns_not_found_for_fake_baseline_id(
     BEFORE `compare_runs` is called — returns the not-found envelope with
     exit 2, mirroring `coverage diff`."""
 
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
+    monkeypatch.setattr(
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: None,
+    )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("compare_runs called when baseline lookup failed")
@@ -388,8 +398,14 @@ def test_regression_compare_returns_not_found_for_fake_target_id(
     """The target side is checked AFTER the baseline — both must resolve
     for the engine call to fire."""
 
+    baseline_only = [_make_memory_entry(_BASELINE_ID)]
     monkeypatch.setattr(
-        app_module, "list_run_history", lambda _store, skipped=None: [_make_memory_entry(_BASELINE_ID)]
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: next(
+            (e for e in baseline_only if e.run_record.run_reference.run_id == run_id),
+            None,
+        ),
     )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:

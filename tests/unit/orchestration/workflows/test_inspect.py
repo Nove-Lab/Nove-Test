@@ -2,9 +2,12 @@
 
 Focused on the aggregation wiring — run lookup, the Coverage section
 sourcing, the not-found signal, and the wire shape of the aggregated
-view. The Memory / Coverage seams (`list_run_history`,
+view. The Memory / Coverage seams (`find_entry_by_run_id`,
 `retrieve_run_evidence`, `get_coverage_facts`) are monkeypatched at the
-`inspect` module so the unit tests never touch the filesystem.
+`inspect` module so the unit tests never touch the filesystem. Since S18
+the run lookup is the single Memory-owned `find_entry_by_run_id` predicate,
+so the stubs stand in for it (returning the first history entry whose
+run_id matches) rather than for the raw `list_run_history` scan.
 """
 
 from __future__ import annotations
@@ -86,7 +89,7 @@ def _patch_memory(
     history: list[MemoryEntry],
     retrieved: MemoryEntry | RunEvidenceNotFoundError | None = None,
 ) -> None:
-    """Stub `list_run_history`, `retrieve_run_evidence`, and
+    """Stub `find_entry_by_run_id`, `retrieve_run_evidence`, and
     `resolve_baseline_for_run` at the inspect seam.
 
     The baseline selector is stubbed to ``None`` ("no comparable
@@ -99,7 +102,15 @@ def _patch_memory(
     existent filesystem.
     """
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: history)
+    def fake_find_entry(
+        _store: Any, run_id: str, *, skipped: Any = None
+    ) -> MemoryEntry | None:
+        return next(
+            (e for e in history if e.run_record.run_reference.run_id == run_id),
+            None,
+        )
+
+    monkeypatch.setattr(inspect_module, "find_entry_by_run_id", fake_find_entry)
 
     def fake_retrieve(_store: Any, _ref: RunReference) -> MemoryEntry:
         if isinstance(retrieved, RunEvidenceNotFoundError):
@@ -161,7 +172,11 @@ def _patch_memory(
 def test_unknown_run_id_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """No Memory Entry matches the run_id → `None` (CLI maps to not-found)."""
 
-    monkeypatch.setattr(inspect_module, "list_run_history", lambda _store, skipped=None: [])
+    monkeypatch.setattr(
+        inspect_module,
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: None,
+    )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("get_coverage_facts called for an unknown run_id")
@@ -174,13 +189,14 @@ def test_unknown_run_id_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_skipped_collector_threads_to_history_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Q1-A seam: the ``skipped`` collector reaches ``list_run_history``.
+    """Q1-A seam: the ``skipped`` collector reaches ``find_entry_by_run_id``.
 
     ``build_inspect_view`` never escalates itself — it returns ``None`` for
     the miss and the CLI decides (``_lookup_miss_exit``) whether the miss is
     a genuine ``not-found`` or an addressed-corrupt ``store-corrupt``. The
     workflow's whole contribution is threading the MEM-05 collector through
-    to the scan; this pins exactly that.
+    to the shared lookup (which walks ``list_run_history`` internally); this
+    pins exactly that.
     """
 
     skip = SkippedRecord(
@@ -189,12 +205,14 @@ def test_skipped_collector_threads_to_history_scan(
         run_id="01CORRUPT",
     )
 
-    def fake_history(_store: Any, skipped: Any = None) -> list[MemoryEntry]:
+    def fake_find_entry(
+        _store: Any, run_id: str, *, skipped: Any = None
+    ) -> MemoryEntry | None:
         if skipped is not None:
             skipped.append(skip)
-        return []
+        return None
 
-    monkeypatch.setattr(inspect_module, "list_run_history", fake_history)
+    monkeypatch.setattr(inspect_module, "find_entry_by_run_id", fake_find_entry)
 
     collector: list[SkippedRecord] = []
     view = build_inspect_view(object(), "01CORRUPT", skipped=collector)  # type: ignore[arg-type]

@@ -27,7 +27,6 @@ import pytest
 
 from novetest.cli import app as app_module
 from novetest.cli.output import OutputMode
-from novetest.orchestration.anchor_resolution import EngineAmbiguousError
 from novetest.orchestration.workflows.discovery import DiscoveredCandidate
 from novetest.orchestration.workflows.init import (
     InitEngineAmbiguous,
@@ -293,38 +292,30 @@ def test_init_engine_ambiguous_envelope(
 
 
 # ---------------------------------------------------------------------------
-# D6 migration ambiguity through the shared _require_store seam
+# D6 migration ambiguity NO LONGER routes through the shared _require_store
+# seam (S19 seam split; Gate-1 D1=A / D2=A, 2026-07-20)
 # ---------------------------------------------------------------------------
 
 
-def test_require_store_surfaces_migration_ambiguity(
+def test_require_store_passes_legacy_unpinned_store_through_for_reads(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    force_json_mode: None,
 ) -> None:
-    """Any verb on a legacy pin-less store with an ambiguous anchor gets the
-    D7 ``engine-ambiguous`` envelope (exit 2) from the shared resolution
-    seam — here observed via ``status``."""
+    """S19 (D1=A): the shared ``_require_store`` seam no longer maps
+    ``engine-ambiguous`` — ``resolve_workspace`` returns a legacy pin-less
+    store as-is and every read verb receives it untouched (proceeds
+    engine-less). The ambiguous-refusal moved to the EXECUTION path
+    (``run`` / ``test`` via ``resolve_execution_engine`` →
+    ``_map_execution_exception``), pinned in
+    ``test_execution_exception_mapping.py``. This pins that the read seam
+    passes the store straight through with no exit."""
 
-    candidates = (
-        EngineCandidate(ecosystem="python", engine_name="pytest"),
-        EngineCandidate(ecosystem="rust", engine_name="cargo-test"),
-    )
+    sentinel = object()
 
     async def fake_resolve(_cwd: Path) -> Any:
-        raise EngineAmbiguousError(candidates)
+        # A legacy pin-less store is now returned as-is (post-S19 the seam
+        # never raises EngineAmbiguousError on a read).
+        return sentinel
 
     monkeypatch.setattr(app_module, "resolve_workspace", fake_resolve)
 
-    with pytest.raises(SystemExit) as exc_info:
-        app_module.status()
-    assert exc_info.value.code == 2
-
-    payload = _captured_envelope(capsys)
-    assert payload["command"] == "status"
-    assert payload["errors"][0]["code"] == "engine-ambiguous"
-    assert payload["data"]["candidates"] == [
-        {"path": ".", "ecosystem": "python", "engine_name": "pytest"},
-        {"path": ".", "ecosystem": "rust", "engine_name": "cargo-test"},
-    ]
-    assert "novetest init --engine" in payload["errors"][0]["message"]
+    assert app_module._require_store("status") is sentinel

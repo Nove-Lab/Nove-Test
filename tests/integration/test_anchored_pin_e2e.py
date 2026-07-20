@@ -296,49 +296,89 @@ def test_verb_in_uninitialized_tree_errors_without_scanning(
 
 
 # ---------------------------------------------------------------------------
-# D6 migration — legacy pin-less stores
+# D6 migration — legacy pin-less stores (S19 read/execution seam split;
+# Gate-1 D1=A / D2=A, 2026-07-20)
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_store_backfills_pin_silently_on_first_verb(
+def test_legacy_store_read_verb_does_not_backfill_execution_verb_does(
     pytest_only_workspace: Path, run_cli
 ) -> None:
+    """D2=A: a READ verb (``status``) over a legacy single-marker store
+    proceeds engine-less and writes NOTHING — the pin stays absent. The
+    backfill happens on the next EXECUTION verb (``run``)."""
+
     workspace = pytest_only_workspace
     assert run_cli(workspace, ["init"]).returncode == 0
     _strip_pin(workspace)  # simulate a store created before the decision
+    store_json = workspace / ".novetest" / "store.json"
 
+    # --- READ verb: proceeds engine-less, leaves the store pin-less.
     status = run_cli(workspace, ["status"])
     assert status.returncode == 0, status.stderr
     envelope = status.envelope()
-    # No user-visible change beyond the pin appearing.
     assert envelope["ok"] is True
     assert envelope["errors"] == []
-    assert envelope["data"]["pinned_engine"] == {
-        "ecosystem": "python",
-        "engine_name": "pytest",
-    }
-    metadata = json.loads(
-        (workspace / ".novetest" / "store.json").read_text(encoding="utf-8")
+    # No backfill: pin is still absent on the wire AND on disk.
+    assert envelope["data"]["pinned_engine"] is None
+    assert "pinned_engine" not in json.loads(
+        store_json.read_text(encoding="utf-8")
     )
+
+    # --- EXECUTION verb: NOW the legacy store is pinned (single marker).
+    run = run_cli(workspace, ["run"])
+    assert run.returncode == 0, run.stderr
+    metadata = json.loads(store_json.read_text(encoding="utf-8"))
     assert metadata["pinned_engine"] == {
         "ecosystem": "python",
         "engine_name": "pytest",
     }
 
 
-def test_legacy_store_on_ambiguous_anchor_requires_explicit_repin(
+def test_legacy_ambiguous_store_read_proceeds_execution_refuses(
     dual_marker_workspace: Path, run_cli
 ) -> None:
+    """The C8-narrow trigger, both shapes: on a legacy + ambiguous store a
+    READ verb exits 0 (D1=A) while an EXECUTION verb still exits 2 with
+    ``engine-ambiguous`` (the refusal moved to the execution path)."""
+
     workspace = dual_marker_workspace
     assert run_cli(workspace, ["init", "--engine", "pytest"]).returncode == 0
     _strip_pin(workspace)
 
-    result = run_cli(workspace, ["status"])
-    assert result.returncode == 2
-    envelope = result.envelope()
-    assert envelope["errors"][0]["code"] == "engine-ambiguous"
-    assert "novetest init --engine" in envelope["errors"][0]["message"]
+    # --- READ verb: proceeds engine-less, exit 0 (was exit 2 pre-S19).
+    read = run_cli(workspace, ["status"])
+    assert read.returncode == 0, read.stderr
+    assert read.envelope()["ok"] is True
+    assert read.envelope()["data"]["pinned_engine"] is None
 
-    # The instructed re-pin resolves it in place.
+    # --- EXECUTION verb: still refuses on ambiguity.
+    for verb in ("run", "test"):
+        execution = run_cli(workspace, [verb])
+        assert execution.returncode == 2, execution.stderr
+        envelope = execution.envelope()
+        assert envelope["errors"][0]["code"] == "engine-ambiguous"
+        assert "novetest init --engine" in envelope["errors"][0]["message"]
+
+    # The instructed re-pin resolves it in place; reads and executions agree.
     assert run_cli(workspace, ["init", "--engine", "pytest"]).returncode == 0
     assert run_cli(workspace, ["status"]).returncode == 0
+
+
+def test_read_verb_over_legacy_ambiguous_store_leaves_store_json_byte_identical(
+    dual_marker_workspace: Path, run_cli
+) -> None:
+    """Read-purity (D2=A) at the byte level: a ``status`` over a legacy +
+    ambiguous store mutates ``store.json`` not at all — same bytes before and
+    after (no torn/backfilled write, no timestamp churn)."""
+
+    workspace = dual_marker_workspace
+    assert run_cli(workspace, ["init", "--engine", "pytest"]).returncode == 0
+    _strip_pin(workspace)
+    store_json = workspace / ".novetest" / "store.json"
+    before = store_json.read_bytes()
+
+    result = run_cli(workspace, ["status"])
+    assert result.returncode == 0, result.stderr
+
+    assert store_json.read_bytes() == before

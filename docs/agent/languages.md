@@ -63,11 +63,15 @@ silently — the same repo can therefore init cleanly on one host and
 return `engine-ambiguous` on another. Never cache init outcomes across
 machines.
 
-Legacy pin-less stores: the first verb backfills `pinned_engine`
-silently when unambiguous, or exits 2 with `engine-ambiguous`
-(instructing re-init) when not. `reset --confirm` re-inits **at the
-anchor** and carries the pin; on an ambiguous pin-less store it
-refuses with `engine-ambiguous` and wipes nothing.
+Legacy pin-less stores: the first **execution** verb (`run` / `test`)
+backfills `pinned_engine` silently when unambiguous, or exits 2 with
+`engine-ambiguous` (instructing re-init) when not. Read-only verbs
+(`status`, `memory ...`, `inspect`, `coverage show`,
+`regression/localization latest|show`, `compare`) neither backfill nor
+refuse — they proceed engine-less (exit 0) over a legacy store and write
+nothing. `reset --confirm` re-inits **at the anchor** and carries the
+pin; on an ambiguous pin-less store it refuses with `engine-ambiguous`
+and wipes nothing.
 
 There is no single-envelope polyglot orchestration at MVP — use one
 `.novetest/` per ecosystem subdirectory.

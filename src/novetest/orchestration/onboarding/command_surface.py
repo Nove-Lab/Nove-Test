@@ -143,6 +143,12 @@ _OPERATING: tuple[CommandSpec, ...] = (
         available_in_phase=4,
     ),
     CommandSpec(
+        name="novetest localization latest",
+        summary="Ranked suspicious code locations for the latest analyzable run.",
+        group="localization",
+        available_in_phase=4,
+    ),
+    CommandSpec(
         name="novetest replay",
         summary="Re-execute a stored run and classify reproducibility.",
         group="replay",

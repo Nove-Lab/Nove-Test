@@ -5,9 +5,13 @@ this module owns:
 
 - ``choose_workspace_engine`` — the ONE engine-choice rule shared by ``init``
   (D1) and the D6 migration;
-- ``resolve_workspace`` — the verb-level upward walk + lazy pin migration;
+- ``resolve_workspace`` — the verb-level upward walk. Since the S19 seam split
+  (D1=A / D2=A) it is PURE resolution: NO pin backfill, NO
+  ``EngineAmbiguousError`` — a legacy store flows back unpinned so read verbs
+  proceed engine-less and side-effect-free;
 - ``resolve_execution_engine`` — D3 pin-by-default / transient-override
-  dispatch selection (with the same D6 fallback for direct API callers);
+  dispatch selection, and now the SOLE D6 migration site (backfill /
+  ambiguous-refusal), reached by the execution verbs (``run`` / ``test``);
 - ``normalize_target_expression`` — D3 anchor-relative canonical form.
 
 Engine *detection* runs for real against fabricated marker files (it is
@@ -167,7 +171,7 @@ async def test_choose_two_markers_zero_ready_is_ambiguous_with_all_candidates(
 
 
 # ---------------------------------------------------------------------------
-# resolve_workspace — D2 walk-up + D6 migration
+# resolve_workspace — D2 walk-up (pure resolution; NO D6 migration post-S19)
 # ---------------------------------------------------------------------------
 
 
@@ -208,43 +212,49 @@ async def test_resolve_walks_up_from_nested_subdirectory(
     assert resolved.path == workspace / ".novetest"
 
 
-async def test_resolve_backfills_pin_on_legacy_store(
+async def test_resolve_does_not_backfill_pin_on_legacy_single_marker_store(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """D6: one unambiguous choice → silent backfill, on disk and on handle."""
+    """S19 (D2=A): ``resolve_workspace`` NEVER backfills — even an unambiguous
+    single-marker legacy store flows back unpinned, on disk and on the handle,
+    so read verbs stay side-effect-free. The backfill happens later, on the
+    next EXECUTION verb (``resolve_execution_engine``)."""
 
     _mark_python(workspace)
     create_project_store(workspace)  # legacy: no pin
-    _patch_probe(monkeypatch, ready_engines={"pytest"})
 
+    def must_not_choose(_ws: Path) -> None:
+        raise AssertionError("resolve_workspace ran engine detection on a read")
+
+    monkeypatch.setattr(anchor_module, "choose_workspace_engine", must_not_choose)
     resolved = await resolve_workspace(workspace)
     assert resolved is not None
-    assert resolved.pinned_engine is not None
-    assert resolved.pinned_engine.to_dict() == {
-        "ecosystem": "python",
-        "engine_name": "pytest",
-    }
+    assert resolved.pinned_engine is None  # handle: still unpinned
     on_disk = get_project_store_state(workspace / ".novetest")
-    assert on_disk.pinned_engine is not None
-    assert on_disk.pinned_engine.engine_name == "pytest"
+    assert on_disk.pinned_engine is None  # disk: not written
 
 
-async def test_resolve_raises_engine_ambiguous_on_legacy_store(
+async def test_resolve_does_not_raise_on_legacy_ambiguous_store(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """S19 (D1=A): ``resolve_workspace`` no longer raises
+    ``EngineAmbiguousError`` on a legacy + ambiguous store — it returns the
+    store unpinned so read verbs proceed engine-less (exit 0). The
+    ambiguous-refusal moved to ``resolve_execution_engine`` (execution verbs
+    only) — see ``test_execution_engine_raises_ambiguous_without_pin``."""
+
     _mark_python(workspace)
     _mark_go(workspace)
     create_project_store(workspace)
-    _patch_probe(monkeypatch, ready_engines={"pytest", "go-test"})
 
-    with pytest.raises(EngineAmbiguousError) as exc_info:
-        await resolve_workspace(workspace)
-    assert [c.engine_name for c in exc_info.value.candidates] == [
-        "pytest",
-        "go-test",
-    ]
-    assert "novetest init --engine" in str(exc_info.value)
-    # No pin was written on the ambiguous path.
+    def must_not_choose(_ws: Path) -> None:
+        raise AssertionError("resolve_workspace ran engine detection on a read")
+
+    monkeypatch.setattr(anchor_module, "choose_workspace_engine", must_not_choose)
+    resolved = await resolve_workspace(workspace)
+    assert resolved is not None
+    assert resolved.pinned_engine is None
+    # No pin was written — the read path touches nothing.
     assert get_project_store_state(workspace / ".novetest").pinned_engine is None
 
 

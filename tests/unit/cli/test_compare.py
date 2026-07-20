@@ -136,10 +136,14 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
 
 @pytest.fixture
 def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    entries = [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)]
     monkeypatch.setattr(
         app_module,
-        "list_run_history",
-        lambda _store, skipped=None: [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)],
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: next(
+            (e for e in entries if e.run_record.run_reference.run_id == run_id),
+            None,
+        ),
     )
 
 
@@ -361,7 +365,11 @@ def test_compare_returns_not_found_for_fake_baseline_id(
     """Both engine calls must short-circuit when either run_id is unknown.
     Mirrors `regression compare` / `coverage diff`."""
 
-    monkeypatch.setattr(app_module, "list_run_history", lambda _store, skipped=None: [])
+    monkeypatch.setattr(
+        app_module,
+        "find_entry_by_run_id",
+        lambda _store, run_id, *, skipped=None: None,
+    )
 
     def must_not_be_called(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("engine called when baseline lookup failed")

@@ -34,11 +34,13 @@ from novetest.localization import (
     FORMULAS,
 )
 from novetest.memory import (
+    RUN_ID_NOT_FOUND_MESSAGE,
     ProjectStore,
     ProjectStoreCorruptError,
     RunEvidenceNotFoundError,
     SkippedRecord,
     delete_run_evidence,
+    find_entry_by_run_id,
     list_run_history,
     retrieve_run_evidence,
 )
@@ -204,7 +206,7 @@ def _lookup_miss_exit(
             errors=(
                 EnvelopeError(
                     code="not-found",
-                    message=f"No Memory Entry for run_id={run_id!r}",
+                    message=RUN_ID_NOT_FOUND_MESSAGE.format(run_id=run_id),
                 ),
             ),
             warnings=warnings,
@@ -214,29 +216,22 @@ def _lookup_miss_exit(
 
 
 def _require_store(command: str) -> ProjectStore:
-    """Resolve the governing Project Store for a verb (anchored-pin D2 + D6).
+    """Resolve the governing Project Store for a verb (anchored-pin D2).
 
     THE single workspace-resolution seam every verb routes through: wraps
     ``orchestration.anchor_resolution.resolve_workspace`` (upward walk to the
-    nearest ``.novetest/`` + lazy engine-pin migration for legacy stores).
-    The returned handle reflects the post-migration pin state.
+    nearest ``.novetest/``). Since the S19 seam split (D1=A / D2=A) this seam
+    performs NO engine-pin migration — a legacy pre-pin store returns with
+    ``pinned_engine is None`` and read-only verbs proceed engine-less over
+    it. Pin backfill / the ``engine-ambiguous`` refusal now happen only on
+    the execution path (``run`` / ``test`` via ``resolve_execution_engine``);
+    hence this helper no longer catches ``EngineAmbiguousError`` — it is
+    unreachable from ``resolve_workspace``.
     """
     try:
         store = asyncio.run(resolve_workspace(Path.cwd()))
     except ProjectStoreCorruptError as exc:
         _emit_and_exit(_store_corrupt_envelope(command, str(exc)), EXIT_STORAGE)
-    except EngineAmbiguousError as exc:
-        # D6 migration on a legacy pin-less store found no single engine
-        # choice — the user must pin explicitly (re-pin in place).
-        _emit_and_exit(
-            Envelope(
-                command=command,
-                ok=False,
-                data={"candidates": _engine_candidates_payload(exc.candidates)},
-                errors=(EnvelopeError(code="engine-ambiguous", message=str(exc)),),
-            ),
-            EXIT_USAGE,
-        )
     if store is None:
         _emit_and_exit(_uninitialized(command), EXIT_USAGE)
     return store
@@ -337,8 +332,10 @@ def _map_execution_exception(
     ``EngineNotReadyError`` subclass, so it must reach the readiness branch (where
     ``_engine_not_ready_code`` maps it to the D7 ``no-engine-detected`` token).
 
-    - ``EngineAmbiguousError`` (a TOCTOU race — a marker appearing between the
-      ``_require_store`` migration and the workflow's own D6 fallback) →
+    - ``EngineAmbiguousError`` (post-S19, the primary legacy + ambiguous
+      refusal: ``resolve_execution_engine`` raises it when an execution verb
+      finds a pin-less store whose anchor matches multiple engines —
+      ``resolve_workspace`` no longer migrates, so reads never reach it) →
       ``engine-ambiguous`` + ``data.candidates``, exit 2.
     - ``EngineNotReadyError`` → ``data.engine_readiness`` + the D7 readiness token,
       exit 4.
@@ -744,11 +741,13 @@ def run_cmd(
             )
         )
     except (EngineAmbiguousError, RunEngineError) as exc:
-        # ORC-02/ORC-21: one shared mapping for both verbs. EngineAmbiguous is
-        # only reachable via a TOCTOU race (a marker appearing between the
-        # _require_store migration and the workflow's own D6 fallback); the
-        # RunEngineError family (EngineNotReady / AdapterInvocation / the
-        # structural fallback) maps to its structured exit here.
+        # ORC-02/ORC-21: one shared mapping for both verbs. Since the S19 seam
+        # split ``resolve_workspace`` no longer migrates, so ``EngineAmbiguous``
+        # now surfaces here as the PRIMARY path — ``resolve_execution_engine``
+        # (called first in the workflow, before any subprocess) raises it on a
+        # legacy + ambiguous store. The RunEngineError family (EngineNotReady /
+        # AdapterInvocation / the structural fallback) maps to its structured
+        # exit here.
         _emit_and_exit(*_map_execution_exception("run", exc))
     except ProjectStoreCorruptError as exc:
         # S42 residual loud path (the workflow's post-persist refresh /
@@ -872,12 +871,8 @@ def memory_show(run_id: str) -> None:
     """Show the Memory Entry for ``run_id`` (live or tombstoned)."""
     store = _require_store("memory.show")
     skipped: list[SkippedRecord] = []
-    entries = list_run_history(store, skipped=skipped)
+    target = find_entry_by_run_id(store, run_id, skipped=skipped)
     warnings = _corrupt_record_warnings(skipped)
-    target = next(
-        (e for e in entries if e.run_record.run_reference.run_id == run_id),
-        None,
-    )
     if target is None:
         # Q1-A: a miss on an id the scan skipped-as-corrupt escalates to
         # store-corrupt / exit 5; genuinely-absent ids stay not-found.
@@ -918,12 +913,8 @@ def memory_delete(run_id: str) -> None:
     """Tombstone the Memory Entry for ``run_id`` (POSIX-atomic rename)."""
     store = _require_store("memory.delete")
     skipped: list[SkippedRecord] = []
-    entries = list_run_history(store, skipped=skipped)
+    target = find_entry_by_run_id(store, run_id, skipped=skipped)
     warnings = _corrupt_record_warnings(skipped)
-    target = next(
-        (e for e in entries if e.run_record.run_reference.run_id == run_id),
-        None,
-    )
     if target is None:
         # Q1-A: a corrupt record CANNOT be tombstoned (tombstoning re-writes
         # the parsed record) — exit 5 with the path is the honest outcome;
@@ -989,11 +980,7 @@ def _resolve_run_reference(
     memory-verb-only (S41's deliberate transport choice).
     """
     skipped: list[SkippedRecord] = []
-    entries = list_run_history(store, skipped=skipped)
-    target = next(
-        (e for e in entries if e.run_record.run_reference.run_id == run_id),
-        None,
-    )
+    target = find_entry_by_run_id(store, run_id, skipped=skipped)
     if target is None:
         _lookup_miss_exit(command, run_id, skipped)
     return target.run_record.run_reference
@@ -1503,8 +1490,13 @@ def inspect_cmd(run_id: str) -> None:
     ``novetest localization`` emits) — each flips its
     ``sub_reports[...]`` marker from ``"unavailable"`` to ``"available"``
     when its evidence resolves. Replay remains present-but-``unavailable``
-    until its engine lands in Phase 5. ``inspect`` executes nothing — it is
-    a pure read over stored evidence (no derivation, no subprocess).
+    until its engine lands in Phase 5. ``inspect`` spawns no engine
+    subprocess (it runs no test); its Coverage / Localization / Replay
+    sections are strictly cache-only reads. Its Regression section, by
+    contrast, COMPOSES ``resolve_baseline_for_run`` + ``compare_runs`` and so
+    DERIVES the pair's facts on a cache miss (self-heal) — the intended
+    ORC-25 asymmetry with ``status``, which is strictly cache-only (Gate-1
+    D3=A, 2026-07-20; see ``workflows/inspect.py``).
 
     A stale or fake ``run_id`` surfaces a structured ``not-found`` error
     (exit 2), mirroring ``memory show``. Tombstoned runs remain inspectable.
@@ -1600,6 +1592,8 @@ def test_cmd(
     except (EngineAmbiguousError, RunEngineError) as exc:
         # ORC-02/ORC-21: same shared mapping as run_cmd — the two verbs cannot
         # drift because they thread their own ``command`` through one helper.
+        # Post-S19, ``EngineAmbiguous`` reaches here as the primary legacy +
+        # ambiguous refusal (see run_cmd's note), not a TOCTOU race.
         _emit_and_exit(*_map_execution_exception("test", exc))
     except ProjectStoreCorruptError as exc:
         # S42 residual loud path (a stage's targeted read / the post-stage

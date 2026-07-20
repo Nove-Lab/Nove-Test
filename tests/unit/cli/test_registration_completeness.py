@@ -17,14 +17,13 @@ Two structural facts about the mapping:
 - ``--version`` / ``--help`` are Cyclopts built-in flag-commands, not
   ``@app.command`` registrations, yet they DO emit envelopes and so carry a
   renderer and a surface entry. They are the closed ``PSEUDO_COMMANDS`` set.
-- ``localization latest`` is a real, renderer-backed subcommand that the
-  onboarding catalog currently does NOT advertise (while its sibling
-  ``regression latest`` IS advertised). That single asymmetry is captured as a
-  documented, tracked exception (``KNOWN_SURFACE_OMISSIONS``) pending the
-  product decision routed in
-  ``agent-comms/questions/orchestration-team-2026-07-16-localization-latest-onboarding-surface.md``.
-  The gap is pinned to EXACTLY that token, so closing it (or opening a new one)
-  fails this test.
+- ``localization latest`` USED to be a real, renderer-backed subcommand the
+  onboarding catalog did not advertise (while its sibling ``regression latest``
+  was). That asymmetry was closed at Gate-1 D4=A (2026-07-20, W2c6/S19 rider):
+  the mirroring ``CommandSpec`` was added and the token dropped from
+  ``KNOWN_SURFACE_OMISSIONS`` in the SAME commit. The catalog now covers the
+  app tree with ZERO omissions — ``KNOWN_SURFACE_OMISSIONS`` is empty, and any
+  newly-unadvertised verb (or a re-opened omission) fails the gap test below.
 """
 
 from __future__ import annotations
@@ -41,10 +40,11 @@ from novetest.orchestration.onboarding.command_surface import (
 # (hence a renderer + a surface entry) but never appear as ``@app.command``.
 PSEUDO_COMMANDS = frozenset({"version", "help"})
 
-# Real commands the onboarding catalog does not (yet) advertise — see the
-# module docstring and the routed question. Pinned exactly so the gap cannot
-# silently grow or shrink.
-KNOWN_SURFACE_OMISSIONS = frozenset({"localization.latest"})
+# Real commands the onboarding catalog does not advertise. Empty since Gate-1
+# D4=A (2026-07-20) advertised ``localization latest`` — the catalog now covers
+# the app tree exactly. Pinned so the gap cannot silently grow (or a new
+# omission reopen) without updating this constant in lockstep.
+KNOWN_SURFACE_OMISSIONS: frozenset[str] = frozenset()
 
 
 def _app_command_tokens(sub_app: App | None = None, prefix: str = "") -> set[str]:

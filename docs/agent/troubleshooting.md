@@ -96,10 +96,18 @@ Two shapes, discriminated by the `data` payload:
 ### `engine-ambiguous` (exit 2)
 
 ≥ 2 viable engines (marker + toolchain-READY) at the init directory —
-or a legacy pin-less store at such a root. Nothing is created/wiped.
+or a legacy pin-less store at such a root reached by an **execution
+verb** (`run` / `test` / `init` / `reset`). Nothing is created/wiped.
 Recovery: `novetest init --engine <name>` with a value from
 `data.candidates[]`. Viability is host-dependent; never cache this
 outcome across machines.
+
+Read-only verbs (`status`, `memory list/show/delete`, `inspect`,
+`coverage show`, `regression latest/show`, `localization latest/show`,
+`compare`) do **not** hit this on a legacy pin-less store: they proceed
+engine-less (exit 0) and answer from the store as-is, writing nothing.
+Only the execution path needs an engine, so only it refuses on ambiguity
+and only it backfills the pin.
 
 ### `engine-missing` (exit 4)
 
