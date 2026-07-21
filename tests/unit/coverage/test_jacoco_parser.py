@@ -20,6 +20,8 @@ from novetest.models.run_reference import RunReference
 
 _RUN_REF = RunReference(run_id="r1", created_at=1)
 
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
 
 _BASIC_JACOCO_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <report name="basic">
@@ -240,3 +242,80 @@ class TestParseJacocoXmlErrors:
                 ecosystem="java",
                 workspace_root=tmp_path,
             )
+
+
+class TestParseJacocoRealGolden:
+    """Real-artifact golden (ANA-15): parse a byte-verbatim ``jacoco.xml``
+    captured from an actual Maven + JaCoCo run so the real report shape is
+    exercised on hosts WITHOUT a JVM (CI cells lacking Java skip the
+    ``test_junit_jacoco_derive.py`` integration sibling; this golden keeps
+    the real-shape signal alive there).
+
+    The inline XML samples elsewhere in this module omit the pieces a real
+    JaCoCo report carries: the ``<!DOCTYPE report PUBLIC "-//JACOCO//DTD
+    Report 1.1//EN" ...>`` declaration, ``<sessioninfo>``, and the full
+    ``<class>/<method>/<counter>`` nesting the parser must skip past to
+    reach ``<sourcefile>``. A JaCoCo version bump that reorders/renests any
+    of that would slip past the inline tests but is caught here.
+
+    Provenance — ``tests/fixtures/projects/junit-maven-basic`` run with
+    ``mvn -B test`` under: JDK 17.0.19, Apache Maven 3.9.16,
+    jacoco-maven-plugin 0.8.11, maven-surefire-plugin 3.2.5,
+    JUnit Jupiter 5.10.2 (JaCoCo DTD Report 1.1). Committed byte-verbatim
+    (nothing stripped — the machine-local ``<sessioninfo>`` id/timestamps
+    are inert to the parser, which reads only ``<sourcefile>`` lines).
+    """
+
+    def test_real_golden_parses_to_expected_fact_set(self) -> None:
+        golden = _FIXTURES_DIR / "jacoco_junit_maven_basic.xml"
+
+        fact_set = parse_jacoco_xml(
+            [golden],
+            run_reference=_RUN_REF,
+            engine_name="junit",
+            ecosystem="java",
+            workspace_root=_FIXTURES_DIR,
+        )
+
+        assert fact_set.engine_name == "junit"
+        assert fact_set.ecosystem == "java"
+        assert fact_set.mapping_granularity == "aggregate"
+
+        # Single sourcefile in the fixture: Calculator.java, composed under
+        # the standard Maven ``src/main/java`` layout.
+        assert len(fact_set.files) == 1
+        fc = fact_set.files[0]
+        assert fc.file_path == "src/main/java/com/example/Calculator.java"
+
+        # Every Calculator method is exercised by the companion test class
+        # (add/subtract/multiply/divide + the ctor line), so the fixture is
+        # fully covered — no missing lines.
+        assert fc.executed_lines == (15, 18, 23, 27, 31, 32, 34)
+        assert fc.missing_lines == ()
+
+        # divide()'s ``if (b == 0)`` is the only branch point; both arms are
+        # covered (testDivide passes b!=0, testDivideByZero passes b==0), so
+        # the parser synthesizes two covered branch indices on line 31 and
+        # no missing branch. This is the real-artifact branch-extraction
+        # signal ANA-15 asked for.
+        assert fc.executed_branches == ((31, 0), (31, 1))
+        assert fc.missing_branches == ()
+
+        assert fc.summary.num_statements == 7
+        assert fc.summary.covered_statements == 7
+        assert fc.summary.missing_statements == 0
+        assert fc.summary.num_branches == 2
+        assert fc.summary.covered_branches == 2
+        assert fc.summary.missing_branches == 0
+
+        # Aggregate roll-up mirrors the single file.
+        assert fact_set.summary.num_statements == 7
+        assert fact_set.summary.covered_statements == 7
+        assert fact_set.summary.num_branches == 2
+        assert fact_set.summary.percent_covered == pytest.approx(100.0)
+
+        assert fact_set.metadata["coverage_format"] == "jacoco-xml"
+        assert (
+            fact_set.metadata["branch_arc_semantics"]
+            == "jacoco-line-counter-index"
+        )
