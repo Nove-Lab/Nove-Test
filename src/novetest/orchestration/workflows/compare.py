@@ -20,8 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from novetest.coverage import CoverageUnavailable, compare_coverage_facts
-from novetest.coverage.compare import CoverageDelta
+from novetest.coverage import CoverageDelta, CoverageUnavailable, compare_coverage_facts
 from novetest.memory import ProjectStore
 from novetest.models import RunReference
 from novetest.orchestration.projection import (

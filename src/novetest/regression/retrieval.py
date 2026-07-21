@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from novetest.coverage.compare import SCHEMA_VERSION as COVERAGE_DELTA_SCHEMA_VERSION
+from novetest.coverage import COVERAGE_DELTA_SCHEMA_VERSION
 from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,

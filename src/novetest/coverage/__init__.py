@@ -22,6 +22,9 @@ from novetest.coverage.availability import (
     check_coverage_availability,
 )
 from novetest.coverage.compare import (
+    SCHEMA_VERSION as COVERAGE_DELTA_SCHEMA_VERSION,
+)
+from novetest.coverage.compare import (
     CoverageDelta,
     FileCoverageDelta,
     compare_coverage_facts,
@@ -32,6 +35,7 @@ from novetest.coverage.retrieval import get_coverage_facts
 
 
 __all__ = [
+    "COVERAGE_DELTA_SCHEMA_VERSION",
     "CoverageAvailability",
     "CoverageDelta",
     "CoverageUnavailable",

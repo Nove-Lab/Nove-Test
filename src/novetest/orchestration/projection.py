@@ -25,8 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from novetest.coverage import CoverageUnavailable
-from novetest.coverage.compare import CoverageDelta
+from novetest.coverage import CoverageDelta, CoverageUnavailable
 from novetest.localization import LocalizationFinding, LocalizationUnavailable
 from novetest.models import ReplayResult
 from novetest.models.coverage_fact_set import CoverageFactSet

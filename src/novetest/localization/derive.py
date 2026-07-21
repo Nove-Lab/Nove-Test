@@ -53,8 +53,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from novetest.coverage.retrieval import get_coverage_facts
-from novetest.coverage.results import CoverageUnavailable
+from novetest.coverage import CoverageUnavailable, get_coverage_facts
 from novetest.localization.failure_proximity import (
     derive_failure_proximity,
     parse_failure_log,
@@ -101,9 +100,11 @@ from novetest.models.memory_entry import MemoryEntry
 from novetest.models.regression_fact_set import RegressionFactSet
 from novetest.models.run_record import RunRecord
 from novetest.models.run_reference import RunReference
-from novetest.regression.compare import resolve_baseline_for_run
-from novetest.regression.results import RegressionUnavailable
-from novetest.regression.retrieval import get_regression_facts
+from novetest.regression import (
+    RegressionUnavailable,
+    get_regression_facts,
+    resolve_baseline_for_run,
+)
 
 
 # Default presentation formula (design-of-record §1). The CLI ``--formula``

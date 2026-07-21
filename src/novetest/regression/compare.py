@@ -27,8 +27,7 @@ import hashlib
 import time
 from typing import Any
 
-from novetest.coverage.compare import CoverageDelta, compare_coverage_facts
-from novetest.coverage.results import CoverageUnavailable
+from novetest.coverage import CoverageDelta, CoverageUnavailable, compare_coverage_facts
 from novetest.memory import (
     ProjectStore,
     RunEvidenceNotFoundError,
