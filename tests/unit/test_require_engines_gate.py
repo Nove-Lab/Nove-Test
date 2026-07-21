@@ -129,6 +129,14 @@ def test_unknown_token_raises_usage_error() -> None:
         ("tests/integration/run/test_junit_maven.py::t", "junit"),
         ("tests/integration/run/test_jest_basic.py::t", "jest"),
         ("tests/integration/coverage/test_jest_coverage.py::t", "jest"),
+        # coverage-dir e2e tests are gated too (the CI dotnet/junit cells
+        # exercise their coverage-derive lanes). cargo + dotnet match real
+        # files today; junit classifies the coverage team's new test even
+        # though it lands in a parallel lane — patterns are classifiers, not
+        # existence assertions.
+        ("tests/integration/coverage/test_cargo_lcov_e2e.py::t", "cargo"),
+        ("tests/integration/coverage/test_dotnet_cobertura_derive.py::t", "dotnet"),
+        ("tests/integration/coverage/test_junit_jacoco_derive.py::t", "junit"),
         ("tests/unit/run/test_gotest_adapter.py::t", None),
         ("tests/unit/test_require_engines_gate.py::t", None),
     ],

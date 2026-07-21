@@ -70,6 +70,79 @@ jobs:
         with:
           go-version: "1.23"
 
+      # .NET powers the xunit Native Engine adapter. Linux-only, mirroring the
+      # go cell: the dotnet run + coverage integration tests (`test_dotnet_*`)
+      # run under the `dotnet` require token on the three ubuntu cells (Q1=B
+      # deferral resolved at W2-close, 2026-07-21). macOS/Windows cells stay
+      # `pytest,jest` (see the pytest step's require-engines expression). Pin
+      # .NET SDK 8.0.x: the fixtures target `net8.0` (MathLib{,.Tests}.csproj)
+      # and the adapter's readiness floor is ".NET SDK 8.0+" (run/readiness.py).
+      # Pinning via setup-dotnet — rather than relying on the ubuntu-latest
+      # image default, which tracks the newest SDK and can drop the 8.0
+      # targeting pack — guarantees the net8.0 restore/build stays green.
+      - name: Install .NET SDK
+        if: runner.os == 'Linux'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0"
+
+      # NuGet restore cache (xunit 2.6.0 / xunit.runner.visualstudio /
+      # coverlet.collector 6.0.2 for the coverage fixture). setup-dotnet has no
+      # built-in package cache without a `packages.lock.json` (the fixtures
+      # ship none), so cache `~/.nuget/packages` explicitly, keyed on the
+      # fixture csproj files — this is the first-run NuGet download that made
+      # the dotnet cell deferral-worthy; steady-state restores hit the cache.
+      - name: Cache NuGet packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('tests/fixtures/projects/**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      # Java + Maven + Gradle power the junit Native Engine adapter's two build
+      # paths. Linux-only (same Q1=B → W2-close disposition, extended to java
+      # at close-#5 routing (d)): the junit integration + coverage tests
+      # (`test_junit_*`, incl. the maven, gradle, vendored-launcher and warnings
+      # lanes) run under the `junit` require token on the three ubuntu cells.
+      # Pin Temurin JDK 17: the fixtures declare `sourceCompatibility =
+      # VERSION_17` and the readiness floor is "JDK 17+" (run/readiness.py).
+      # Pinning the JDK via setup-java — rather than the image's default JAVA_HOME,
+      # which can drift across the several Temurin JDKs ubuntu-latest ships —
+      # fixes the compile/runtime target the fixtures were authored against.
+      # Maven itself is the ubuntu-latest preinstalled `mvn` (3.9.x, >= the
+      # Maven 3.8 / Surefire 3.0 floor per decision 2026-06-04 §4; the fixture
+      # pins Surefire 3.2.5 in its own pom), and `cache: maven` here caches
+      # `~/.m2/repository` keyed on the fixture poms — the first-run Maven
+      # Central download that this cell was deferred over.
+      - name: Install JDK (Temurin 17)
+        if: runner.os == 'Linux'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      # Gradle dependency cache. The junit-gradle fixture commits NO gradlew
+      # wrapper, so `test_junit_gradle.py` spawns the ubuntu-latest preinstalled
+      # system `gradle test --no-daemon` (Gradle 8.x/9.x >= the 7.6 floor; the
+      # fixture is version-agnostic across 7.6/8.x/9.x per its build.gradle.kts
+      # comment). System Gradle writes to the default `~/.gradle`, so cache that
+      # user home explicitly (setup-java's cache only covers Maven), keyed on
+      # the fixture build scripts — this is the first-run JUnit BOM + jupiter +
+      # junit-platform-launcher + jacoco-plugin download.
+      - name: Cache Gradle dependencies
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('tests/fixtures/projects/**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       # Install each jest fixture's `node_modules` so the integration tests'
       # `_require_node_and_local_jest()` guard finds a local jest install.
       # Iterate over every fixture carrying a `package.json` instead of
@@ -112,16 +185,20 @@ jobs:
       # engines this job actually equips (XCT-08/09). `pytest` is the parent
       # interpreter (always present); `jest` is installed above via setup-node +
       # the fixture `npm install` step, so the jest run/coverage integration
-      # tests MUST run on every cell. `go` is added ONLY on the Linux cells
-      # (setup-go is Linux-guarded above; Q1=B, 2026-07-16), so the go-test
-      # integration tests (`test_gotest_*`) MUST run there. macOS/Windows keep
-      # exactly `pytest,jest` — byte-identical to before. If any required lane
-      # silently regresses (npm step breaks, PATH drift, setup-go removed), the
-      # build now fails instead of quietly shrinking the skip count. Dormant
-      # everywhere the var is unset — the gate itself lives in `tests/conftest.py`.
+      # tests MUST run on every cell. `go`, `dotnet` and `junit` are added ONLY
+      # on the Linux cells (their setup steps are all Linux-guarded above; go at
+      # Q1=B 2026-07-16, dotnet/junit at the W2-close disposition 2026-07-21), so
+      # the go-test / dotnet / junit integration + coverage tests (`test_gotest_*`,
+      # `test_dotnet_*`, `test_junit_*`) MUST run there. `cargo` stays OUT (no
+      # rust cell — the cargo fleet remains manual-equip + eval-image verified).
+      # macOS/Windows keep exactly `pytest,jest` — byte-identical to before. If
+      # any required lane silently regresses (npm step breaks, PATH drift, a
+      # setup-* step removed), the build now fails instead of quietly shrinking
+      # the skip count. Dormant everywhere the var is unset — the gate itself
+      # lives in `tests/conftest.py`.
       - name: pytest
         env:
-          NOVETEST_REQUIRE_ENGINES: ${{ runner.os == 'Linux' && 'pytest,jest,go' || 'pytest,jest' }}
+          NOVETEST_REQUIRE_ENGINES: ${{ runner.os == 'Linux' && 'pytest,jest,go,dotnet,junit' || 'pytest,jest' }}
         run: uv run pytest -q
 
       # mypy --strict is required by foundations.md §1 ("Type hints everywhere").

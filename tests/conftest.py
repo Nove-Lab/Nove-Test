@@ -62,9 +62,18 @@ ENGINE_TEST_PATTERNS: dict[str, tuple[str, ...]] = {
         "tests/integration/coverage/test_jest_",
     ),
     "go": ("tests/integration/run/test_gotest_",),
-    "cargo": ("tests/integration/run/test_cargo_",),
-    "dotnet": ("tests/integration/run/test_dotnet_",),
-    "junit": ("tests/integration/run/test_junit_",),
+    "cargo": (
+        "tests/integration/run/test_cargo_",
+        "tests/integration/coverage/test_cargo_",
+    ),
+    "dotnet": (
+        "tests/integration/run/test_dotnet_",
+        "tests/integration/coverage/test_dotnet_",
+    ),
+    "junit": (
+        "tests/integration/run/test_junit_",
+        "tests/integration/coverage/test_junit_",
+    ),
 }
 
 #: Parsed required-engine set, computed once at configure time.
