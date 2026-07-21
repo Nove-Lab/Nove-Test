@@ -705,11 +705,11 @@ class TestCompoundResolution:
         hits = [
             self._hit(
                 CATEGORY_REGRESSION_WITH_LOCALIZATION, "src/calc.py:32:t1",
-                file="src/calc.py", test_id="t1",
+                file="src/calc.py", primary_line=32, test_id="t1",
             ),
             self._hit(
                 CATEGORY_INVESTIGATE_LOCATION, "src/calc.py:32",
-                file="src/calc.py",
+                file="src/calc.py", primary_line=32,
             ),
             self._hit(
                 CATEGORY_INVESTIGATE_REGRESSION, "t1",
@@ -723,11 +723,11 @@ class TestCompoundResolution:
         hits = [
             self._hit(
                 CATEGORY_REGRESSION_WITH_LOCALIZATION, "src/calc.py:32:t1",
-                file="src/calc.py", test_id="t1",
+                file="src/calc.py", primary_line=32, test_id="t1",
             ),
             self._hit(
                 CATEGORY_INVESTIGATE_LOCATION, "src/other.py:5",
-                file="src/other.py",
+                file="src/other.py", primary_line=5,
             ),
             self._hit(
                 CATEGORY_INVESTIGATE_REGRESSION, "t99",
@@ -740,9 +740,50 @@ class TestCompoundResolution:
         assert CATEGORY_INVESTIGATE_LOCATION in cats
         assert CATEGORY_INVESTIGATE_REGRESSION in cats
 
+    def test_compound_does_not_swallow_same_file_different_line(self) -> None:
+        """ORC-12: a same-file, different-symbol/line ``investigate_location``
+        survives — the swallow key is ``(file, primary_line)``, not bare file.
+
+        Scenario: ``src/calc.py`` hosts two functions. Function A (line 32)
+        is caught by a regression+localization compound; function B (line 90)
+        has its own independent ``investigate_location`` (a different
+        defect). The compound must swallow ONLY its own constituent at
+        ``(src/calc.py, 32)`` and leave B's hit at ``(src/calc.py, 90)``
+        intact. Before the fix, file-level swallowing deleted B silently.
+        """
+
+        hits = [
+            self._hit(
+                CATEGORY_REGRESSION_WITH_LOCALIZATION, "src/calc.py:32:t1",
+                file="src/calc.py", primary_line=32, test_id="t1",
+            ),
+            # Genuine constituent — same (file, primary_line) as the compound.
+            self._hit(
+                CATEGORY_INVESTIGATE_LOCATION, "src/calc.py:32",
+                file="src/calc.py", primary_line=32,
+            ),
+            # Unrelated same-file hit at a DIFFERENT line — must survive.
+            self._hit(
+                CATEGORY_INVESTIGATE_LOCATION, "src/calc.py:90",
+                file="src/calc.py", primary_line=90,
+            ),
+        ]
+        out = compound_resolution(hits)
+        survivors = [
+            (h.category, h.payload.get("primary_line")) for h in out
+        ]
+        assert (CATEGORY_REGRESSION_WITH_LOCALIZATION, 32) in survivors
+        # The unrelated same-file location at line 90 is NOT swallowed.
+        assert (CATEGORY_INVESTIGATE_LOCATION, 90) in survivors
+        # The genuine constituent at line 32 IS swallowed.
+        assert (CATEGORY_INVESTIGATE_LOCATION, 32) not in survivors
+
     def test_no_compound_no_change(self) -> None:
         hits = [
-            self._hit(CATEGORY_INVESTIGATE_LOCATION, "src/foo.py:1", file="src/foo.py"),
+            self._hit(
+                CATEGORY_INVESTIGATE_LOCATION, "src/foo.py:1",
+                file="src/foo.py", primary_line=1,
+            ),
             self._hit(CATEGORY_INVESTIGATE_REGRESSION, "tX", test_id="tX"),
         ]
         out = compound_resolution(hits)

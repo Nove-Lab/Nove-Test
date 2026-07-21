@@ -165,7 +165,15 @@ def _investigate_regression_citations(
 def _coverage_gap_citations(
     hit: CategoryHit, bundle: FactBundle
 ) -> list[dict[str, Any]]:
-    """One coverage_fact (file + lines selector) + one localization_finding."""
+    """One coverage_fact (file + lines selector) + one localization_finding.
+
+    The localization_finding citation for a coverage_gap hit is built by
+    ``_coverage_gap_localization_citation`` (NOT the shared
+    ``_localization_finding_citation``): the coverage_gap payload carries
+    only ``file`` + ``lines`` + the ``related_finding_id`` entry-index
+    handle, so the citation must resolve that handle back to the source
+    ``LocalizationEntry`` to stay NFR-ORCH-002 round-trip resolvable.
+    """
 
     cites: list[dict[str, Any]] = []
     if bundle.coverage_facts is not None:
@@ -181,7 +189,7 @@ def _coverage_gap_citations(
             }
         )
     if bundle.localization_findings is not None:
-        cites.append(_localization_finding_citation(hit, bundle))
+        cites.append(_coverage_gap_localization_citation(hit, bundle))
     return cites
 
 
@@ -288,6 +296,54 @@ def _localization_finding_citation(
     }
 
 
+def _coverage_gap_localization_citation(
+    hit: CategoryHit, bundle: FactBundle
+) -> dict[str, Any]:
+    """Localization citation for a coverage_gap hit — round-trip resolvable.
+
+    Unlike ``_localization_finding_citation`` (which reads ``rank`` /
+    ``primary_line`` straight off the hit payload), the coverage_gap
+    payload carries only ``file`` + ``lines`` + the ``related_finding_id``
+    entry-index handle. This builder resolves that handle back to the
+    source ``LocalizationEntry`` so the emitted selector carries:
+
+    - ``related_finding_id`` — the direct positional round-trip
+      (``get_localization_findings(...).entries[i]``); and
+    - the resolved ``rank`` / ``primary_line`` — the ``(file,
+      primary_line)`` round-trip every other localization_finding
+      citation uses.
+
+    Before this fix the selector carried ``rank=None`` / ``primary_line=None``
+    and dropped the ``related_finding_id`` entirely, so a coverage_gap
+    recommendation's localization citation could not be resolved back to
+    its exact source entry (ORC-13 / NFR-ORCH-002 violation).
+    """
+
+    finding = bundle.localization_findings
+    assert finding is not None
+    related_finding_id = hit.payload.get("related_finding_id")
+    idx = _entry_index_from_related_finding_id(related_finding_id)
+    entry = (
+        finding.entries[idx]
+        if idx is not None and 0 <= idx < len(finding.entries)
+        else None
+    )
+    return {
+        "kind": KIND_LOCALIZATION_FINDING,
+        "run_reference": finding.run_reference.to_dict(),
+        "finding_id": f"loc_run_{finding.run_reference.run_id}",
+        "selector": {
+            "rank": entry.rank if entry is not None else None,
+            "file": hit.payload.get("file"),
+            "primary_line": (
+                entry.code_location.primary_line if entry is not None else None
+            ),
+            "related_finding_id": related_finding_id,
+        },
+        "mode": finding.mode,
+    }
+
+
 def _regression_fact_citation(
     hit: CategoryHit, bundle: FactBundle
 ) -> dict[str, Any]:
@@ -340,6 +396,27 @@ def _test_result_citation(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _entry_index_from_related_finding_id(related_finding_id: Any) -> int | None:
+    """Parse the ``entry_index_<i>`` handle into its positional index.
+
+    The coverage_gap matcher assigns ``related_finding_id =
+    "entry_index_<i>"`` where ``<i>`` indexes ``finding.entries`` at match
+    time (``categories.match_coverage_gap``). Returns the ``int`` index,
+    or ``None`` when the handle is absent / malformed — keeping the helper
+    total for defensively-constructed hits.
+    """
+
+    if not isinstance(related_finding_id, str):
+        return None
+    prefix = "entry_index_"
+    if not related_finding_id.startswith(prefix):
+        return None
+    suffix = related_finding_id[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
 
 
 def _find_entry_for_location(

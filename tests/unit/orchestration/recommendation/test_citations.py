@@ -292,6 +292,56 @@ class TestCitations:
         assert cov["selector"]["file"] == "src/calc.py"
         assert cov["selector"]["lines"] == [32, 33]
 
+    def test_coverage_gap_localization_citation_round_trips_via_related_finding_id(
+        self,
+    ) -> None:
+        """ORC-13 / NFR-ORCH-002: the localization_finding citation on a
+        coverage_gap recommendation must resolve back to its exact source
+        ``LocalizationEntry``.
+
+        The selector carries the ``related_finding_id`` entry-index handle
+        (direct positional round-trip) AND the resolved ``rank`` /
+        ``primary_line`` (the ``(file, primary_line)`` round-trip every
+        other localization_finding citation uses). Before the fix the
+        selector carried ``rank=None`` / ``primary_line=None`` and dropped
+        the ``related_finding_id`` entirely — the round-trip was broken.
+        """
+
+        fx = _build_full_fixture()
+        related_finding_id = "entry_index_0"
+        hit = CategoryHit(
+            category=CATEGORY_COVERAGE_GAP,
+            priority=PRIORITIES[CATEGORY_COVERAGE_GAP],
+            primary_slot="src/calc.py:32",
+            payload={
+                "file": "src/calc.py",
+                "lines": [32, 33],
+                "mode": "sbfl_per_test",
+                "related_finding_id": related_finding_id,
+            },
+        )
+        cites = cite_recommendation_evidence(hit, fx.bundle)
+        loc = next(c for c in cites if c["kind"] == KIND_LOCALIZATION_FINDING)
+        selector = loc["selector"]
+
+        # The entry-index handle is carried on the selector for the direct
+        # positional round-trip.
+        assert selector["related_finding_id"] == related_finding_id
+
+        # Resolve exactly as a consumer would: fetch the finding, index by
+        # the entry_index handle, and confirm the citation's resolved
+        # selector fields match that source entry.
+        finding = fx.bundle.localization_findings
+        assert finding is not None
+        idx = int(related_finding_id.rsplit("_", 1)[-1])
+        source_entry = finding.entries[idx]
+        assert selector["rank"] == source_entry.rank
+        assert selector["file"] == source_entry.code_location.file
+        assert selector["primary_line"] == source_entry.code_location.primary_line
+        # rank/primary_line are populated (not the pre-fix None sentinels).
+        assert selector["rank"] is not None
+        assert selector["primary_line"] is not None
+
     def test_flaky_suspected_has_replay_and_test_result(self) -> None:
         fx = _build_full_fixture(with_replay=True)
         hit = CategoryHit(

@@ -493,20 +493,27 @@ def compound_resolution(hits: list[CategoryHit]) -> list[CategoryHit]:
 
     Brief §1 — "Compound rule": for each
     ``regression_with_localization`` hit covering
-    ``(file=F, test_id=T)``, drop any bare ``investigate_location`` hit
-    on the SAME file AND any bare ``investigate_regression`` hit on the
-    SAME test_id. Other categories (``coverage_gap``, ``flaky_suspected``,
+    ``(file=F, primary_line=L, test_id=T)``, drop the bare
+    ``investigate_location`` hit on the SAME ``(file, primary_line)`` AND
+    the bare ``investigate_regression`` hit on the SAME ``test_id``. Other
+    categories (``coverage_gap``, ``flaky_suspected``,
     ``unavailable_analysis``, ``all_green``) are not affected.
 
-    The drop conditions use a closed-loop set built from the compound
-    payloads — so a compound that fired on ``(F, T)`` cannot mistakenly
-    swallow an unrelated ``investigate_location`` on a different file
-    that happens to also implicate ``T``.
+    The drop conditions use closed-loop sets built from the compound
+    payloads. The ``investigate_location`` key is the precise
+    ``(file, primary_line)`` pair the compound fired on — NOT bare file
+    membership — so a compound on ``(F, L, T)`` swallows only its genuine
+    constituent and can no longer silently delete an unrelated
+    ``investigate_location`` on the SAME file at a DIFFERENT symbol/line
+    (ORC-12). The genuine constituent always shares the compound's
+    ``(file, primary_line)`` because both project the same
+    ``LocalizationEntry.code_location``.
 
-    Subtle case: if multiple compounds fire on the same file but different
-    tests (e.g. F implicated for T1 + T2, both regressed), all matching
-    ``investigate_*`` hits on that file/test set are dropped. The brief
-    is unambiguous on this — the compound "swallows its constituents".
+    Subtle case: if two compounds fire on the same file but different
+    lines (e.g. F:L1 for T1 and F:L2 for T2, both regressed), each
+    swallows only the ``investigate_location`` at its own
+    ``(file, primary_line)`` — a third ``investigate_location`` on F:L3
+    with no overlapping compound survives.
     """
 
     compounds = [
@@ -514,16 +521,19 @@ def compound_resolution(hits: list[CategoryHit]) -> list[CategoryHit]:
     ]
     if not compounds:
         return hits
-    swallowed_files: set[str] = set()
+    swallowed_locations: set[tuple[str, Any]] = set()
     swallowed_tests: set[str] = set()
     for c in compounds:
-        swallowed_files.add(str(c.payload.get("file", "")))
+        swallowed_locations.add(
+            (str(c.payload.get("file", "")), c.payload.get("primary_line"))
+        )
         swallowed_tests.add(str(c.payload.get("test_id", "")))
 
     out: list[CategoryHit] = []
     for h in hits:
         if h.category == CATEGORY_INVESTIGATE_LOCATION:
-            if str(h.payload.get("file", "")) in swallowed_files:
+            location = (str(h.payload.get("file", "")), h.payload.get("primary_line"))
+            if location in swallowed_locations:
                 continue
         elif h.category == CATEGORY_INVESTIGATE_REGRESSION:
             if str(h.payload.get("test_id", "")) in swallowed_tests:
