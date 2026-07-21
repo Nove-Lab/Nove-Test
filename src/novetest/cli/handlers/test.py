@@ -39,15 +39,32 @@ Phase 1).
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import Annotated, Any
 
+from cyclopts import Parameter
+
+from novetest.cli import _shared
+from novetest.cli._shared import (
+    _emit_and_exit,
+    _require_store,
+    _store_corrupt_envelope,
+    _validate_engine_flag,
+)
 from novetest.cli.output import (
+    EXIT_STORAGE,
+    EXIT_USAGE,
     Envelope,
+    EnvelopeError,
     EnvelopeWarning,
     run_status_to_ok_exit,
 )
+from novetest.memory import ProjectStoreCorruptError
+from novetest.orchestration.anchor_resolution import EngineAmbiguousError
 from novetest.orchestration.recommendation import RECOMMENDATION_SCHEMA_VERSION
+from novetest.orchestration.workflows import test_target_in_store
 from novetest.orchestration.workflows.test import TestOutcome
+from novetest.run import RunEngineError
 
 
 def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
@@ -91,4 +108,83 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
     )
 
 
-__all__ = ["build_test_envelope"]
+def test_cmd(
+    target: str = "",
+    *,
+    reruns: Annotated[int, Parameter(name=["--reruns"])] = 0,
+    engine: Annotated[str | None, Parameter(name=["--engine"])] = None,
+) -> None:
+    """Execute the integrated `novetest test [target]` workflow.
+
+    Chains Run → Memory → Coverage → Regression → Localization →
+    Recommendation synthesis. Stage failures (no baseline, no coverage,
+    etc.) are surfaced via the ``data.stage_eligibility`` block — the
+    workflow does NOT abort on a single-engine outage (brief §5 — Error
+    policy). Run execution (step 2) is fatal; the handler maps the same
+    exception surface ``run_cmd`` does (``EngineNotReadyError`` +
+    ``AdapterInvocationError``) and re-uses the same envelope shape.
+
+    ``--reruns N`` (default 0 = off; decision
+    ``2026-06-25-test-reruns-flag-and-replay-integration``) opts into the
+    Replay sub-workflow: when the run has failed tests, one whole-run
+    Replay Attempt executes with ``reruns=N`` and its result feeds the
+    synthesizer — an ``inconsistent`` classification makes the
+    ``flaky_suspected`` category reachable, and
+    ``data.stage_eligibility.replay`` transitions ``"not_run"`` →
+    ``"available"``. ``N=1`` is the cheapest opt-in; ``5`` is the
+    recommended floor for flake detection. Negative values are rejected
+    with ``invalid-flag`` (exit 2), mirroring the ``--formula`` pattern.
+
+    Recommendations are synthesized in-memory from the
+    ``FactBundle`` — never persisted (Open Q #9 / brief §2). Re-deriving
+    against the same evidence yields a byte-identical recommendation
+    list (determinism contract, design doc §4).
+
+    The ``data.run_reference`` / ``data.stage_eligibility`` /
+    ``data.recommendation_schema_version`` / ``data.recommendations``
+    fields are the wire surface AI agents pin against (brief §5).
+
+    ``--engine <name>`` executes a one-off override of the store's pinned
+    engine WITHOUT re-pinning (decision 2026-07-03-engine-selection-policy
+    D3); invalid names fail flag validation (``invalid-flag``, exit 2).
+    """
+
+    store = _require_store("test")
+    if reruns < 0:
+        _emit_and_exit(
+            Envelope(
+                command="test",
+                ok=False,
+                errors=(
+                    EnvelopeError(
+                        code="invalid-flag",
+                        message=(
+                            f"Invalid --reruns={reruns!r}; "
+                            "expected a non-negative integer"
+                        ),
+                    ),
+                ),
+            ),
+            EXIT_USAGE,
+        )
+    engine_pair = _validate_engine_flag("test", engine)
+    try:
+        outcome = asyncio.run(
+            test_target_in_store(target, store, reruns=reruns, engine=engine_pair)
+        )
+    except (EngineAmbiguousError, RunEngineError) as exc:
+        # ORC-02/ORC-21: same shared mapping as run_cmd — the two verbs cannot
+        # drift because they thread their own ``command`` through one helper.
+        # Post-S19, ``EngineAmbiguous`` reaches here as the primary legacy +
+        # ambiguous refusal (see run_cmd's note), not a TOCTOU race.
+        _emit_and_exit(*_shared._map_execution_exception("test", exc))
+    except ProjectStoreCorruptError as exc:
+        # S42 residual loud path (a stage's targeted read / the post-stage
+        # refresh found a record corrupt — TOCTOU): storage failure, exit 5.
+        _emit_and_exit(_store_corrupt_envelope("test", str(exc)), EXIT_STORAGE)
+
+    envelope, exit_code = build_test_envelope(outcome)
+    _emit_and_exit(envelope, exit_code)
+
+
+__all__ = ["build_test_envelope", "test_cmd"]

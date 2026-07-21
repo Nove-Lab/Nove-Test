@@ -25,7 +25,8 @@ import pytest
 from syrupy.assertion import SnapshotAssertion
 
 import novetest.orchestration.workflows as workflows_pkg
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import onboarding as app_module
 from novetest.cli.output import OutputMode
 from novetest.memory import ProjectStoreCorruptError
 from novetest.memory.project_store import ProjectStoreNotFoundError
@@ -33,7 +34,7 @@ from novetest.memory.project_store import ProjectStoreNotFoundError
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 def _captured_envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:

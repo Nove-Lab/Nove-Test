@@ -16,7 +16,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import regression as app_module
 from novetest.cli.output import OutputMode
 from novetest.models import MemoryEntry, RunRecord, RunReference
 from novetest.models.regression_fact_set import (
@@ -127,7 +128,7 @@ def _make_fact_set(
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -145,7 +146,7 @@ def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
 
     entries = [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: next(
             (e for e in entries if e.run_record.run_reference.run_id == run_id),
@@ -369,7 +370,7 @@ def test_regression_compare_returns_not_found_for_fake_baseline_id(
     exit 2, mirroring `coverage diff`."""
 
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: None,
     )
@@ -400,7 +401,7 @@ def test_regression_compare_returns_not_found_for_fake_target_id(
 
     baseline_only = [_make_memory_entry(_BASELINE_ID)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: next(
             (e for e in baseline_only if e.run_record.run_reference.run_id == run_id),

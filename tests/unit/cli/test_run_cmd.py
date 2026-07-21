@@ -15,7 +15,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import run as app_module
 from novetest.cli.output import OutputMode
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.results import REASON_MISSING_NATIVE_PAYLOAD
@@ -76,7 +77,7 @@ def _make_fact_set() -> CoverageFactSet:
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the active envelope mode so capsys sees a JSON-shaped envelope."""
 
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture

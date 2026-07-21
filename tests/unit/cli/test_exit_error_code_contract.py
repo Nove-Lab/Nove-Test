@@ -29,7 +29,9 @@ from typing import Any
 import pytest
 
 import novetest.cli.handlers.test as test_handler_module
+from novetest.cli import _shared
 from novetest.cli import app as app_module
+from novetest.cli.handlers import run as run_handler
 from novetest.cli.handlers.test import build_test_envelope
 from novetest.cli.output import (
     EXIT_ENGINE_MISSING,
@@ -133,13 +135,14 @@ def _readiness(state: str, *, with_context: bool) -> EngineReadinessResult:
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
 def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
     sentinel = object()
-    monkeypatch.setattr(app_module, "_require_store", lambda _cmd: sentinel)
+    monkeypatch.setattr(run_handler, "_require_store", lambda _cmd: sentinel)
+    monkeypatch.setattr(test_handler_module, "_require_store", lambda _cmd: sentinel)
     return sentinel
 
 
@@ -156,7 +159,7 @@ def _patch_run_workflow_raise(
     async def fake_workflow(target: str, store: Any, **kwargs: Any) -> RunOutcome:
         raise exc
 
-    monkeypatch.setattr(app_module, "run_target_in_store", fake_workflow)
+    monkeypatch.setattr(run_handler, "run_target_in_store", fake_workflow)
 
 
 def _patch_test_workflow_raise(
@@ -165,7 +168,7 @@ def _patch_test_workflow_raise(
     async def fake_workflow(target: str, store: Any, **kwargs: Any) -> TestOutcome:
         raise exc
 
-    monkeypatch.setattr(app_module, "test_target_in_store", fake_workflow)
+    monkeypatch.setattr(test_handler_module, "test_target_in_store", fake_workflow)
 
 
 def _assert_no_doubled_prefix(payload: dict[str, Any]) -> None:
@@ -223,7 +226,7 @@ class TestRunTestSymmetry:
         ) -> RunOutcome:
             return _make_run_outcome(status)
 
-        monkeypatch.setattr(app_module, "run_target_in_store", fake_run_workflow)
+        monkeypatch.setattr(run_handler, "run_target_in_store", fake_run_workflow)
         with pytest.raises(SystemExit) as exc_info:
             app_module.run_cmd("")
         run_exit = exc_info.value.code
@@ -246,7 +249,7 @@ class TestRunTestSymmetry:
 
         sentinel_pair = (True, 42)
         monkeypatch.setattr(
-            app_module, "run_status_to_ok_exit", lambda _status: sentinel_pair
+            run_handler, "run_status_to_ok_exit", lambda _status: sentinel_pair
         )
         monkeypatch.setattr(
             test_handler_module,
@@ -259,7 +262,7 @@ class TestRunTestSymmetry:
         ) -> RunOutcome:
             return _make_run_outcome("passed")
 
-        monkeypatch.setattr(app_module, "run_target_in_store", fake_run_workflow)
+        monkeypatch.setattr(run_handler, "run_target_in_store", fake_run_workflow)
         with pytest.raises(SystemExit) as exc_info:
             app_module.run_cmd("")
         assert exc_info.value.code == 42
@@ -398,7 +401,7 @@ class TestErroredRunClassification:
         async def fake_workflow(target: str, store: Any, **kwargs: Any) -> RunOutcome:
             return _make_run_outcome("errored")
 
-        monkeypatch.setattr(app_module, "run_target_in_store", fake_workflow)
+        monkeypatch.setattr(run_handler, "run_target_in_store", fake_workflow)
         with pytest.raises(SystemExit) as exc_info:
             app_module.run_cmd("")
         assert exc_info.value.code == EXIT_USER_TESTS_FAILED

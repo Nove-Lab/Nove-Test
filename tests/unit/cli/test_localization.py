@@ -23,7 +23,8 @@ from typing import Any, Callable
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import localization as app_module
 from novetest.cli.output import OutputMode
 from novetest.localization import (
     DEFAULT_FORMULA,
@@ -171,7 +172,7 @@ def _make_finding(
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -189,7 +190,7 @@ def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
     Memory-owned predicate the run_id-addressed verbs now route through."""
     entry = _make_memory_entry(_RUN_ID)
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: (
             entry if run_id == _RUN_ID else None
@@ -301,7 +302,7 @@ def test_localization_run_fake_run_id_returns_not_found(
     engine call fires — ``not-found`` envelope, exit 2."""
 
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: None,
     )

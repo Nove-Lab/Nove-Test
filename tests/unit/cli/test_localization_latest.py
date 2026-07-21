@@ -20,7 +20,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import localization as app_module
 from novetest.cli.output import Envelope, EnvelopeError, OutputMode, emit_envelope
 from novetest.localization import (
     DEFAULT_FORMULA,
@@ -141,7 +142,7 @@ def _make_finding(
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -333,7 +334,7 @@ def test_localization_latest_uninitialized_workspace_exits_2(
                 ok=False,
                 errors=(EnvelopeError(code="uninitialized", message="no store"),),
             ),
-            app_module._active_mode,
+            _shared._active_mode,
         )
         sys.exit(2)
 

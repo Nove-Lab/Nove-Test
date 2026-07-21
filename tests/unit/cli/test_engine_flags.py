@@ -25,7 +25,11 @@ from typing import Any
 
 import pytest
 
+from novetest.cli import _shared
 from novetest.cli import app as app_module
+from novetest.cli.handlers import onboarding as onboarding_handler
+from novetest.cli.handlers import run as run_handler
+from novetest.cli.handlers import test as test_handler
 from novetest.cli.output import OutputMode
 from novetest.orchestration.workflows.discovery import DiscoveredCandidate
 from novetest.orchestration.workflows.init import (
@@ -38,7 +42,7 @@ from novetest.run import EngineCandidate
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 def _captured_envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
@@ -67,11 +71,11 @@ def _captured_envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
 def test_all_six_engine_names_map_to_their_pairs(
     name: str, pair: tuple[str, str]
 ) -> None:
-    assert app_module._validate_engine_flag("init", name) == pair
+    assert _shared._validate_engine_flag("init", name) == pair
 
 
 def test_absent_flag_passes_through_as_none() -> None:
-    assert app_module._validate_engine_flag("init", None) is None
+    assert _shared._validate_engine_flag("init", None) is None
 
 
 @pytest.mark.parametrize("command_fn", ["init", "run_cmd", "test_cmd"])
@@ -87,10 +91,13 @@ def test_invalid_engine_rejected_with_invalid_flag(
     async def must_not_run(*_a: Any, **_k: Any) -> Any:
         raise AssertionError("workflow invoked despite invalid --engine")
 
-    monkeypatch.setattr(app_module, "_require_store", lambda _cmd: object())
-    monkeypatch.setattr(app_module, "initialize_project_workspace", must_not_run)
-    monkeypatch.setattr(app_module, "run_target_in_store", must_not_run)
-    monkeypatch.setattr(app_module, "test_target_in_store", must_not_run)
+    monkeypatch.setattr(run_handler, "_require_store", lambda _cmd: object())
+    monkeypatch.setattr(test_handler, "_require_store", lambda _cmd: object())
+    monkeypatch.setattr(
+        onboarding_handler, "initialize_project_workspace", must_not_run
+    )
+    monkeypatch.setattr(run_handler, "run_target_in_store", must_not_run)
+    monkeypatch.setattr(test_handler, "test_target_in_store", must_not_run)
 
     handler = getattr(app_module, command_fn)
     with pytest.raises(SystemExit) as exc_info:
@@ -120,8 +127,8 @@ def test_run_cmd_forwards_engine_pair(
         forwarded.append(kwargs["engine"])
         raise SystemExit(0)  # short-circuit; envelope shape is not under test
 
-    monkeypatch.setattr(app_module, "_require_store", lambda _cmd: object())
-    monkeypatch.setattr(app_module, "run_target_in_store", fake_run)
+    monkeypatch.setattr(run_handler, "_require_store", lambda _cmd: object())
+    monkeypatch.setattr(run_handler, "run_target_in_store", fake_run)
 
     with pytest.raises(SystemExit):
         app_module.run_cmd(engine="go-test")
@@ -140,8 +147,8 @@ def test_test_cmd_forwards_engine_pair(
         forwarded.append(kwargs["engine"])
         raise SystemExit(0)
 
-    monkeypatch.setattr(app_module, "_require_store", lambda _cmd: object())
-    monkeypatch.setattr(app_module, "test_target_in_store", fake_test)
+    monkeypatch.setattr(test_handler, "_require_store", lambda _cmd: object())
+    monkeypatch.setattr(test_handler, "test_target_in_store", fake_test)
 
     with pytest.raises(SystemExit):
         app_module.test_cmd(engine="cargo-test")
@@ -179,7 +186,7 @@ def test_init_forwards_engine_pair_and_surfaces_pin(
             engine_readiness=readiness,  # type: ignore[arg-type]
         )
 
-    monkeypatch.setattr(app_module, "initialize_project_workspace", fake_init)
+    monkeypatch.setattr(onboarding_handler, "initialize_project_workspace", fake_init)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.init(engine="pytest")
@@ -219,7 +226,7 @@ def test_init_no_engine_detected_envelope(
     async def fake_init(workspace: Path, *, engine: Any = None) -> Any:
         return outcome
 
-    monkeypatch.setattr(app_module, "initialize_project_workspace", fake_init)
+    monkeypatch.setattr(onboarding_handler, "initialize_project_workspace", fake_init)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.init()
@@ -245,7 +252,7 @@ def test_init_scan_refused_envelope(
     async def fake_init(workspace: Path, *, engine: Any = None) -> Any:
         return InitNoEngineDetected(candidates=(), scan_refused=True)
 
-    monkeypatch.setattr(app_module, "initialize_project_workspace", fake_init)
+    monkeypatch.setattr(onboarding_handler, "initialize_project_workspace", fake_init)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.init()
@@ -276,7 +283,7 @@ def test_init_engine_ambiguous_envelope(
     async def fake_init(workspace: Path, *, engine: Any = None) -> Any:
         return outcome
 
-    monkeypatch.setattr(app_module, "initialize_project_workspace", fake_init)
+    monkeypatch.setattr(onboarding_handler, "initialize_project_workspace", fake_init)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.init()
@@ -316,6 +323,6 @@ def test_require_store_passes_legacy_unpinned_store_through_for_reads(
         # never raises EngineAmbiguousError on a read).
         return sentinel
 
-    monkeypatch.setattr(app_module, "resolve_workspace", fake_resolve)
+    monkeypatch.setattr(_shared, "resolve_workspace", fake_resolve)
 
-    assert app_module._require_store("status") is sentinel
+    assert _shared._require_store("status") is sentinel

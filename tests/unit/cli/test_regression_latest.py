@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import regression as app_module
 from novetest.cli.output import OutputMode
 from novetest.models import RunReference
 from novetest.models.regression_fact_set import RegressionFactSet, RegressionSummary
@@ -62,7 +63,7 @@ def _make_fact_set() -> RegressionFactSet:
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -230,7 +231,7 @@ def test_regression_latest_uninitialized_short_circuits_at_store(
                 ok=False,
                 errors=(EnvelopeError(code="uninitialized", message="no store"),),
             ),
-            app_module._active_mode,
+            _shared._active_mode,
         )
         sys.exit(2)
 

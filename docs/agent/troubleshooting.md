@@ -103,7 +103,7 @@ Recovery: `novetest init --engine <name>` with a value from
 outcome across machines.
 
 Read-only verbs (`status`, `memory list/show/delete`, `inspect`,
-`coverage show`, `regression latest/show`, `localization latest/show`,
+`coverage show`, `regression compare/latest`, `localization <run_id>/latest`,
 `compare`) do **not** hit this on a legacy pin-less store: they proceed
 engine-less (exit 0) and answer from the store as-is, writing nothing.
 Only the execution path needs an engine, so only it refuses on ambiguity

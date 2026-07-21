@@ -17,7 +17,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import coverage as app_module
 from novetest.cli.output import OutputMode
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.compare import CoverageDelta, FileCoverageDelta
@@ -107,7 +108,7 @@ def _make_delta(
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -138,7 +139,7 @@ def test_show_emits_fact_set_when_facts_present(
     run_id = "01TESTTESTTESTTESTTESTTEST"
     entry = _make_memory_entry(run_id)
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: entry if rid == run_id else None,
     )
@@ -177,7 +178,7 @@ def test_show_emits_unavailable_when_facts_missing(
     run_id = "01TESTTESTTESTTESTTESTTEST"
     entry = _make_memory_entry(run_id)
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: entry if rid == run_id else None,
     )
@@ -212,7 +213,7 @@ def test_show_returns_not_found_for_unknown_run_id(
 ) -> None:
     """Mirror the `memory show` not-found pattern: exit 2, structured envelope."""
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: None,
     )
@@ -248,7 +249,7 @@ def test_diff_emits_delta_when_both_runs_have_facts(
     target_id = "01TARGETTESTTESTTESTTESTTE"
     entries = [_make_memory_entry(baseline_id), _make_memory_entry(target_id)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: next(
             (e for e in entries if e.run_record.run_reference.run_id == rid),
@@ -307,7 +308,7 @@ def test_diff_emits_unavailable_when_one_side_lacks_facts(
     target_id = "01TARGETTESTTESTTESTTESTTE"
     entries = [_make_memory_entry(baseline_id), _make_memory_entry(target_id)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: next(
             (e for e in entries if e.run_record.run_reference.run_id == rid),
@@ -347,7 +348,7 @@ def test_diff_returns_not_found_when_target_run_id_unknown(
     baseline_id = "01BASELINETESTTESTTESTTEST"
     baseline_only = [_make_memory_entry(baseline_id)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, rid, *, skipped=None: next(
             (e for e in baseline_only if e.run_record.run_reference.run_id == rid),

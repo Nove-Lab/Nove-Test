@@ -21,7 +21,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import novetest.cli.app as app_mod
+import novetest.cli._shared as shared_mod
+import novetest.cli.handlers.memory as memory_mod
 import novetest.orchestration.workflows.inspect as inspect_mod
 import novetest.orchestration.workflows.test as test_mod
 
@@ -29,7 +30,11 @@ import novetest.orchestration.workflows.test as test_mod
 # an entry's Run Reference id against the requested ``run_id``.
 _SCAN_PREDICATE = re.compile(r"run_record\.run_reference\.run_id\s*==\s*run_id")
 
-_CONSUMER_MODULES = (app_mod, inspect_mod, test_mod)
+# Post-W3/S47 the CLI-side run_id consumers moved out of ``cli/app.py``: the
+# addressed-lookup seam ``_resolve_run_reference`` now lives in ``cli/_shared``
+# and the memory verbs (``show`` / ``delete``) in ``cli/handlers/memory``. The
+# orchestration consumers (inspect / test workflows) are unchanged.
+_CONSUMER_MODULES = (shared_mod, memory_mod, inspect_mod, test_mod)
 
 
 def _module_source(module: object) -> str:

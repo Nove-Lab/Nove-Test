@@ -36,6 +36,7 @@ from typing import Any
 
 import pytest
 
+from novetest.cli import _shared
 from novetest.cli import app as app_module
 from novetest.cli.app import (
     _engine_candidates_payload,
@@ -43,6 +44,8 @@ from novetest.cli.app import (
     _map_execution_exception,
     _readiness_payload,
 )
+from novetest.cli.handlers import run as run_handler
+from novetest.cli.handlers import test as test_handler
 from novetest.cli.output import (
     EXIT_ENGINE_MISSING,
     EXIT_GENERIC,
@@ -346,13 +349,14 @@ class TestOrc21Fallback:
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
 def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
     sentinel = object()
-    monkeypatch.setattr(app_module, "_require_store", lambda _cmd: sentinel)
+    monkeypatch.setattr(run_handler, "_require_store", lambda _cmd: sentinel)
+    monkeypatch.setattr(test_handler, "_require_store", lambda _cmd: sentinel)
     return sentinel
 
 
@@ -367,14 +371,14 @@ def _patch_run_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     async def fake_workflow(target: str, store: Any, **kwargs: Any) -> RunOutcome:
         raise exc
 
-    monkeypatch.setattr(app_module, "run_target_in_store", fake_workflow)
+    monkeypatch.setattr(run_handler, "run_target_in_store", fake_workflow)
 
 
 def _patch_test_raise(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     async def fake_workflow(target: str, store: Any, **kwargs: Any) -> TestOutcome:
         raise exc
 
-    monkeypatch.setattr(app_module, "test_target_in_store", fake_workflow)
+    monkeypatch.setattr(test_handler, "test_target_in_store", fake_workflow)
 
 
 class TestVerbsRouteThroughTheHelper:
@@ -456,7 +460,7 @@ class TestVerbsRouteThroughTheHelper:
             99,
         )
         monkeypatch.setattr(
-            app_module, "_map_execution_exception", lambda _cmd, _exc: sentinel
+            _shared, "_map_execution_exception", lambda _cmd, _exc: sentinel
         )
         _patch_run_raise(monkeypatch, RunEngineError("boom"))
         _patch_test_raise(monkeypatch, RunEngineError("boom"))

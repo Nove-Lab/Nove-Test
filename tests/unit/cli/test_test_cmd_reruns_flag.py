@@ -24,7 +24,8 @@ from typing import Any
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import test as app_module
 from novetest.cli.output import OutputMode
 from novetest.models import MemoryEntry, ReplayResult, RunRecord
 from novetest.models.run_reference import RunReference
@@ -40,7 +41,7 @@ from novetest.orchestration.workflows.test import TestOutcome
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 def _captured_envelope(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:

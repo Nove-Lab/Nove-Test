@@ -17,7 +17,8 @@ from typing import Any
 
 import pytest
 
-from novetest.cli import app as app_module
+from novetest.cli import _shared
+from novetest.cli.handlers import compare as app_module
 from novetest.cli.output import OutputMode
 from novetest.coverage import CoverageUnavailable
 from novetest.coverage.compare import CoverageDelta, FileCoverageDelta
@@ -124,7 +125,7 @@ def _make_regression_fact_set() -> RegressionFactSet:
 
 @pytest.fixture
 def force_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, "_active_mode", OutputMode.JSON)
+    monkeypatch.setattr(_shared, "_active_mode", OutputMode.JSON)
 
 
 @pytest.fixture
@@ -138,7 +139,7 @@ def stub_store(monkeypatch: pytest.MonkeyPatch) -> object:
 def stub_history(monkeypatch: pytest.MonkeyPatch) -> None:
     entries = [_make_memory_entry(_BASELINE_ID), _make_memory_entry(_TARGET_ID)]
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: next(
             (e for e in entries if e.run_record.run_reference.run_id == run_id),
@@ -366,7 +367,7 @@ def test_compare_returns_not_found_for_fake_baseline_id(
     Mirrors `regression compare` / `coverage diff`."""
 
     monkeypatch.setattr(
-        app_module,
+        _shared,
         "find_entry_by_run_id",
         lambda _store, run_id, *, skipped=None: None,
     )
