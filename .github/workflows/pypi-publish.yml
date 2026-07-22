@@ -9,9 +9,16 @@
 #   workflow:    pypi-publish.yml   (this file's basename)
 #   environment: pypi               (the `environment:` key below)
 #
-# Trigger: workflow_dispatch only — the first publish is a deliberate manual
-# runbook step. Tag-triggered publishing joins the release runbook at the
-# next release cut (wire a v* tag trigger alongside release-test.yml then).
+# Trigger: workflow_dispatch only — publish is a deliberate, sequenced manual
+# runbook step, NOT a tag trigger. Decided at the 2026-07-22 v0.2.0 cut: a
+# `v*` tag push already fires release-test.yml (binaries + install-script E2E),
+# and PyPI uploads are once-only / irreversible per version. Wiring a tag
+# trigger here would run the irreversible PyPI publish CONCURRENTLY with the
+# binary prove-out — if release-test.yml then went red, the PyPI upload could
+# not be undone. So the release runbook dispatches THIS workflow only AFTER
+# release-test.yml is green on the tag ref (see the v0.2.0 publish runbook,
+# agent-comms/tasks/release-team-2026-07-22-v020-publish-runbook.md). This file
+# no longer promises a future tag trigger.
 #
 # Artifacts build from the ref the workflow is dispatched on (default: main),
 # i.e. merged main at publish time — NOT from the version tag. Accepted at
