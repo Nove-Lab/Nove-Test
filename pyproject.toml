@@ -1,6 +1,6 @@
 [project]
 name = "novetest"
-version = "0.2.0"
+version = "0.2.1"
 description = "AI-first testing orchestration that turns test execution into stored, comparable, reproducible evidence and recommendations."
 readme = "README.md"
 requires-python = ">=3.11"

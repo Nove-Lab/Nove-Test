@@ -464,11 +464,238 @@ jobs:
             exit 1
           fi
 
+  # OQ-25 regression gate — the built binary must actually RUN a pytest SuT.
+  #
+  # Until v0.2.1 the ONLY binary-level exercise in this workflow was
+  # `novetest --version` (the build job's smoke step). That is why the
+  # v0.2.0 binary shipped unable to run any pytest project at all:
+  # readiness probed `sys.executable` — under PyApp the SEALED
+  # python-build-standalone CPython, which can never carry pytest — so
+  # every pytest SuT false-negatived `engine-misconfigured` (exit 4)
+  # before the adapter's venv-first resolution could run. No in-repo
+  # `uv run` test can reproduce that condition: the dev venv always has
+  # pytest, so novetest's interpreter and the SuT's interpreter are the
+  # same process there. Only the real artifact separates them.
+  #
+  # This job reproduces the deployment condition with the real binary and
+  # pins BOTH sides of the documented contract:
+  #   positive — a workspace `.venv` carrying pytest is resolved and the
+  #              suite actually executes (not merely "readiness passed");
+  #   negative — a workspace WITHOUT a `.venv` still yields exit 4 with
+  #              the actionable remediation, so a future "fix" cannot
+  #              silently widen resolution to a bare-PATH tier.
+  #
+  # Interpreter resolution is deliberately TWO tiers (workspace `.venv`
+  # -> `sys.executable`); see docs/{agent,human}/languages.md.
+  binary-runs-pytest-sut:
+    name: binary runs a pytest SuT (linux-x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      # Exact pin so the engine_version assertion is a string equality
+      # rather than a fuzzy match. Bumping this is routine maintenance;
+      # the job cross-checks the pin against the venv's real version so a
+      # stale pin fails loudly instead of silently passing.
+      PYTEST_PIN: "9.1.1"
+      BIN: novetest-linux-x86_64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download built binary
+        uses: actions/download-artifact@v8
+        with:
+          name: novetest-linux-x86_64
+          path: bin
+
+      - name: Make binary executable
+        run: chmod +x "bin/$BIN"
+
+      - name: Stage two SuT copies outside the repo tree
+        run: |
+          set -eu
+          # tests/fixtures/projects/** is owned by the engine teams and is
+          # READ-ONLY here — copy to RUNNER_TEMP and mutate only the copies,
+          # so a failed run can never leave the fixture dirty.
+          rm -rf "$RUNNER_TEMP/sut-ready" "$RUNNER_TEMP/sut-bare"
+          cp -r tests/fixtures/projects/pytest-basic "$RUNNER_TEMP/sut-ready"
+          cp -r tests/fixtures/projects/pytest-basic "$RUNNER_TEMP/sut-bare"
+
+          # Copy A: the `.venv` the venv-first rule must resolve against.
+          # The fixture deliberately ships NO `.venv`, so the job builds it.
+          # pytest-cov is REQUIRED, not optional: `novetest test` collects
+          # coverage by default and exits 4 `adapter-missing-plugin`
+          # without it — readiness alone gates only pytest + json-report.
+          # `python3`, not `python`: this job deliberately does not run
+          # setup-uv (it must exercise the artifact, not a dev toolchain),
+          # so only the image's system python3 is guaranteed on PATH.
+          python3 -m venv "$RUNNER_TEMP/sut-ready/.venv"
+          "$RUNNER_TEMP/sut-ready/.venv/bin/python" -m pip install --quiet --upgrade pip
+          "$RUNNER_TEMP/sut-ready/.venv/bin/python" -m pip install --quiet \
+            "pytest==${PYTEST_PIN}" "pytest-json-report>=1.5.0" "pytest-cov>=5"
+
+          # Copy B: no `.venv` — the documented fallback boundary.
+          if [ -e "$RUNNER_TEMP/sut-bare/.venv" ]; then
+            echo "::error title=fixture-drift::tests/fixtures/projects/pytest-basic now ships a .venv; the negative assertion below is no longer meaningful"
+            exit 1
+          fi
+
+          echo "venv pytest: $("$RUNNER_TEMP/sut-ready/.venv/bin/python" -c 'import pytest; print(pytest.__version__)')"
+
+      - name: Initialize a Project Store in both copies
+        run: |
+          set -eu
+          # Every verb other than `init` exits 2 `uninitialized` without a
+          # store. `init` does not consult engine readiness, so it exits 0
+          # in the bare copy too — keeping the exit-4 assertion below
+          # attributable to readiness and nothing else.
+          for sut in "$RUNNER_TEMP/sut-ready" "$RUNNER_TEMP/sut-bare"; do
+            (cd "$sut" && "$GITHUB_WORKSPACE/bin/$BIN" init --output json)
+          done
+
+      - name: Positive — `novetest test` executes the suite (exit 0, all_green 3/3)
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/sut-ready"
+          set +e
+          "$GITHUB_WORKSPACE/bin/$BIN" test --output json > "$RUNNER_TEMP/test-ready.json" 2>&1
+          rc=$?
+          set -e
+          echo "--- envelope ---"
+          cat "$RUNNER_TEMP/test-ready.json"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=binary-cannot-run-pytest-sut::\`novetest test\` exited $rc (expected 0) on a workspace whose .venv carries pytest ${PYTEST_PIN} — this is the OQ-25 defect class: the binary is not resolving the SuT's interpreter"
+            exit 1
+          fi
+          python3 - "$RUNNER_TEMP/test-ready.json" <<'PY'
+          import json
+          import sys
+
+          env = json.load(open(sys.argv[1]))
+          bad = []
+          if env.get("ok") is not True:
+              bad.append(f"ok={env.get('ok')!r} (expected True)")
+          recs = env.get("data", {}).get("recommendations", [])
+          if not recs:
+              bad.append("data.recommendations is empty (expected an all_green entry)")
+          else:
+              rec = recs[0]
+              if rec.get("category") != "all_green":
+                  bad.append(f"recommendations[0].category={rec.get('category')!r} (expected 'all_green')")
+              slots = rec.get("slots", {})
+              for key, want in (("passed", 3), ("total_tests", 3)):
+                  if slots.get(key) != want:
+                      bad.append(f"recommendations[0].slots.{key}={slots.get(key)!r} (expected {want})")
+          if bad:
+              detail = "; ".join(bad)
+              print(
+                  "::error title=binary-pytest-suite-did-not-run::"
+                  "exit 0 alone does not prove execution — " + detail
+              )
+              sys.exit(1)
+          print("OK: the binary executed the pytest suite, 3/3 green")
+          PY
+
+      - name: Positive — `novetest run` reports the pytest that actually ran
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/sut-ready"
+          venv_version="$(.venv/bin/python -c 'import pytest; print(pytest.__version__)')"
+          set +e
+          "$GITHUB_WORKSPACE/bin/$BIN" run --output json > "$RUNNER_TEMP/run-ready.json" 2>&1
+          rc=$?
+          set -e
+          echo "--- envelope (head) ---"
+          head -c 2000 "$RUNNER_TEMP/run-ready.json"
+          echo
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=binary-run-verb-failed::\`novetest run\` exited $rc (expected 0) on the .venv-carrying workspace"
+            exit 1
+          fi
+          python3 - "$RUNNER_TEMP/run-ready.json" "$PYTEST_PIN" "$venv_version" <<'PY'
+          import json
+          import sys
+
+          env, pin, venv_version = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+          record = env.get("data", {}).get("memory_entry", {}).get("run_record", {})
+          bad = []
+          # Three-way equality: the pin, the version really installed in the
+          # SuT venv, and the version the envelope reports. The binary's own
+          # sealed CPython has NO pytest, so a match here can only come from
+          # the resolved venv interpreter (board row 22).
+          if venv_version != pin:
+              bad.append(
+                  f"stale pin: PYTEST_PIN={pin} but the venv installed {venv_version}"
+              )
+          reported = record.get("engine_version")
+          if reported != pin:
+              bad.append(
+                  f"run_record.engine_version={reported!r} (expected {pin!r}, the SuT venv's pytest)"
+              )
+          if record.get("status") != "passed":
+              bad.append(f"run_record.status={record.get('status')!r} (expected 'passed')")
+          counts = record.get("summary_counts", {})
+          for key, want in (("passed", 3), ("collected", 3)):
+              if counts.get(key) != want:
+                  bad.append(f"run_record.summary_counts.{key}={counts.get(key)!r} (expected {want})")
+          if bad:
+              detail = "; ".join(bad)
+              print("::error title=engine-version-inaccurate::" + detail)
+              sys.exit(1)
+          print(f"OK: engine_version {reported} == SuT venv pytest == pin; 3/3 collected and passed")
+          PY
+
+      - name: Negative — no `.venv` still exits 4 with actionable remediation
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/sut-bare"
+          set +e
+          "$GITHUB_WORKSPACE/bin/$BIN" test --output json > "$RUNNER_TEMP/test-bare.json" 2>&1
+          rc=$?
+          set -e
+          echo "--- envelope ---"
+          cat "$RUNNER_TEMP/test-bare.json"
+          if [ "$rc" -ne 4 ]; then
+            echo "::error title=resolution-boundary-moved::\`novetest test\` exited $rc (expected 4) on a workspace with NO .venv — resolution is documented as two tiers (workspace .venv -> sys.executable) with no bare-PATH tier; if this widened deliberately, update docs/{agent,human}/languages.md and this job together"
+            exit 1
+          fi
+          python3 - "$RUNNER_TEMP/test-bare.json" <<'PY'
+          import json
+          import sys
+
+          env = json.load(open(sys.argv[1]))
+          bad = []
+          errors = env.get("errors", [])
+          if not errors:
+              bad.append("errors[] is empty (expected engine-misconfigured)")
+          elif errors[0].get("code") != "engine-misconfigured":
+              bad.append(f"errors[0].code={errors[0].get('code')!r} (expected 'engine-misconfigured')")
+          readiness = env.get("data", {}).get("engine_readiness", {})
+          if readiness.get("state") != "engine-misconfigured":
+              bad.append(f"engine_readiness.state={readiness.get('state')!r} (expected 'engine-misconfigured')")
+          # Stable fragments of the shipped remediation. Deliberately NOT the
+          # whole string (it names absolute paths and will be reworded); these
+          # two carry the load — "the resolved interpreter" is the OQ-25 fix's
+          # vocabulary, and the .venv sentence is the only remediation valid
+          # under a sealed-CPython binary install.
+          issues = " ".join(readiness.get("issues", []))
+          for fragment in (
+              "pytest is not importable from the resolved interpreter",
+              "novetest prefers the workspace's own .venv",
+          ):
+              if fragment not in issues:
+                  bad.append(f"remediation is missing the stable fragment {fragment!r}")
+          if bad:
+              detail = "; ".join(bad)
+              print("::error title=remediation-regressed::" + detail)
+              sys.exit(1)
+          print("OK: venv-less workspace exits 4 and names the .venv remediation")
+          PY
+
   # Draft GitHub Release on tag push. Skipped on workflow_dispatch so manual
   # runs do not pollute the release feed.
   release:
     name: draft GitHub Release
-    needs: [build, install-script-e2e, install-ps1-e2e, first-run-latency-bench]
+    needs: [build, install-script-e2e, install-ps1-e2e, first-run-latency-bench, binary-runs-pytest-sut]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
