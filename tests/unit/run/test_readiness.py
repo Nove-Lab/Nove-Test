@@ -16,14 +16,17 @@ empty candidate set — the signal orchestration's `novetest init` maps to
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from novetest.run import readiness as readiness_module
+from novetest.run.adapters import pytest_adapter as pytest_adapter_module
 from novetest.run.engine_selector import detect_engine_candidates
 from novetest.run.errors import EngineNotSupportedError
 from novetest.run.readiness import probe_engine
+from novetest.utils.asyncio_subprocess import SubprocessResult
 
 
 async def test_pytest_basic_is_ready(basic_workspace: Path) -> None:
@@ -58,6 +61,125 @@ async def test_truly_unknown_workspace_has_no_candidates(tmp_path: Path) -> None
     signal orchestration's `novetest init` maps to `no-engine-detected`)."""
 
     assert detect_engine_candidates(tmp_path) == ()
+
+
+# ---------------------------------------------------------------------------
+# pytest readiness probes the RESOLVED interpreter (OQ-25)
+#
+# Readiness used to hard-code ``sys.executable`` while the adapter resolves
+# venv-first (RUN-11). Under the standalone binary install those differ —
+# ``sys.executable`` is the sealed PyApp CPython, which can never carry
+# pytest — so every pytest SuT false-negatived ``engine-misconfigured``
+# before the adapter's venv-first path could run. Both probes now go through
+# the adapter's own ``_resolve_pytest_interpreter``: whatever readiness
+# declares ready is what runs.
+# ---------------------------------------------------------------------------
+
+
+def _write_pytest_workspace(root: Path) -> Path:
+    """A minimal workspace that passes ``_pytest_configured``."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    return root
+
+
+def _write_fake_venv(workspace: Path) -> Path:
+    """A POSIX ``.venv`` carrying a pytest console script + sibling python."""
+
+    venv_bin = workspace / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "pytest").write_text("#!/bin/sh\n", encoding="utf-8")
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+    return venv_bin / "python"
+
+
+def _capture_probe_argv(
+    monkeypatch: pytest.MonkeyPatch, *, returncode: int = 0, stdout: bytes = b""
+) -> list[list[str]]:
+    """Stub BOTH probe seams (the version query lives in the adapter module,
+    the plugin probe in readiness) and record every argv they spawn."""
+
+    captured: list[list[str]] = []
+
+    async def stub(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        assert isinstance(argv, list)
+        captured.append([str(a) for a in argv])
+        return SubprocessResult(
+            returncode=returncode, stdout=stdout, stderr=b"", timed_out=False
+        )
+
+    monkeypatch.setattr(readiness_module, "run_subprocess", stub)
+    monkeypatch.setattr(pytest_adapter_module, "run_subprocess", stub)
+    return captured
+
+
+async def test_pytest_readiness_probes_the_workspace_venv_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OQ-25: with a SuT ``.venv`` carrying pytest, BOTH probes target that
+    venv's python — not ``sys.executable`` — and the reported
+    ``engine_version`` is the venv's pytest (row 22)."""
+
+    monkeypatch.setattr(pytest_adapter_module.sys, "platform", "linux")
+    workspace = _write_pytest_workspace(tmp_path / "ws")
+    venv_python = _write_fake_venv(workspace)
+    captured = _capture_probe_argv(monkeypatch, stdout=b"0.0.0+venv-probe\n")
+
+    readiness = await probe_engine(workspace, "python", "pytest")
+
+    assert readiness.state == "ready"
+    assert [argv[0] for argv in captured] == [str(venv_python), str(venv_python)]
+    assert sys.executable not in [argv[0] for argv in captured]
+    assert readiness.engine_context is not None
+    assert readiness.engine_context.engine_version == "0.0.0+venv-probe"
+
+
+async def test_pytest_readiness_falls_back_to_sys_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No workspace ``.venv`` → the RUN-11 fallback is preserved: both probes
+    target ``sys.executable``, exactly as before OQ-25."""
+
+    workspace = _write_pytest_workspace(tmp_path / "ws")
+    captured = _capture_probe_argv(monkeypatch, stdout=b"9.0.3\n")
+
+    readiness = await probe_engine(workspace, "python", "pytest")
+
+    assert readiness.state == "ready"
+    assert [argv[0] for argv in captured] == [sys.executable, sys.executable]
+
+
+async def test_pytest_readiness_remediation_is_deployment_honest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both issues name the interpreter that was probed and point at the
+    workspace ``.venv`` — the only remediation that also works under the
+    standalone binary, whose interpreter cannot be installed into."""
+
+    workspace = _write_pytest_workspace(tmp_path / "ws")
+    _capture_probe_argv(monkeypatch, returncode=1)
+
+    readiness = await probe_engine(workspace, "python", "pytest")
+
+    assert readiness.state == "engine-misconfigured"
+    assert len(readiness.issues) == 2
+    for issue in readiness.issues:
+        assert "not importable from the resolved interpreter" in issue
+        assert sys.executable in issue  # the interpreter actually probed
+        assert str(workspace / ".venv") in issue
+        assert "-m venv .venv &&" in issue
+        # pytest-cov is included so following the hint verbatim also makes
+        # the coverage-collecting `novetest test` work, not just readiness.
+        assert "pip install pytest pytest-json-report pytest-cov" in issue
+        # The dead-end remediation OQ-25 replaced must be gone.
+        assert "install with: pip install pytest" not in issue
 
 
 # ---------------------------------------------------------------------------
@@ -453,8 +575,14 @@ async def test_cargo_workspace_with_failing_cargo_version_is_misconfigured(
 def _patch_run_subprocess_raises(
     monkeypatch: pytest.MonkeyPatch, exc: BaseException
 ) -> None:
-    """Make every `readiness.run_subprocess` call raise ``exc`` (the
-    TOCTOU shape: which() passed, exec failed)."""
+    """Make every probe spawn raise ``exc`` (the TOCTOU shape: which()
+    passed, exec failed).
+
+    Both seams are patched: most probes spawn through
+    `readiness.run_subprocess`, while the pytest version query lives in the
+    adapter module (shared with the adapter since OQ-25) and spawns through
+    `pytest_adapter.run_subprocess`.
+    """
 
     async def raising_run_subprocess(
         argv: object,
@@ -467,6 +595,9 @@ def _patch_run_subprocess_raises(
 
     monkeypatch.setattr(
         readiness_module, "run_subprocess", raising_run_subprocess
+    )
+    monkeypatch.setattr(
+        pytest_adapter_module, "run_subprocess", raising_run_subprocess
     )
 
 

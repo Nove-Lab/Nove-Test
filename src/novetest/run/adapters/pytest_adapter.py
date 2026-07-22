@@ -11,6 +11,10 @@ resolved venv-first (``_resolve_pytest_interpreter`` — the SuT's
 ``pytest`` off PATH), and the child env is sanitized on an allow-add
 model with deterministic pins (``PYTHONHASHSEED=0`` / ``CI=1`` /
 ``FORCE_COLOR=0``) and an inherited ``PYTHONPATH`` dropped (RUN-24).
+``_resolve_pytest_interpreter`` and ``_query_pytest_version`` are the
+single resolution / version surfaces shared with `run/readiness.py`, so
+the interpreter readiness declares ready is the interpreter that runs and
+the version reported is the one that ran (board rows 25 and 22).
 
 Foundations §6 guarantees: child gets ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1``
 so the dev venv's plugins do not leak in. The pytest-json-report plugin
@@ -32,6 +36,7 @@ from novetest.run.adapters._harness import prepare_artifact_dirs, run_and_captur
 from novetest.run.adapters._target_guard import reject_dash_leading_target
 from novetest.run.errors import AdapterInvocationError
 from novetest.run.types import NativeResult, TestTarget
+from novetest.utils.asyncio_subprocess import run_subprocess
 
 
 PYTEST_REPORT_FILENAME = "pytest-report.json"
@@ -195,7 +200,9 @@ async def run_pytest(
         # the coverage artifacts omitted so downstream `coverage` verbs
         # report unavailable for this run.
 
-    engine_version = _read_pytest_version(test_target.workspace_path)
+    engine_version = await _read_pytest_version(
+        interpreter, test_target.workspace_path
+    )
 
     artifact_paths: dict[str, Path] = {
         "pytest_json_report": report_path,
@@ -303,19 +310,55 @@ def _build_child_env() -> dict[str, str]:
     return env
 
 
-def _read_pytest_version(workspace: Path) -> str | None:
-    """Best-effort version read from the *parent* interpreter import cache.
+async def _query_pytest_version(interpreter: str, workspace: Path) -> str | None:
+    """Ask ``interpreter`` for its pytest version in a child process.
 
-    A subprocess probe would double the cost of a typical Phase 1 run. The
-    only correctness contract is "if pytest is importable here, report its
-    version; otherwise None." Falls back to ``None`` silently rather than
-    propagating import errors out of the adapter.
+    Shared with `run/readiness.py`'s pytest probe so readiness and the
+    adapter report the version of the SAME interpreter (board row 22) —
+    one implementation, no forked logic.
+
+    RUN-26 guard: an exec failure (the interpreter vanished or became
+    non-executable between resolution and spawn) degrades to ``None``
+    instead of crashing the caller; the version is informational metadata,
+    never load-bearing for the Run Record's correctness.
     """
 
-    del workspace  # version probe is interpreter-scoped, not workspace-scoped
     try:
-        import pytest
-    except ImportError:
+        result = await run_subprocess(
+            [interpreter, "-c", "import pytest; print(pytest.__version__)"],
+            cwd=workspace,
+            timeout=15.0,
+        )
+    except (OSError, FileNotFoundError):
         return None
-    version = getattr(pytest, "__version__", None)
-    return str(version) if version is not None else None
+    if result.returncode != 0:
+        return None
+    version = result.stdout.decode("utf-8", errors="replace").strip()
+    return version or None
+
+
+async def _read_pytest_version(interpreter: str, workspace: Path) -> str | None:
+    """Version of the pytest that ACTUALLY ran (board row 22).
+
+    ``interpreter`` is `_resolve_pytest_interpreter`'s result:
+
+    * ``sys.executable`` — the child IS this process's interpreter, so the
+      parent's import cache answers exactly and for free. A subprocess
+      probe here would double the cost of a typical Phase 1 run for no
+      accuracy gain, so the parent-import fast path stays.
+    * a workspace ``.venv`` python — a DIFFERENT pytest installation, so
+      the parent's version is not the running one (observed live
+      2026-07-20: venv pytest 9.1.1 reported as the parent's 9.0.3). The
+      version must come from the resolved child.
+
+    ``None`` silently on any failure, either way.
+    """
+
+    if interpreter == sys.executable:
+        try:
+            import pytest
+        except ImportError:
+            return None
+        version = getattr(pytest, "__version__", None)
+        return str(version) if version is not None else None
+    return await _query_pytest_version(interpreter, workspace)

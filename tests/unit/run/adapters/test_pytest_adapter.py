@@ -34,11 +34,13 @@ def _route_harness_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
 
     The main engine spawn moved into ``_harness.run_and_capture`` (which
     calls ``_harness.run_subprocess``); these tests still stub the seam on
-    ``pytest_adapter.run_subprocess``. The pytest adapter no longer imports
-    ``run_subprocess`` directly (its version read imports pytest in-process),
-    so the seam attribute is (re)created here and the harness call is
-    late-bound to it. The REAL ``run_subprocess`` is the baseline so an
-    unstubbed test never recurses.
+    ``pytest_adapter.run_subprocess``. The adapter imports
+    ``run_subprocess`` itself (the OQ-25/row-22 version query spawns the
+    RESOLVED interpreter), so the setattr below re-pins the same real
+    function and the harness call is late-bound to it — a test stubbing
+    ``pytest_adapter.run_subprocess`` therefore intercepts BOTH the engine
+    spawn and the version query. The REAL ``run_subprocess`` is the
+    baseline so an unstubbed test never recurses.
     """
 
     import novetest.run.adapters.pytest_adapter as _adapter
@@ -610,7 +612,9 @@ async def test_venv_pytest_flows_into_spawn_argv(
     the venv python, proving the resolution reaches the harness spawn.
 
     The ``-m pytest`` prefix is preserved — we invoke the venv's python with
-    ``-m``, never the console script directly.
+    ``-m``, never the console script directly. The same stub also answers
+    the row-22 version query, which must target the SAME venv python (its
+    reply — not the parent's pytest version — becomes ``engine_version``).
     """
 
     import novetest.run.adapters.pytest_adapter as adapter
@@ -623,6 +627,7 @@ async def test_venv_pytest_flows_into_spawn_argv(
     (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
 
     captured_argv: list[str] = []
+    version_argv: list[str] = []
 
     async def capturing_stub(
         argv: object,
@@ -632,6 +637,11 @@ async def test_venv_pytest_flows_into_spawn_argv(
         timeout: float | None = None,
     ) -> SubprocessResult:
         assert isinstance(argv, list)
+        if "-c" in argv:  # the version query, not the engine spawn
+            version_argv.extend(argv)
+            return SubprocessResult(
+                returncode=0, stdout=b"0.0.0+venv-probe\n", stderr=b"", timed_out=False
+            )
         captured_argv.extend(argv)
         report_arg = next(
             a
@@ -651,10 +661,110 @@ async def test_venv_pytest_flows_into_spawn_argv(
     monkeypatch.setattr(adapter, "run_subprocess", capturing_stub)
 
     target = resolve_test_target("", workspace)
-    await run_pytest(target, artifact_dir=tmp_path / "art", timeout=60.0)
+    result = await run_pytest(target, artifact_dir=tmp_path / "art", timeout=60.0)
 
     assert captured_argv[0] == str(venv_bin / "python")
     assert captured_argv[1:3] == ["-m", "pytest"]
+    # Row 22: the version came from the venv python we ran, not from the
+    # parent process's own pytest.
+    assert version_argv[0] == str(venv_bin / "python")
+    assert result.engine_version == "0.0.0+venv-probe"
+    import pytest as _parent_pytest
+
+    assert result.engine_version != _parent_pytest.__version__
+
+
+# ---------------------------------------------------------------------------
+# engine_version reports the pytest that ACTUALLY ran (board row 22)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_pytest_version_uses_parent_import_for_sys_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fast path: when the resolved interpreter IS this process's, the parent
+    import cache answers exactly — and no subprocess is spawned (the
+    perf rationale for keeping the in-process read)."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    async def forbidden(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        raise AssertionError("sys.executable path must not spawn a subprocess")
+
+    monkeypatch.setattr(adapter, "run_subprocess", forbidden)
+
+    assert (
+        await adapter._read_pytest_version(sys.executable, tmp_path)
+        == pytest.__version__
+    )
+
+
+async def test_read_pytest_version_queries_a_resolved_venv_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Row 22: a workspace ``.venv`` python is a DIFFERENT pytest install, so
+    the version must come from THAT child — the parent's import cache would
+    misstate it (observed live: venv 9.1.1 reported as the parent's 9.0.3)."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    venv_python = str(tmp_path / ".venv" / "bin" / "python")
+    captured_argv: list[str] = []
+
+    async def stub(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        assert isinstance(argv, list)
+        captured_argv.extend(argv)
+        return SubprocessResult(
+            returncode=0, stdout=b"0.0.0+venv-probe\n", stderr=b"", timed_out=False
+        )
+
+    monkeypatch.setattr(adapter, "run_subprocess", stub)
+
+    version = await adapter._read_pytest_version(venv_python, tmp_path)
+    assert version == "0.0.0+venv-probe"
+    assert version != pytest.__version__
+    assert captured_argv[0] == venv_python
+    assert captured_argv[1] == "-c"
+
+
+async def test_read_pytest_version_degrades_to_none_on_exec_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RUN-26 guard: the resolved interpreter vanishing between resolution
+    and spawn degrades to ``None`` (version is informational), never an
+    exception escaping the adapter."""
+
+    import novetest.run.adapters.pytest_adapter as adapter
+
+    async def raising(
+        argv: object,
+        *,
+        cwd: object,
+        env: object | None = None,
+        timeout: float | None = None,
+    ) -> SubprocessResult:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(adapter, "run_subprocess", raising)
+
+    assert (
+        await adapter._read_pytest_version(
+            str(tmp_path / ".venv" / "bin" / "python"), tmp_path
+        )
+        is None
+    )
 
 
 def test_build_child_env_sets_deterministic_trio() -> None:

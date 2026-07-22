@@ -154,15 +154,44 @@ these reports `engine-missing`.
 
 ### Toolchain
 
-`pytest` and the `pytest-json-report` plugin must be importable from
-the **interpreter that runs novetest** (the external command is
-`<sys.executable> -m pytest …`, not a `pytest` on PATH). Add
-`pytest-cov` for coverage.
+`pytest` and the `pytest-json-report` plugin (plus `pytest-cov` for
+coverage runs) must be importable from the **interpreter novetest
+resolves for your project**, which is chosen venv-first:
+
+1. **`<project>/.venv`** — used when its pytest console script exists
+   (`.venv/bin/pytest`, or `.venv\Scripts\pytest.exe` on Windows).
+   novetest then runs that venv's `python`, so your project's own pytest
+   and plugin versions are what execute.
+2. **novetest's own interpreter** (`sys.executable`) — the fallback when
+   the project has no such `.venv`.
+
+A `pytest` merely on `PATH` is never used. Readiness checks the same
+interpreter it will run, and the reported `engine_version` is that
+interpreter's pytest version.
+
+**If you installed novetest as the standalone binary** (`curl … | sh`),
+its interpreter is a sealed CPython you cannot install into — give your
+project a `.venv` with the test dependencies:
+
+```
+cd <project>
+python3 -m venv .venv
+.venv/bin/python -m pip install pytest pytest-json-report pytest-cov
+```
+
+`pytest-cov` is not required for readiness to report `ready`, but
+`novetest test` collects coverage by default — without it that run stops
+with `adapter-missing-plugin` (exit 4). Installing all three up front is
+why the readiness hint lists them together.
+
+With a pip/venv, pipx, or `uv tool` install of novetest you may instead
+put these in novetest's own environment; the project `.venv` route works
+in every install mode.
 
 ### External command
 
 ```
-<python> -m pytest -p pytest_jsonreport --json-report
+<resolved python> -m pytest -p pytest_jsonreport --json-report
   --json-report-file=<artifacts>/native/pytest-report.json -q [<target>]
 ```
 

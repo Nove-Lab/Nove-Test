@@ -129,18 +129,38 @@ The **baseline**; see [quick-start.md](./quick-start.md).
   configuration (pytest.ini, [tool.pytest.ini_options], conftest.py,
   or tests/ dir) found"`.
 - **External command:**
-  `<sys.executable> -m pytest -p pytest_jsonreport --json-report
+  `<resolved python> -m pytest -p pytest_jsonreport --json-report
   --json-report-file=<artifacts>/native/pytest-report.json -q [<target>]`.
-  Uses novetest's own interpreter, not a `pytest` on PATH;
-  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+  Never a `pytest` on PATH; `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+- **Interpreter resolution (venv-first, two tiers, no PATH tier):**
+  1. `<workspace>/.venv` when its pytest console script exists
+     (`.venv/bin/pytest`, or `.venv\Scripts\pytest.exe` on Windows) →
+     that venv's `python`;
+  2. otherwise `sys.executable` (the interpreter running novetest).
+  Readiness probes the **same** resolved interpreter it will run, and
+  `engine_version` reports that interpreter's pytest. So `pytest` +
+  `pytest-json-report` (+ `pytest-cov` for coverage runs) must be
+  importable from the workspace `.venv` if it has one, else from
+  novetest's own interpreter. Under the standalone-binary install
+  (`curl … | sh`) `sys.executable` is a sealed CPython that cannot be
+  installed into — a workspace `.venv` is the only route there.
 - **Coverage:** `coverage_json` (+`coverage_xml`), collected with
   `--cov-context=test` (enables per-test SBFL).
 - **node_id:** `tests/test_arithmetic.py::test_subtract`.
-- **Misconfig messages:** pytest not importable →
-  `engine-misconfigured` `"pytest is not importable from the resolved
-  interpreter; install with: pip install pytest"`; plugin missing →
-  `"pytest-json-report plugin is not importable; install with:
-  pip install pytest-json-report"`.
+- **Misconfig messages** (both name the resolved interpreter and the
+  `.venv` remediation): pytest not importable → `engine-misconfigured`
+  `"pytest is not importable from the resolved interpreter
+  (<interpreter>); install pytest, pytest-json-report and pytest-cov into
+  <workspace>/.venv (novetest prefers the workspace's own .venv over its
+  interpreter; pytest-cov is what the coverage-collecting verbs such as
+  \`novetest test\` additionally need) — from <workspace> run: python3 -m
+  venv .venv && .venv/bin/python -m pip install pytest pytest-json-report
+  pytest-cov"`; plugin missing → the same text with `"pytest-json-report
+  plugin is not importable from the resolved interpreter
+  (<interpreter>); …"`. Readiness itself gates only on pytest +
+  pytest-json-report; a missing `pytest-cov` surfaces later as
+  `adapter-missing-plugin` (exit 4) on a coverage-collecting run, so the
+  hint installs all three at once.
 
 ---
 

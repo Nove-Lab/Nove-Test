@@ -149,8 +149,8 @@ which carry the exact install command, e.g.:
 | Engine | `issues[]` text (real) |
 |---|---|
 | pytest (no config) | "Python workspace detected but no pytest configuration … found" |
-| pytest (not importable) | "pytest is not importable from the resolved interpreter; install with: pip install pytest" |
-| pytest (plugin) | "pytest-json-report plugin is not importable; install with: pip install pytest-json-report" |
+| pytest (not importable) | "pytest is not importable from the resolved interpreter (`<interpreter>`); install pytest, pytest-json-report and pytest-cov into `<workspace>/.venv` … — from `<workspace>` run: python3 -m venv .venv && .venv/bin/python -m pip install pytest pytest-json-report pytest-cov" |
+| pytest (plugin) | "pytest-json-report plugin is not importable from the resolved interpreter (`<interpreter>`); …" (same `.venv` remediation) |
 | jest (no node) | "Node.js (`node`/`npx`) not found on PATH; install Node.js >=18 …" |
 | jest (absent) | "jest not found in package.json … install with: npm install --save-dev jest" |
 | cargo-test | "`cargo nextest` is not installed … Install with: cargo install cargo-nextest --locked …" |

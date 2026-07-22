@@ -212,11 +212,17 @@ object's `details` (which is empty).
 
 If the engine **is** on PATH but Nove Test still doesn't see it:
 
-1. **Wrong interpreter (pytest).** Nove Test runs pytest with its own
-   bundled interpreter (`<python> -m pytest …`), not a `pytest` on PATH.
-   A globally-installed pytest that this interpreter can't import reads
-   as `engine-misconfigured`. The readiness `issue:` line will say
-   `install with: pip install pytest` (or `… pytest-json-report`).
+1. **Wrong interpreter (pytest).** Nove Test runs pytest as
+   `<resolved python> -m pytest …`, never a `pytest` on PATH. The
+   interpreter is resolved venv-first: your project's `.venv` when it
+   carries a pytest console script, otherwise the interpreter running
+   novetest. A globally-installed pytest that neither of those can
+   import reads as `engine-misconfigured`. The readiness `issue:` line
+   names the interpreter it probed and tells you to install `pytest` +
+   `pytest-json-report` into `<project>/.venv` — the remediation that
+   works in every install mode, including the standalone binary (whose
+   own interpreter is sealed and cannot be installed into). See
+   [languages.md](./languages.md) → pytest → Toolchain.
 2. **Wrong project.** Confirm you're in the right directory.
 
 ### `✗ run  engine-misconfigured: …` (exit 4)

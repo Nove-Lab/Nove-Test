@@ -47,6 +47,10 @@ from novetest.run.adapters.junit_adapter import (
     _detects_jupiter_in_manifest,
     _detects_testng_in_manifest,
 )
+from novetest.run.adapters.pytest_adapter import (
+    _query_pytest_version,
+    _resolve_pytest_interpreter,
+)
 from novetest.run.engine_selector import (
     detect_engine_candidates,
     list_supported_engine_pairs,
@@ -133,17 +137,26 @@ async def _assess_pytest_readiness(
             ),
         )
 
+    # OQ-25: probe the interpreter the ADAPTER will actually invoke, not
+    # ``sys.executable``. Under the standalone binary install those differ
+    # — ``sys.executable`` is the sealed PyApp CPython, which can never
+    # carry pytest, so probing it false-negatived every pytest SuT
+    # (``engine-misconfigured``) before the adapter's venv-first
+    # resolution could run. One resolver, shared with the adapter.
+    interpreter = _resolve_pytest_interpreter(project_workspace)
+
     issues: list[str] = []
-    pytest_version = await _probe_pytest_version(project_workspace)
+    pytest_version = await _query_pytest_version(interpreter, project_workspace)
+    remediation = _pytest_install_remediation(project_workspace)
     if pytest_version is None:
         issues.append(
-            "pytest is not importable from the resolved interpreter; "
-            "install with: pip install pytest"
+            f"pytest is not importable from the resolved interpreter "
+            f"({interpreter}); {remediation}"
         )
-    if not await _probe_pytest_jsonreport(project_workspace):
+    if not await _probe_pytest_jsonreport(project_workspace, interpreter):
         issues.append(
-            "pytest-json-report plugin is not importable; "
-            "install with: pip install pytest-json-report"
+            f"pytest-json-report plugin is not importable from the resolved "
+            f"interpreter ({interpreter}); {remediation}"
         )
 
     context = NativeEngineContext(
@@ -194,30 +207,47 @@ def _pytest_configured(workspace: Path) -> bool:
     return False
 
 
-async def _probe_pytest_version(workspace: Path) -> str | None:
+def _pytest_install_remediation(workspace: Path) -> str:
+    """Remediation valid in EVERY deployment mode (OQ-25).
+
+    Points at a workspace ``.venv`` rather than "pip install pytest",
+    because the latter is a dead end under the `foundations.md` §7
+    standalone binary: there ``sys.executable`` is the sealed PyApp
+    CPython and cannot be installed into. A workspace ``.venv`` is
+    picked up by `_resolve_pytest_interpreter`'s venv-first rule in every
+    mode, so it also fixes the pip-venv / pipx / uv installs (whose own
+    interpreter remains an equally valid place to install the two
+    distributions).
+    """
+
+    if sys.platform == "win32":
+        commands = (
+            "py -m venv .venv && "
+            r".venv\Scripts\python -m pip install "
+            "pytest pytest-json-report pytest-cov"
+        )
+    else:
+        commands = (
+            "python3 -m venv .venv && "
+            ".venv/bin/python -m pip install pytest pytest-json-report pytest-cov"
+        )
+    return (
+        f"install pytest, pytest-json-report and pytest-cov into "
+        f"{workspace / '.venv'} (novetest prefers the workspace's own .venv "
+        f"over its interpreter; pytest-cov is what the coverage-collecting "
+        f"verbs such as `novetest test` additionally need) — from "
+        f"{workspace} run: {commands}"
+    )
+
+
+async def _probe_pytest_jsonreport(workspace: Path, interpreter: str) -> bool:
     # RUN-26 guard: degrade an exec failure (interpreter vanished /
     # became non-executable between resolution and spawn) to the probe's
     # "not available" return instead of crashing the readiness pass —
     # same posture as ``_probe_dotnet_sdk_version``.
     try:
         result = await run_subprocess(
-            [sys.executable, "-c", "import pytest; print(pytest.__version__)"],
-            cwd=workspace,
-            timeout=15.0,
-        )
-    except (OSError, FileNotFoundError):
-        return None
-    if result.returncode != 0:
-        return None
-    version = result.stdout.decode("utf-8", errors="replace").strip()
-    return version or None
-
-
-async def _probe_pytest_jsonreport(workspace: Path) -> bool:
-    # RUN-26 guard — see ``_probe_pytest_version``.
-    try:
-        result = await run_subprocess(
-            [sys.executable, "-c", "import pytest_jsonreport"],
+            [interpreter, "-c", "import pytest_jsonreport"],
             cwd=workspace,
             timeout=15.0,
         )
