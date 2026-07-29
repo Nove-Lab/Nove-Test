@@ -21,6 +21,7 @@ from __future__ import annotations
 import sys
 
 from cyclopts import App
+from cyclopts.exceptions import CycloptsError
 
 from novetest import __version__
 
@@ -74,9 +75,15 @@ from novetest.cli.output import (
     EXIT_OK,
     Envelope,
     EnvelopeError,
+    OutputMode,
     apply_no_color,
     emit_envelope,
     resolve_output_mode,
+)
+from novetest.cli.usage import (
+    classify_builtin_surface,
+    help_envelope,
+    usage_error_envelope,
 )
 
 # --- Engine outcome projectors (re-exported: test_projection asserts identity) -
@@ -182,6 +189,38 @@ def main(argv: list[str] | None = None) -> None:
     # transformation; the alias hook itself is testable in isolation
     # (see ``tests/unit/cli/test_default_verb_alias.py``).
     args = _inject_default_verb_alias(args)
+
+    # Structured modes: keep the ``novetest/v1`` promise on the usage and
+    # help surfaces too. Cyclopts otherwise answers both with Rich human
+    # text no matter the output mode, which breaks an agent's JSON pipe
+    # exactly where it hurts most — the error path (delivery-phasing row
+    # 30 / wave-1 persona P2). Resolving the parse here does NOT dispatch:
+    # the command still runs through the untouched ``app(args)`` call
+    # below, so execution behaviour and exit codes are byte-identical.
+    if mode in (OutputMode.JSON, OutputMode.NDJSON):
+        builtin: str | None
+        try:
+            resolved, _bound, _ignored = app.parse_args(
+                args, print_error=False, exit_on_error=False
+            )
+        except CycloptsError as exc:
+            # Cyclopts exits 1 on these today; only the body changes.
+            emit_envelope(usage_error_envelope(app, args, exc), mode)
+            sys.exit(EXIT_GENERIC)
+        except Exception:
+            # NOT a usage error. Fall through to the normal dispatch so
+            # the pre-parse can never change the outcome: ``app(args)``
+            # re-raises it and the generic handler below emits the same
+            # ``cli-error`` envelope it always did.
+            builtin = None
+        else:
+            builtin = classify_builtin_surface(resolved)
+        if builtin == "help":
+            emit_envelope(help_envelope(app, args), mode)
+            sys.exit(EXIT_OK)
+        if builtin == "version":
+            _emit_version(mode)
+            sys.exit(EXIT_OK)
 
     try:
         app(args)

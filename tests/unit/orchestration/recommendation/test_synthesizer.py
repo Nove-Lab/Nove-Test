@@ -183,6 +183,142 @@ class TestSynthesizerEndToEnd:
         assert priorities == sorted(priorities), priorities
 
 
+def _entry(*, rank: int, file: str, score: float, symbol: str) -> LocalizationEntry:
+    """One localization entry at an explicit (rank, file, score)."""
+    loc = CodeLocation(
+        kind="symbol", file=file, symbol=symbol,
+        line_range=(10, 20), primary_line=12, evidence_lines=(12,),
+    )
+    ec = EvidenceCitation(
+        kind="test_result",
+        run_reference=RunReference(run_id="01TARGETRUN0000000000000A", created_at=1100),
+        selector={"test_id": "tests/test_totals.py::test_invoice", "outcome": "failed"},
+    )
+    return LocalizationEntry(
+        rank=rank, tied_with=(), code_location=loc,
+        score_raw=score, score_normalized=score,
+        formula="ochiai",
+        alternate_scores={"op2": score, "dstar2": score, "tarantula": score},
+        related_failed_tests=("tests/test_totals.py::test_invoice",),
+        evidence_citations=(ec,),
+    )
+
+
+def _ranked_bundle(entries: tuple[LocalizationEntry, ...]) -> FactBundle:
+    """A failing-run bundle whose ONLY facts are the given localization entries.
+
+    Regression + coverage are absent, so ``investigate_location`` is the
+    only multi-hit category and the assertions isolate intra-group order.
+    """
+    target = RunReference(run_id="01TARGETRUN0000000000000A", created_at=1100)
+    record = RunRecord(
+        run_reference=target, target_expression="tests/", target_type="dir",
+        engine_name="pytest", ecosystem="python", status="failed",
+        started_at=1100, completed_at=1101,
+        summary_counts={"passed": 0, "failed": 1, "skipped": 0, "total": 1},
+        test_results=(
+            TestResult(node_id="tests/test_totals.py::test_invoice", outcome="failed"),
+        ),
+    )
+    finding = LocalizationFinding(
+        run_reference=target, engine_name="pytest", ecosystem="python",
+        mode="sbfl_per_test", confidence="high", formula="ochiai",
+        alternate_scores_available=("op2", "dstar2", "tarantula"),
+        top_n=10, entries=entries, derived_at=1102,
+    )
+    elig = StageEligibility(
+        coverage="unavailable", regression="unavailable",
+        localization="sbfl_per_test", replay="not_run",
+        per_stage_reasons={
+            "coverage": "missing-derived-facts",
+            "regression": "no-comparable-baseline",
+            "localization": None,
+            "replay": "replay_not_run",
+        },
+    )
+    return FactBundle(
+        run_reference=target, run_record=record, stage_eligibility=elig,
+        coverage_facts=None, regression_facts=None,
+        localization_findings=finding, replay_results=(),
+    )
+
+
+class TestRankOrdering:
+    """The array order must track the analysis's own confidence ordering.
+
+    Reproduces the wave-1 persona P1 shape (2026-07-28): three suspects
+    whose LEXICOGRAPHIC file order is the exact INVERSE of their rank
+    order. Under the pre-fix key — ``(priority, category, primary_slot)``,
+    where ``primary_slot`` starts with the file path — the weakest suspect
+    landed at ``recommendations[0]`` and a position-following consumer was
+    routed to it.
+    """
+
+    # ledgerly-shaped: alphabetical file order is rank 3 → 2 → 1.
+    P1_ENTRIES = (
+        _entry(rank=1, file="src/zeta.py", score=1.0, symbol="zeta_fn"),
+        _entry(rank=2, file="src/mid.py", score=0.894, symbol="invoice_total"),
+        _entry(rank=3, file="src/alpha.py", score=0.816, symbol="compute_discount"),
+    )
+
+    def test_rank_one_is_first_even_when_its_file_sorts_last(self) -> None:
+        recs = synthesize_recommendation(_ranked_bundle(self.P1_ENTRIES))
+        locations = [r for r in recs if r.category == CATEGORY_INVESTIGATE_LOCATION]
+        assert [r.slots["rank"] for r in locations] == [1, 2, 3]
+        assert [r.slots["file"] for r in locations] == [
+            "src/zeta.py", "src/mid.py", "src/alpha.py",
+        ]
+        # The headline invariant: the FIRST recommendation overall is the
+        # rank-1 suspect, not the lex-min file.
+        assert recs[0].category == CATEGORY_INVESTIGATE_LOCATION
+        assert recs[0].slots["rank"] == 1
+        assert recs[0].slots["file"] == "src/zeta.py"
+
+    def test_fixture_lex_order_really_is_the_inverse_of_rank_order(self) -> None:
+        # Guards the test itself: if a future edit makes the file names
+        # sort in rank order, the test above stops proving anything.
+        by_rank = sorted(self.P1_ENTRIES, key=lambda e: e.rank)
+        files_in_rank_order = [e.code_location.file for e in by_rank]
+        assert files_in_rank_order == sorted(files_in_rank_order, reverse=True)
+
+    def test_equal_rank_breaks_on_descending_score(self) -> None:
+        entries = (
+            _entry(rank=1, file="src/aaa.py", score=0.5, symbol="weak"),
+            _entry(rank=1, file="src/zzz.py", score=0.9, symbol="strong"),
+        )
+        recs = synthesize_recommendation(_ranked_bundle(entries))
+        locations = [r for r in recs if r.category == CATEGORY_INVESTIGATE_LOCATION]
+        assert [r.slots["score_normalized"] for r in locations] == [0.9, 0.5]
+
+    def test_equal_rank_and_score_keeps_lexicographic_primary_slot(self) -> None:
+        entries = (
+            _entry(rank=1, file="src/zzz.py", score=0.9, symbol="z"),
+            _entry(rank=1, file="src/aaa.py", score=0.9, symbol="a"),
+        )
+        recs = synthesize_recommendation(_ranked_bundle(entries))
+        locations = [r for r in recs if r.category == CATEGORY_INVESTIGATE_LOCATION]
+        assert [r.slots["file"] for r in locations] == ["src/aaa.py", "src/zzz.py"]
+
+    def test_cross_category_order_still_follows_priority(self) -> None:
+        # unavailable_analysis (priority 6) fires alongside the locations
+        # (priority 2); the rank dimension must not reorder across groups.
+        recs = synthesize_recommendation(_ranked_bundle(self.P1_ENTRIES))
+        priorities = [r.priority for r in recs]
+        assert priorities == sorted(priorities), priorities
+        assert CATEGORY_UNAVAILABLE_ANALYSIS in [r.category for r in recs]
+        # …and the rank-less category still sorts after every ranked one.
+        assert recs[-1].category == CATEGORY_UNAVAILABLE_ANALYSIS
+
+    def test_ranked_ordering_is_deterministic_across_calls(self) -> None:
+        bundle = _ranked_bundle(self.P1_ENTRIES)
+        dumps = [
+            json.dumps([r.to_dict() for r in synthesize_recommendation(bundle)],
+                       sort_keys=True)
+            for _ in range(3)
+        ]
+        assert dumps[0] == dumps[1] == dumps[2]
+
+
 class TestDeterminism:
     """Brief §1 — same FactBundle → byte-identical recommendation list."""
 
