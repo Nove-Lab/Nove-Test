@@ -26,7 +26,10 @@ Per-test pipeline (Path A, steps 5–10):
   5. build_spectra.
   6. compute ef/ep/nf/np per location, call all 4 formulas.
   7. aggregate up to symbols via Python ast resolver (max(score) per
-     symbol per design-of-record §3).
+     symbol per design-of-record §3), then drop candidates living in one
+     of this run's own test files (``candidate_filter`` — a failing
+     test's body is ``ef=1, ep=0`` by construction and outranks the
+     defect otherwise; applied to the aggregate path too).
   8. min-max normalize + dense 1-based rank within the FULL ranking
      (before truncation), then drop non-positive selected-formula
      candidates (ANA-08 — same rule as aggregate mode; survivors stay
@@ -54,6 +57,10 @@ import numpy as np
 from numpy.typing import NDArray
 
 from novetest.coverage import CoverageUnavailable, get_coverage_facts
+from novetest.localization.candidate_filter import (
+    apply_test_file_exclusion,
+    discovered_test_files,
+)
 from novetest.localization.failure_proximity import (
     derive_failure_proximity,
     parse_failure_log,
@@ -318,6 +325,20 @@ def _derive_per_test(
         scores=scores,
     )
 
+    # Drop candidates that live in one of THIS RUN's test files before any
+    # ranking work: a failing test's own body is ``ef = 1, ep = 0`` by
+    # construction and outscores the defect on every project
+    # (``candidate_filter`` module docstring carries the measured counts).
+    # Everything below — normalization, dense ranks, tie groups, top_n —
+    # therefore operates on real suspects only.
+    exclusion = apply_test_file_exclusion(
+        candidates,
+        test_files=discovered_test_files(record),
+        file_of=lambda c: c.code_location.file,
+        score_of=lambda c: c.scores[formula],
+    )
+    candidates = exclusion.candidates
+
     # Sort by the selected formula's score descending; stable tie order is
     # by (file, primary_line) ascending so two runs with the same inputs
     # produce identical ranking.
@@ -329,10 +350,12 @@ def _derive_per_test(
         )
     )
 
-    # Min-max normalize within the FULL candidate set BEFORE the filter
-    # and truncation (design-of-record §4 — "normalize the whole ranking
-    # so the truncation does not concentrate the [0,1] range to a
-    # sub-window").
+    # Min-max normalize within the FULL candidate set BEFORE the
+    # positive-score filter and truncation (design-of-record §4 —
+    # "normalize the whole ranking so the truncation does not concentrate
+    # the [0,1] range to a sub-window"). "Full" now means "post
+    # test-file exclusion": an excluded 1.0 entry must not define the top
+    # of the [0, 1] range for the real suspects below it.
     raw_scores_full = [c.scores[formula] for c in candidates]
     normalized_full = _min_max_normalize(raw_scores_full)
 
@@ -419,6 +442,11 @@ def _derive_per_test(
     # facts are absent or empty). Spec pinned in
     # ``design/interace-contract/localization.md`` §"Result shape —
     # mode-invariant".
+    #
+    # The two ``test_file_*`` keys make the exclusion auditable: a reader
+    # can tell "we filtered N test-file suspects out" from "nothing was
+    # found", and ``_reverted`` names the case where the run's only
+    # positive suspects WERE test files.
     return LocalizationFinding(
         run_reference=record.run_reference,
         engine_name=record.engine_name,
@@ -433,6 +461,8 @@ def _derive_per_test(
         metadata={
             "changed_files_count": None,
             "regression_reweighted": None,
+            "test_file_locations_excluded": exclusion.excluded_count,
+            "test_file_exclusion_reverted": exclusion.reverted,
         },
     )
 
@@ -489,10 +519,13 @@ def _derive_aggregate(
        FLUCCS-style reweighting: ``score *= (1 + 0.5)`` for files in the
        set. Applied to ALL four formulas so alternate_scores stay
        consistent with the primary formula's reweighting.
-    5. Sort candidates by the selected formula desc, tie-break by file
-       path ascending. Filter out non-positive-score candidates for the
-       selected formula (the file is unsuspicious and shouldn't pad the
-       top_n list with noise). Min-max normalize within the surviving
+    5. Drop candidates living in one of this run's own test files
+       (``candidate_filter``) — a failing test's file is named by its own
+       traceback, so it collects an ``ef`` hit from every failing test.
+       Then sort candidates by the selected formula desc, tie-break by
+       file path ascending. Filter out non-positive-score candidates for
+       the selected formula (the file is unsuspicious and shouldn't pad
+       the top_n list with noise). Min-max normalize within the surviving
        candidate set; dense-rank with ties; truncate to ``top_n``.
 
     File-level granularity is the v1 fallback per strategy doc §3 (no
@@ -628,6 +661,20 @@ def _derive_aggregate(
             )
         )
 
+    # Drop candidates that live in one of THIS RUN's test files. Aggregate
+    # mode derives ``ef`` from failure-log frames, and a pytest/jest
+    # traceback always names the failing test's own file, so the test file
+    # collects a hit from EVERY failing test and lands at rank 1 for the
+    # same structural reason as the per-test path. Applied before the sort
+    # so normalization, dense ranks and truncation all see real suspects.
+    exclusion = apply_test_file_exclusion(
+        candidates,
+        test_files=discovered_test_files(record),
+        file_of=lambda c: c[0],
+        score_of=lambda c: c[1][formula],
+    )
+    candidates = exclusion.candidates
+
     candidates.sort(key=lambda c: (-c[1][formula], c[0]))
 
     # Drop non-positive-score candidates for the SELECTED formula —
@@ -714,6 +761,8 @@ def _derive_aggregate(
     metadata: dict[str, object] = {
         "regression_reweighted": regression_reweighted,
         "changed_files_count": len(changed_files),
+        "test_file_locations_excluded": exclusion.excluded_count,
+        "test_file_exclusion_reverted": exclusion.reverted,
     }
     if parse_warnings:
         metadata["parse_warnings"] = parse_warnings

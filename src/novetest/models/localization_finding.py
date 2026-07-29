@@ -216,8 +216,11 @@ class LocalizationEntry:
     ``score_raw`` is the formula's native value for the ``formula`` field
     (NOT a fixed Ochiai-only pick — when a non-default formula is selected
     via the future CLI flag, this carries that formula's score).
-    ``score_normalized`` is min-max within the ENTIRE finding set, applied
-    before top_n truncation (design-of-record §4).
+    ``score_normalized`` is min-max within the ENTIRE candidate set,
+    applied before top_n truncation (design-of-record §4). "Entire" means
+    "after the SBFL modes' test-file exclusion" — locations belonging to
+    the run's own test files never enter the range
+    (``localization/candidate_filter.py``).
 
     ``alternate_scores`` carries the other three formulas' RAW scores for
     the SAME location. The scales are formula-native and NOT mutually
