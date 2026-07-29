@@ -52,6 +52,23 @@ env:
   # tradeoff for not embedding CPython. See foundations.md §7.
   PYAPP_EXEC_SPEC: "novetest.cli.app:main"
   PYAPP_PYTHON_VERSION: "3.11"
+  # Linux cells build the PyApp binary INSIDE this container, not on the
+  # runner. The produced Rust binary links against the glibc of whatever
+  # built it; `ubuntu-latest` is now Ubuntu 24.04 (glibc 2.39), which is why
+  # every novetest binary shipped before v0.2.2 refused to start on Debian
+  # 11/12, Ubuntu 20.04/22.04, RHEL 8/9, Amazon Linux, and the Debian-12 base
+  # of the official `node:*` images. Debian 11 "bullseye" (glibc 2.31) is the
+  # build baseline; the image ships a working Rust toolchain so no rustup
+  # bootstrap is needed. The `1-bullseye` tag floats on Rust patch releases
+  # but its Debian base — and therefore the glibc floor — is fixed forever.
+  LINUX_BUILD_IMAGE: "rust:1-bullseye"
+  # Hard ceiling on the highest `GLIBC_x.y` version symbol a Linux binary may
+  # require, asserted from the artifact itself right after the wrap step. A
+  # bullseye build currently lands at 2.30; 2.31 leaves one notch of headroom
+  # while still covering every distro in the v0.2.2 support claim. Raising
+  # this number is a DELIBERATE narrowing of the supported-host set — it drops
+  # distros — so it may only move with a release-notes update saying so.
+  LINUX_GLIBC_FLOOR_MAX: "2.31"
 
 jobs:
   build:
@@ -61,6 +78,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both Linux cells wrap the wheel inside $LINUX_BUILD_IMAGE (see the
+          # `env:` block) rather than on the runner, so the runner's own glibc
+          # no longer sets the binary's floor. The runner choice below is now
+          # only about CPU architecture: `rust:1-bullseye` is a multi-arch
+          # image, so each cell pulls its native variant and cross-compilation
+          # is never involved.
           - target: linux-x86_64
             runner: ubuntu-latest
             shell: bash
@@ -110,6 +133,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
+      # Used by the macOS and Windows cells only. The two Linux cells build
+      # inside $LINUX_BUILD_IMAGE, which carries its own toolchain; installing
+      # the host toolchain there is a few cached seconds and keeps this step
+      # matrix-uniform, so it is deliberately not conditioned away.
       - name: Install Rust toolchain (host)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -185,30 +212,96 @@ jobs:
           cd pyapp-src
           mkdir -p ../out
           out_path="../out/novetest-${{ matrix.target }}${{ matrix.binary_suffix }}"
-          if [ "${{ matrix.target }}" = "macos-universal2" ]; then
-            # PyApp v0.22.0 does not natively ship a universal2 distribution
-            # (python-build-standalone publishes per-arch tarballs only). We
-            # build two single-arch PyApp wraps via cargo cross-target and
-            # fuse them with `lipo -create`. Each Mach-O slice embeds its
-            # arch's python-build-standalone download URL at compile time;
-            # at runtime macOS picks the host-matching slice, which then
-            # downloads the right CPython on first invocation.
-            cargo build --release --target aarch64-apple-darwin
-            cargo build --release --target x86_64-apple-darwin
-            lipo -create \
-              target/aarch64-apple-darwin/release/pyapp \
-              target/x86_64-apple-darwin/release/pyapp \
-              -output "$out_path"
-            # Sanity check: must print "x86_64 arm64" (order may vary).
-            lipo -archs "$out_path"
-          else
-            # Linux + Windows: single-target host build. On Windows cargo
-            # emits `target/release/pyapp.exe`; matrix.binary_suffix carries
-            # the ".exe" so both source and destination paths agree.
-            cargo build --release
-            cp "target/release/pyapp${{ matrix.binary_suffix }}" "$out_path"
-          fi
+          case "${{ matrix.target }}" in
+            macos-universal2)
+              # PyApp v0.22.0 does not natively ship a universal2 distribution
+              # (python-build-standalone publishes per-arch tarballs only). We
+              # build two single-arch PyApp wraps via cargo cross-target and
+              # fuse them with `lipo -create`. Each Mach-O slice embeds its
+              # arch's python-build-standalone download URL at compile time;
+              # at runtime macOS picks the host-matching slice, which then
+              # downloads the right CPython on first invocation.
+              cargo build --release --target aarch64-apple-darwin
+              cargo build --release --target x86_64-apple-darwin
+              lipo -create \
+                target/aarch64-apple-darwin/release/pyapp \
+                target/x86_64-apple-darwin/release/pyapp \
+                -output "$out_path"
+              # Sanity check: must print "x86_64 arm64" (order may vary).
+              lipo -archs "$out_path"
+              ;;
+            linux-*)
+              # Native build for the runner's architecture, but inside Debian
+              # 11 so the binary's glibc floor is the CONTAINER's (2.31), not
+              # the runner's. Only the cargo invocation is containerized —
+              # the wheel build, the sha256 sidecar, the smoke step and every
+              # downstream job are untouched.
+              #   -u <uid>:<gid>   target/ and the copied artifact stay owned
+              #                    by `runner`, so the later steps need no
+              #                    sudo. The official rust image marks
+              #                    CARGO_HOME/RUSTUP_HOME world-writable, so a
+              #                    non-root uid builds fine.
+              #   /wheel  read-only mount of dist/; PYAPP_PROJECT_PATH must be
+              #           an absolute path to a single wheel file INSIDE the
+              #           container, so it is re-expressed against /wheel.
+              docker run --rm \
+                -u "$(id -u):$(id -g)" \
+                -v "$PWD":/src \
+                -v "$(dirname "$wheel")":/wheel:ro \
+                -w /src \
+                -e PYAPP_PROJECT_NAME=novetest \
+                -e PYAPP_PROJECT_PATH="/wheel/$(basename "$wheel")" \
+                -e PYAPP_EXEC_SPEC="$PYAPP_EXEC_SPEC" \
+                -e PYAPP_PYTHON_VERSION="$PYAPP_PYTHON_VERSION" \
+                "$LINUX_BUILD_IMAGE" \
+                cargo build --release
+              cp target/release/pyapp "$out_path"
+              ;;
+            *)
+              # Windows: single-target host build. Cargo emits
+              # `target/release/pyapp.exe`; matrix.binary_suffix carries the
+              # ".exe" so both source and destination paths agree.
+              cargo build --release
+              cp "target/release/pyapp${{ matrix.binary_suffix }}" "$out_path"
+              ;;
+          esac
           ls -la ../out
+
+      # Guard A of the glibc floor (see $LINUX_GLIBC_FLOOR_MAX). Reads the
+      # required `GLIBC_x.y` version symbols out of the artifact we just built
+      # and refuses anything above the pinned ceiling. This is the cheap,
+      # deterministic half — it needs no distro container and it fires the
+      # moment a runner-image bump, a base-image bump or a new dependency
+      # pulls in a newer symbol. `binary-runs-on-old-glibc` is the other half:
+      # it proves the WHOLE chain (this binary + the CPython PyApp downloads
+      # at first run) actually starts on an old-glibc host.
+      #
+      # `objdump` comes from the build container rather than the runner so the
+      # guard does not depend on runner-image tooling; the text processing
+      # then happens on the host, where quoting stays readable.
+      - name: Assert Linux glibc floor (max GLIBC symbol ≤ ${{ env.LINUX_GLIBC_FLOOR_MAX }})
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          set -eu
+          bin="out/novetest-${{ matrix.target }}"
+          docker run --rm -v "$PWD/out":/out:ro "$LINUX_BUILD_IMAGE" \
+            objdump -T "/out/novetest-${{ matrix.target }}" > /tmp/dynsyms.txt
+          observed="$(grep -o 'GLIBC_[0-9][0-9.]*' /tmp/dynsyms.txt \
+            | sed 's/^GLIBC_//' | sort -u -V | tail -n1)"
+          if [ -z "$observed" ]; then
+            echo "::error title=glibc-floor-unmeasurable::found no GLIBC_ version symbols in $bin — the binary is not a dynamically glibc-linked ELF, or objdump output changed shape. Refusing to ship an unmeasured floor."
+            exit 1
+          fi
+          echo "All GLIBC version symbols required by $bin:"
+          grep -o 'GLIBC_[0-9][0-9.]*' /tmp/dynsyms.txt | sed 's/^GLIBC_//' | sort -u -V
+          # Version-sort the pair; if the ceiling is not the larger of the two,
+          # the observed floor exceeds it.
+          highest="$(printf '%s\n%s\n' "$observed" "$LINUX_GLIBC_FLOOR_MAX" | sort -V | tail -n1)"
+          if [ "$highest" != "$LINUX_GLIBC_FLOOR_MAX" ]; then
+            echo "::error title=glibc-floor-raised::$bin requires GLIBC_${observed}, above the allowed ceiling GLIBC_${LINUX_GLIBC_FLOOR_MAX}. Hosts with an older glibc cannot start it AT ALL (the dynamic loader fails before any Python startup) — this is the v0.2.2 regression class. Check what changed the build baseline (LINUX_BUILD_IMAGE, a runner image bump, a new native dependency)."
+            exit 1
+          fi
+          echo "::notice title=glibc-floor::${{ matrix.target }} requires at most GLIBC_${observed} (ceiling GLIBC_${LINUX_GLIBC_FLOOR_MAX})"
 
       - name: Compute SHA-256 sidecar
         run: |
@@ -691,11 +784,101 @@ jobs:
           print("OK: venv-less workspace exits 4 and names the .venv remediation")
           PY
 
+  # Guard B of the glibc floor — the acceptance test for the v0.2.2 fix.
+  #
+  # Every novetest Linux binary shipped before v0.2.2 (v0.1.2 … v0.2.1)
+  # required GLIBC_2.39 and died at the dynamic loader in ~5 ms on any older
+  # host — no Python startup, no envelope, just:
+  #
+  #   novetest.real: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39'
+  #     not found (required by .../novetest.real)
+  #
+  # That excluded Debian 11/12, Ubuntu 20.04/22.04 LTS, RHEL/Rocky/Alma 8-9,
+  # Amazon Linux 2/2023 and the Debian 12 base of the official `node:*`
+  # images. Nothing in this workflow could see it: every job ran the binary on
+  # the same modern runner that built it.
+  #
+  # This job breaks that symmetry — it executes the REAL artifact inside old
+  # distro containers with a fresh $HOME, so PyApp's first-run
+  # python-build-standalone download happens there too. That matters: the
+  # downloaded CPython is itself glibc-linked, so a build-baseline fix that
+  # left the runtime unable to start would fix nothing, and only running the
+  # whole chain can tell. Guard A (symbol ceiling, in `build`) is the cheap
+  # deterministic half; this is the empirical half. Both are required, and
+  # both gate the release job.
+  binary-runs-on-old-glibc:
+    name: binary starts on old glibc (linux-x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      BIN: novetest-linux-x86_64
+    steps:
+      - name: Download built binary
+        uses: actions/download-artifact@v8
+        with:
+          name: novetest-linux-x86_64
+          path: bin
+
+      - name: Make binary executable
+        run: chmod +x "bin/$BIN"
+
+      # debian:12 "bookworm" (glibc 2.36) is the persona-blocking host and the
+      # base of the official Node images; ubuntu:22.04 (glibc 2.35) is the
+      # most-deployed LTS. Both must produce an `ok: true` novetest/v1
+      # envelope from the same artifact the release feed will carry.
+      - name: Run the artifact under debian:12 and ubuntu:22.04
+        run: |
+          set -eu
+          for image in debian:12 ubuntu:22.04; do
+            echo "===== $image ====="
+            # A fresh HOME per image forces PyApp's cold CPython download
+            # INSIDE the container, so the downloaded runtime's own glibc
+            # requirements are exercised too. /opt/nt (never /bin) keeps the
+            # mount clear of the container's own binaries.
+            set +e
+            docker run --rm \
+              -v "$PWD/bin":/opt/nt:ro \
+              -e "HOME=/tmp/nt-home" \
+              "$image" \
+              sh -c "ldd --version | head -n1 >&2; mkdir -p /tmp/nt-home; exec /opt/nt/$BIN --version --output json" \
+              > "/tmp/oldglibc-out.json"
+            rc=$?
+            set -e
+            echo "--- envelope ---"
+            cat "/tmp/oldglibc-out.json" || true
+            echo
+            if [ "$rc" -ne 0 ]; then
+              echo "::error title=binary-will-not-start-on-old-glibc::the built linux-x86_64 binary exited $rc (expected 0) under $image. If the log above shows \`version \`GLIBC_x.y' not found\`, the build baseline regressed — see LINUX_BUILD_IMAGE. Exit 1 here is NOT a novetest error envelope; the process never reached Python."
+              exit 1
+            fi
+            python3 - "/tmp/oldglibc-out.json" "$image" <<'PY'
+          import json
+          import sys
+
+          path, image = sys.argv[1], sys.argv[2]
+          try:
+              env = json.load(open(path))
+          except Exception as exc:  # noqa: BLE001 - any parse failure is fatal here
+              print(f"::error title=non-json-stdout::{image}: stdout is not JSON ({exc})")
+              sys.exit(1)
+          bad = []
+          if env.get("ok") is not True:
+              bad.append(f"ok={env.get('ok')!r} (expected True)")
+          schema = env.get("schema")
+          if not isinstance(schema, str) or not schema.startswith("novetest/v1"):
+              bad.append(f"schema={schema!r} (expected a 'novetest/v1' value)")
+          if bad:
+              print(f"::error title=old-glibc-envelope-invalid::{image}: " + "; ".join(bad))
+              sys.exit(1)
+          print(f"OK: {image} -> ok=true, schema={schema}, version={env.get('data', {}).get('installedVersion')}")
+          PY
+          done
+
   # Draft GitHub Release on tag push. Skipped on workflow_dispatch so manual
   # runs do not pollute the release feed.
   release:
     name: draft GitHub Release
-    needs: [build, install-script-e2e, install-ps1-e2e, first-run-latency-bench, binary-runs-pytest-sut]
+    needs: [build, install-script-e2e, install-ps1-e2e, first-run-latency-bench, binary-runs-pytest-sut, binary-runs-on-old-glibc]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

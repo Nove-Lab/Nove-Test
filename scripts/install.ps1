@@ -1,8 +1,8 @@
 # install.ps1 — Windows companion to scripts/install.sh.
 #
-# Canonical user invocation (per decisions/2026-05-14-install-script-hosting-url.md):
+# Canonical user invocation:
 #   irm https://ailovestesting.com/products/novetest/install.ps1 | iex
-# Interim per Amendment 2026-06-10 (until DNS routing is wired):
+# Equivalent, fetched straight from the repository:
 #   irm https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.ps1 | iex
 #
 # This script is PowerShell 5.1 compatible — verified against Windows 10/11's
@@ -61,9 +61,9 @@ function Get-Target {
         return "windows-x86_64"
     }
     if ($arch -eq "ARM64" -or $arch6 -eq "ARM64") {
-        throw "unsupported Windows architecture: windows-arm64 (python-build-standalone gap; see foundations.md §54). This cycle ships windows-x86_64 only."
+        throw "unsupported Windows architecture: windows-arm64 (no upstream standalone-CPython build for it yet; novetest ships windows-x86_64 only)."
     }
-    throw "unsupported Windows architecture: $arch (this cycle ships windows-x86_64 only)"
+    throw "unsupported Windows architecture: $arch (novetest ships windows-x86_64 only)"
 }
 
 # --- compose download URLs ---------------------------------------------------
@@ -196,7 +196,8 @@ function Invoke-Install {
         $actual = Get-Sha256Hex -Path $binaryPath
 
         if ($expected -ne $actual) {
-            # LOUD abort per Phase 0 DoD bullet #4 / install.sh §"sha256 mismatch".
+            # Loud abort — the download does not match the published checksum
+            # (mirrors install.sh's SHA-256 mismatch path).
             # Write the banner to stderr (Write-Host bypasses it, so use the
             # error stream via Write-Error) so a redirected stdout pipe (e.g.
             # `irm | iex 2>install.log`) still surfaces the abort visibly.

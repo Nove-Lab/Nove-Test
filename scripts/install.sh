@@ -1,11 +1,13 @@
 #!/bin/sh
-# install.sh — closes Phase 0 DoD bullets #3 (curl-pipe-sh end-to-end) and #4
-# (SHA-256 verification + tampered-binary integration test).
+# install.sh — install the novetest standalone binary on Linux or macOS.
 #
-# Canonical user invocation (per decisions/2026-05-14-install-script-hosting-url.md):
+# Downloads the release asset for the detected platform, verifies it against
+# its published SHA-256 sidecar, and installs it into ~/.local/bin.
+#
+# Canonical user invocation:
 #   curl -fsSL https://ailovestesting.com/products/novetest/install.sh | sh
 #
-# Windows companion (added 2026-06-18, closes Open Q #16):
+# Windows companion:
 #   scripts/install.ps1 (PowerShell 5.1+);
 #   irm https://ailovestesting.com/products/novetest/install.ps1 | iex
 #
@@ -60,7 +62,7 @@ detect_target() {
   case "$_os" in
     Linux)  _os_id="linux" ;;
     Darwin) _os_id="macos" ;;
-    *) die "unsupported OS: ${_os} (Phase 0 supports linux, macos; Windows is post-MVP via install.ps1)" ;;
+    *) die "unsupported OS: ${_os} (this installer supports linux and macos; on Windows use install.ps1)" ;;
   esac
 
   # macOS ships a single universal2 fat binary that runs on both Apple
@@ -74,7 +76,7 @@ detect_target() {
     case "$_arch" in
       x86_64|amd64)   _arch_id="x86_64" ;;
       aarch64|arm64)  _arch_id="aarch64" ;;
-      *) die "unsupported arch: ${_arch} (Phase 0 Linux supports x86_64, aarch64/arm64; macOS ships universal2)" ;;
+      *) die "unsupported arch: ${_arch} (linux ships x86_64 and aarch64/arm64; macOS ships universal2)" ;;
     esac
   fi
 
@@ -191,7 +193,8 @@ main() {
   actual="$(sha256_compute "${tmpdir}/${asset}")"
 
   if [ "${expected}" != "${actual}" ]; then
-    # LOUD abort per Phase 0 DoD bullet #4. Do NOT install.
+    # Loud abort — the download does not match the published checksum.
+    # Do NOT install.
     err ""
     err "================================================================="
     err "  SHA-256 MISMATCH — refusing to install ${asset}."
