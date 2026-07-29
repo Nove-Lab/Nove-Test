@@ -14,11 +14,11 @@
 #   - workflow_dispatch (manual; produces unpublished artifacts only)
 #   - push of a tag matching v* (produces a draft GitHub Release)
 #
-# Targets (Tier 1 per foundations.md §7):
+# Tier 1 targets:
 #   linux-x86_64, linux-aarch64, macos-universal2 (lipo-fused x86_64+arm64),
 #   windows-x86_64.
-# Windows joined Tier 1 on 2026-06-18 (closes delivery-phasing.md Open Q #16);
-# windows-arm64 remains unsupported pending python-build-standalone (§54).
+# Windows joined Tier 1 on 2026-06-18; windows-arm64 remains unsupported
+# pending a python-build-standalone distribution for it.
 #
 # All four build cells run under bash — on `windows-latest` that resolves to
 # Git Bash (`C:\Program Files\Git\bin\bash.exe`), which ships real `curl`,
@@ -49,7 +49,7 @@ env:
   # on every supported target.
   PYAPP_VERSION_DEFAULT: "0.22.0"
   # PyApp wraps the bundled wheel; first-run latency (5–15s) is the documented
-  # tradeoff for not embedding CPython. See foundations.md §7.
+  # tradeoff for not embedding CPython.
   PYAPP_EXEC_SPEC: "novetest.cli.app:main"
   PYAPP_PYTHON_VERSION: "3.11"
   # Linux cells build the PyApp binary INSIDE this container, not on the
@@ -97,13 +97,11 @@ jobs:
           # queues) and lipo-fuse two per-arch PyApp wraps. The macos-13
           # runner is intentionally NOT in this matrix — that pool is
           # saturated for hours at a time and GitHub is deprecating it.
-          # See agent-comms/history/2026-05-16-phase0-closure-partial.md
-          # for the prior cycle's macos-13 queue diagnosis.
           - target: macos-universal2
             runner: macos-latest
             shell: bash
             binary_suffix: ""
-          # Windows x86_64 — added 2026-06-18 closing Open Q #16.
+          # Windows x86_64 — added 2026-06-18.
           # `shell: bash` resolves to Git Bash on windows-latest, giving us
           # the same POSIX tooling (curl, tar, sha256sum, cp) as the
           # Linux/macOS cells. Cargo build emits `target/release/pyapp.exe`
@@ -397,8 +395,8 @@ jobs:
   # Windows surface — downloads the just-built windows-x86_64 artifact, serves
   # it on localhost, runs install.ps1 (clean + idempotent re-install), asserts
   # `novetest --version` works via the .exe in NOVETEST_INSTALL_PREFIX. This
-  # is the load-bearing PowerShell-native evidence for foundations.md §7's
-  # Tier-1 Windows claim.
+  # is the load-bearing PowerShell-native evidence for the Tier-1 Windows
+  # support claim.
   install-ps1-e2e:
     name: install.ps1 end-to-end (windows-x86_64)
     needs: build
@@ -471,9 +469,9 @@ jobs:
           }
 
   # First-run latency bench. PyApp downloads python-build-standalone
-  # CPython on the binary's FIRST invocation; foundations.md §559
-  # documents this as a "5-15 s" budget acceptable for an install-once
-  # CLI. This job pins the budget empirically — every release-test.yml
+  # CPython on the binary's FIRST invocation; that cost is documented
+  # as a "5-15 s" budget, acceptable for an install-once CLI. This
+  # job pins the budget empirically — every release-test.yml
   # run captures (a) cold first-run wall-clock with a freshly purged
   # PyApp cache, (b) warm second-run wall-clock with the cache primed,
   # (c) the delta. The cold value must stay ≤ 25 s (15 s upper-budget
@@ -538,7 +536,7 @@ jobs:
           echo "wall=$wall" >> "$GITHUB_OUTPUT"
           echo "Warm second-run wall-clock: ${wall}s"
 
-      - name: Report + assert against foundations.md §559 budget
+      - name: Report + assert against the first-run latency budget
         env:
           COLD: ${{ steps.cold.outputs.wall }}
           WARM: ${{ steps.warm.outputs.wall }}
@@ -546,14 +544,13 @@ jobs:
           set -eu
           delta=$(awk "BEGIN {printf \"%.3f\", $COLD - $WARM}")
           # ::notice:: shows up in the GHA run summary panel, surfacing
-          # the metric for PM to harvest into foundations.md §559 at
-          # cycle-close without needing to dig into raw logs.
+          # the metric at a glance without digging into raw logs.
           echo "::notice title=first-run-latency::cold=${COLD}s warm=${WARM}s delta=${delta}s threshold=25.0s"
-          echo "Cold first-run wall (foundations.md §559 documented: 5-15 s): ${COLD}s"
+          echo "Cold first-run wall (documented budget: 5-15 s): ${COLD}s"
           echo "Warm second-run wall: ${WARM}s"
           echo "Delta (cold - warm, ≈ CPython download cost): ${delta}s"
           if ! awk "BEGIN {exit !($COLD <= 25.0)}"; then
-            echo "::error title=first-run-latency-regression::Cold first-run wall ${COLD}s exceeded 25 s budget (foundations.md §559 documents 5-15 s; 25 s = upper + GHA network variance margin)"
+            echo "::error title=first-run-latency-regression::Cold first-run wall ${COLD}s exceeded 25 s budget (documented budget is 5-15 s; 25 s = upper + GHA network variance margin)"
             exit 1
           fi
 
@@ -822,14 +819,19 @@ jobs:
       - name: Make binary executable
         run: chmod +x "bin/$BIN"
 
-      # debian:12 "bookworm" (glibc 2.36) is the persona-blocking host and the
-      # base of the official Node images; ubuntu:22.04 (glibc 2.35) is the
-      # most-deployed LTS. Both must produce an `ok: true` novetest/v1
-      # envelope from the same artifact the release feed will carry.
-      - name: Run the artifact under debian:12 and ubuntu:22.04
+      # debian:11 "bullseye" (glibc 2.31) is the PUBLISHED FLOOR itself — the
+      # only image here that runs the artifact at the number the release notes
+      # promise, so a dependency wheel that quietly needs a newer symbol than
+      # the wrapper does (Guard A measures the wrapper only) fails here instead
+      # of on a user's host. debian:12 "bookworm" (glibc 2.36) is the
+      # persona-blocking host and the base of the official Node images;
+      # ubuntu:22.04 (glibc 2.35) is the most-deployed LTS. All three must
+      # produce an `ok: true` novetest/v1 envelope from the same artifact the
+      # release feed will carry.
+      - name: Run the artifact under debian:11, debian:12 and ubuntu:22.04
         run: |
           set -eu
-          for image in debian:12 ubuntu:22.04; do
+          for image in debian:11 debian:12 ubuntu:22.04; do
             echo "===== $image ====="
             # A fresh HOME per image forces PyApp's cold CPython download
             # INSIDE the container, so the downloaded runtime's own glibc
@@ -867,10 +869,13 @@ jobs:
           schema = env.get("schema")
           if not isinstance(schema, str) or not schema.startswith("novetest/v1"):
               bad.append(f"schema={schema!r} (expected a 'novetest/v1' value)")
+          version = env.get("data", {}).get("installedVersion")
+          if not isinstance(version, str) or not version:
+              bad.append(f"data.installedVersion={version!r} (expected a non-empty version string)")
           if bad:
               print(f"::error title=old-glibc-envelope-invalid::{image}: " + "; ".join(bad))
               sys.exit(1)
-          print(f"OK: {image} -> ok=true, schema={schema}, version={env.get('data', {}).get('installedVersion')}")
+          print(f"OK: {image} -> ok=true, schema={schema}, version={version}")
           PY
           done
 
