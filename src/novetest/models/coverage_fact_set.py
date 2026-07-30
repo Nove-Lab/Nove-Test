@@ -123,9 +123,10 @@ class CoverageSummary:
 class FileCoverage:
     """Coverage payload for a single source file.
 
-    ``file_path`` is the path as reported by the native engine (already
-    project-relative when coverage.py is configured with
-    ``relative_files = True`` — see Run Team's adapter slice). Branches are
+    ``file_path`` is workspace-relative AND POSIX-separated (``/``) on
+    every platform — every parser normalizes the native engine's report
+    to that form, so the value is a stable join key across envelopes and
+    across hosts. Branches are
     pairs of ``(from_line, to_line)``: coverage.py emits them in this shape
     in ``executed_branches`` / ``missing_branches``.
 

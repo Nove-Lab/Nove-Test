@@ -14,6 +14,57 @@ def _ref() -> RunReference:
     return RunReference(run_id="01PARSE", created_at=1_700_000_000_000)
 
 
+def _windows_flavored(payload: dict[str, Any]) -> dict[str, Any]:
+    """Same payload with its ``files`` keys in Windows separators.
+
+    coverage.py's ``[run] relative_files = True`` makes the keys relative
+    but renders them with NATIVE separators, so a Windows runner produces
+    exactly this shape. Simulating it here is what lets a Linux host prove
+    the platform-stability of ``file_path``.
+    """
+    clone = dict(payload)
+    clone["files"] = {
+        path.replace("/", "\\"): entry for path, entry in payload["files"].items()
+    }
+    return clone
+
+
+def _zero_summary(**overrides: Any) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "covered_lines": 1,
+        "num_statements": 1,
+        "percent_covered": 100.0,
+        "missing_lines": 0,
+        "excluded_lines": 0,
+        "num_branches": 0,
+        "covered_branches": 0,
+        "missing_branches": 0,
+    }
+    summary.update(overrides)
+    return summary
+
+
+def _payload_with_file_keys(*file_keys: str) -> dict[str, Any]:
+    """Minimal but valid coverage.py payload keyed by the given paths."""
+    return {
+        "meta": {"version": "7.6.0", "show_contexts": False},
+        "files": {
+            key: {
+                "executed_lines": [1],
+                "missing_lines": [],
+                "excluded_lines": [],
+                "executed_branches": [],
+                "missing_branches": [],
+                "summary": _zero_summary(),
+            }
+            for key in file_keys
+        },
+        "totals": _zero_summary(
+            covered_lines=len(file_keys), num_statements=len(file_keys)
+        ),
+    }
+
+
 def test_parses_top_level_summary(sample_coverage_payload: dict[str, Any]) -> None:
     fact_set = parse_coverage_json(
         sample_coverage_payload,
@@ -301,3 +352,118 @@ def test_no_meta_block_treated_as_aggregate() -> None:
     )
     assert fact_set.mapping_granularity == "aggregate"
     assert fact_set.metadata["show_contexts"] is False
+
+
+# --- POSIX separator normalization (2026-07-30 Windows CI P0) ----------------
+#
+# coverage.py renders its ``files`` keys with NATIVE separators even under
+# ``relative_files = True``, so a Windows runner used to yield
+# ``shared_defect\totals.py`` in the persisted ``file_path`` while every
+# other producer of the same value (Localization's failure_proximity, the
+# Run Record's node ids) emitted POSIX. The Windows cells are unreachable
+# from this host, so these tests simulate the payload instead.
+
+
+def test_windows_separator_file_keys_are_normalized_to_posix(
+    sample_coverage_payload: dict[str, Any],
+) -> None:
+    """``file_path`` is POSIX-separated whatever the host that produced it."""
+    fact_set = parse_coverage_json(
+        _windows_flavored(sample_coverage_payload),
+        run_reference=_ref(),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    paths = [f.file_path for f in fact_set.files]
+    assert paths == ["src/pkg/calc.py", "src/pkg/util.py"]
+    assert not any("\\" in p for p in paths)
+
+
+def test_windows_flavored_payload_keeps_contexts_and_arcs_intact(
+    sample_coverage_payload: dict[str, Any],
+) -> None:
+    """Only the ``files`` keys are folded — nothing else in the entry moves.
+
+    Test node ids in ``line_contexts`` are pytest's own, which are POSIX by
+    construction; folding them would corrupt parametrized ids whose params
+    legitimately contain a backslash.
+    """
+    fact_set = parse_coverage_json(
+        _windows_flavored(sample_coverage_payload),
+        run_reference=_ref(),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    calc = next(f for f in fact_set.files if f.file_path == "src/pkg/calc.py")
+    assert calc.line_contexts[2] == ("tests/test_calc.py::test_add",)
+    assert calc.line_contexts[3] == (
+        "tests/test_calc.py::test_add",
+        "tests/test_calc.py::test_sub",
+    )
+    assert calc.executed_lines == (1, 2, 3, 5, 6, 8)
+    assert calc.missing_lines == (10, 11)
+    assert calc.missing_branches == ((3, 10),)
+    assert fact_set.mapping_granularity == "per-test"
+
+
+def test_file_order_is_posix_sorted_not_native_sorted() -> None:
+    """Sorting happens AFTER the fold, so the ORDER is platform-stable too.
+
+    ``\\`` (0x5C) and ``/`` (0x2F) sort on opposite sides of the uppercase
+    range, so these two keys sort in opposite orders depending on which
+    character separates the directory — which would make byte-identical
+    inputs produce different ``coverage_facts.json`` byte streams per OS
+    (REQ-FOUND determinism).
+    """
+    payload = _payload_with_file_keys("api\\routes.py", "apiV2.py")
+    # Premise: sorting the RAW keys puts them the other way round.
+    assert sorted(payload["files"]) == ["apiV2.py", "api\\routes.py"]
+
+    fact_set = parse_coverage_json(
+        payload,
+        run_reference=_ref(),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    assert [f.file_path for f in fact_set.files] == ["api/routes.py", "apiV2.py"]
+
+
+def test_posix_and_windows_key_flavors_produce_identical_files(
+    sample_coverage_payload: dict[str, Any],
+) -> None:
+    """The property the wire contract needs: same logical input, same output.
+
+    Identical ``files`` tuples — values AND order — regardless of which
+    host's separators the native payload carries.
+    """
+    kwargs: dict[str, Any] = {
+        "run_reference": _ref(),
+        "engine_name": "pytest",
+        "ecosystem": "python",
+        "derived_at": 1_700_000_001_000,
+    }
+    from_posix = parse_coverage_json(sample_coverage_payload, **kwargs)
+    from_windows = parse_coverage_json(
+        _windows_flavored(sample_coverage_payload), **kwargs
+    )
+    assert from_windows.files == from_posix.files
+    assert from_windows.to_dict() == from_posix.to_dict()
+
+
+def test_backslash_in_a_posix_filename_is_folded_documented_tradeoff() -> None:
+    """A POSIX file whose NAME contains ``\\`` is mangled — accepted.
+
+    The fold cannot tell a separator from a legal POSIX filename
+    character. `localization/candidate_filter.normalize_path` already
+    accepts the same trade-off for the same comparison problem on the
+    other side of the seam; one consistent rule beats two subtly
+    different ones. Pinned here so the trade-off is a decision, not a
+    surprise.
+    """
+    fact_set = parse_coverage_json(
+        _payload_with_file_keys("weird\\name.py"),
+        run_reference=_ref(),
+        engine_name="pytest",
+        ecosystem="python",
+    )
+    assert [f.file_path for f in fact_set.files] == ["weird/name.py"]

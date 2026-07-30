@@ -32,6 +32,11 @@ us the aggregate counters straight from coverage.py.
 
 Branch-coverage fields are absent in non-branch coverage runs; we tolerate
 that and treat the file as having zero branches.
+
+The ``files`` keys arrive workspace-relative (the pytest adapter's
+``.coveragerc`` sets ``[run] relative_files = True``) but in the producing
+host's NATIVE separators. They are folded to POSIX before anything else
+happens to them — see :func:`_to_posix_file_path`.
 """
 
 from __future__ import annotations
@@ -96,10 +101,16 @@ def parse_coverage_json(
     granularity = _infer_mapping_granularity(engine_name, show_contexts)
 
     files: list[FileCoverage] = []
-    # Sort by path for deterministic on-disk output (REQ-FOUND: deterministic
-    # structured outputs for the same inputs).
-    for path in sorted(files_raw.keys()):
-        files.append(_parse_file_entry(path, dict(files_raw[path])))
+    # Normalize separators BEFORE sorting, then sort by the normalized path
+    # for deterministic on-disk output (REQ-FOUND: deterministic structured
+    # outputs for the same inputs). `\` (0x5C) and `/` (0x2F) sort on
+    # opposite sides of the uppercase range, so sorting the raw keys would
+    # make the file ORDER platform-dependent on top of the values.
+    normalized_keys = sorted(
+        (_to_posix_file_path(raw_path), raw_path) for raw_path in files_raw
+    )
+    for posix_path, raw_path in normalized_keys:
+        files.append(_parse_file_entry(posix_path, dict(files_raw[raw_path])))
 
     summary = _parse_summary(dict(totals_raw))
 
@@ -132,6 +143,36 @@ def _infer_mapping_granularity(engine_name: str, show_contexts: bool) -> str:
     # Other ecosystems' adapters land in Phase 2.5/3; until then we treat
     # them as aggregate so the field is always populated (mandatory).
     return "aggregate"
+
+
+def _to_posix_file_path(raw_path: str) -> str:
+    """Fold a coverage.py ``files`` key to POSIX separators.
+
+    ``[run] relative_files = True`` (set by the pytest adapter's generated
+    ``.coveragerc``) makes coverage.py's keys workspace-relative, but
+    coverage.py renders them with NATIVE separators — so a Windows runner
+    reports ``shared_defect\\totals.py`` where Linux reports
+    ``shared_defect/totals.py``. ``file_path`` is a persisted wire field
+    that AI consumers join across envelopes (Localization's
+    ``code_location.file``, the Run Record's node ids, ``compare``'s
+    file-set join), and every other producer of it is POSIX. Folding here
+    makes the coverage.py branch agree on every platform.
+
+    Why an explicit fold and not ``Path(...).as_posix()``: a backslash is a
+    legal filename character on POSIX, so ``PurePosixPath`` never treats it
+    as a separator and the call is a no-op on a Linux host — including when
+    that host parses a payload produced on Windows (canned fixtures, shared
+    Project Stores). The trade-off is the mirror image: a POSIX file whose
+    NAME genuinely contains a backslash gets mangled. That is the same
+    trade-off ``localization/candidate_filter.normalize_path`` already
+    accepts for the same comparison problem on the consuming side of the
+    seam, and one consistent rule beats two subtly different ones.
+
+    Only the ``files`` KEYS are folded. Test node ids in ``contexts`` are
+    pytest's own and POSIX by construction; folding them would corrupt
+    parametrized ids whose parameters legitimately contain a backslash.
+    """
+    return raw_path.replace("\\", "/")
 
 
 def _parse_file_entry(file_path: str, entry: dict[str, Any]) -> FileCoverage:
