@@ -465,16 +465,30 @@ Routing facts:
   `"entry_index_<i>"` handles. `score_normalized` is min-max over the
   full ranking before truncation.
 - The two SBFL modes **exclude the run's own test nodes** before ranking:
-  a failing test's own body is executed by exactly one failing test and no
-  passing test, so it outscores the defect it exposes on every project.
-  Four optional `metadata` keys make that auditable (absent in
-  `failure_proximity`, which does not filter):
-  `test_file_locations_excluded` (how many candidates matched),
+  a failing test's own body is executed by exactly one failing test and by
+  no passing test, so an unfiltered ranking can lead with the test function
+  rather than the defect it exposes. Whether the test body outscores that
+  defect or merely ties it is **not** a fixed relation — it moves with the
+  formula and with how many tests fail. Four `metadata` keys make the
+  exclusion auditable; they are present on **every** `sbfl_per_test` /
+  `sbfl_aggregate` outcome and absent in `failure_proximity`, which does
+  not filter: `test_file_locations_excluded` (how many candidates matched),
   `test_file_exclusion_reverted` (`true` → every positive suspect was a
   test node, so the unfiltered ranking came back instead of an empty one),
   `test_file_exclusion_basis` (`exact` ∣ `path_suffix` ∣ `none`), and
   `test_file_locations_suppressed` (the top removed suspects with their
   `score_raw`).
+- **Those four keys are also the stale-cache detector.** A localization
+  finding is derived once per run and then cached; the cache is dropped
+  only when an explicit `--formula` / `--top-n` **differs** from the cached
+  one, never because the binary changed. So a newer binary reading a store
+  an older one wrote hands back the older ranking with `ok: true`, no
+  warning and exit 0. Because the four keys are unconditional on an SBFL
+  outcome from v0.3.0 on, their absence names that case: **on v0.3.0+, if
+  `mode` is `sbfl_per_test` or `sbfl_aggregate` and
+  `test_file_exclusion_basis` is missing, you are reading a finding derived
+  before the upgrade — re-run the tests and read the new run.** Pre-v0.3.0
+  builds omit the four keys entirely; they never emit them as `null`.
 - `basis: "none"` means no node-id path resembles any candidate path. It
   is expected for ecosystems whose node ids carry no file path (go, cargo,
   JUnit, dotnet), where the filter is a deliberate no-op, **and** whenever
@@ -483,7 +497,11 @@ Routing facts:
   never a candidate and there is genuinely nothing to exclude; `none`
   carries no signal about path reconciliation there. Read `none` with an
   `_excluded: 0` as the signal that the two path bases could not be
-  reconciled only when the run's Coverage Facts do contain the test files.
+  reconciled only when the run's Coverage Facts do contain the test files —
+  that per-file list is readable only in
+  `.novetest/coverage/facts/run_<id>/coverage_facts.json`; the
+  `coverage show` envelope carries `mapping_granularity` + `summary` and no
+  file list, and has no flag that adds one.
 - **A suppressed test symbol usually outscores `entries[0]` — that is the
   normal case, not a signal.** A failing test's own body is `ef = 1,
   ep = 0`, the maximum-scoring shape by construction, so the top
@@ -491,7 +509,8 @@ Routing facts:
   rank 1 is exactly right. The list is there for visibility — nothing the
   filter removes disappears silently, so a defect that really lives in a
   failing test stays recoverable rather than erased. Read it **alongside
-  `entries[0]`, never instead of it**: `entries[0]` remains the primary
+  the ranking, never instead of it**: `entries[0]` — **and every entry
+  sharing its `rank`**, which `tied_with` names — remains the primary
   answer. It changes the conclusion in one shape only — a failing test
   whose own assertion is wrong (it expects the wrong value while the code
   it calls is correct), where the suppressed entry names the line to fix.

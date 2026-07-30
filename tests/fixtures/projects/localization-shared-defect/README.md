@@ -28,10 +28,13 @@ With per-test coverage over 7 tests (2 failing, 5 passing):
 | `shared_defect/tax.py::compute_tax` | 2 | 4 | 0 | 1 | 0.5774 |
 | `shared_defect/discounts.py::compute_discount` | 2 | 4 | 0 | 1 | 0.5774 |
 
-`ep = 0` beats `ef = 2` under Ochiai: a failing test's body is executed by
-exactly one failing test and by no passing test, by construction, on every
-project. Excluding locations whose file owns a discovered test node puts
-`invoice_total` at rank 1.
+`ep = 0` beats `ef = 2` **under Ochiai, at these counts**: a failing test's
+body is executed by exactly one failing test and by no passing test on every
+project, by construction — but how that compares with the defect's score is
+not fixed. On this same fixture `op2` and `dstar2` put `invoice_total`
+*above* the test bodies (1.5 vs 1.0 and 1.3333 vs 1.0). Excluding the
+candidates that **are** discovered test nodes (matched by file *and* symbol)
+puts `invoice_total` at rank 1.
 
 ## The deliberate gap
 

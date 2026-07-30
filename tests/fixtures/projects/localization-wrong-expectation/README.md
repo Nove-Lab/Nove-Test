@@ -36,6 +36,12 @@ metadata.test_file_locations_suppressed
     "score_raw": 1.0}]
 ```
 
-Compare that against `entries[0].score_raw` (0.5774): a suppressed suspect
-outscoring the top entry is the signal that the failing test's own
-expectation is worth reading before its production code.
+Compare that against `entries[0].score_raw` (0.5774). By itself that
+comparison is **not** a routing signal: under Ochiai the top suppressed
+score is ≥ `entries[0].score_raw` on every `localization-*` fixture in this
+repo, including the ones where rank 1 is exactly right. What makes **this**
+fixture different is what reading `entries[0]` turns up — `cents` is
+correct — and only then does the suppressed entry name the line to fix,
+`tests/test_money.py::test_cents_of_two_fifty`. That is the single shape
+the shipped rule in `docs/agent/advanced.md` calls out, and this fixture is
+what pins it.

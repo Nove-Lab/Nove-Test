@@ -207,12 +207,14 @@ if cat == "all_green":
     return                                  # nothing to do
 elif cat in {"investigate_location", "regression_with_localization", "coverage_gap"}:
     # location-bearing slots: file, primary_line, line_range, rank, symbol, formula, mode.
-    # The array is NOT score-ordered (recs_sorted[0] may be a rank-2 finding);
-    # pick the strongest by rank (asc) then score_normalized (desc):
-    best = min((r for r in recs if r["category"] == cat),
-               key=lambda r: (r["slots"]["rank"], -r["slots"]["score_normalized"]))
-    target = (best["slots"]["file"], best["slots"]["primary_line"])
-    # walk best["evidence_citations"] for kind == "localization_finding" / "test_result"
+    # Within one category the array is ordered by rank (asc) then
+    # score_normalized (desc); suspects tying on BOTH are ordered by file
+    # path, so read the whole leading rank rather than position 0 alone:
+    hits = [r for r in recs if r["category"] == cat]
+    top_rank = min(r["slots"]["rank"] for r in hits)
+    targets = [(r["slots"]["file"], r["slots"]["primary_line"])
+               for r in hits if r["slots"]["rank"] == top_rank]
+    # walk each hit's evidence_citations for kind == "localization_finding" / "test_result"
 elif cat == "investigate_regression":
     test_id = top["slots"]["test_id"]       # newly-failing test
 elif cat == "unavailable_analysis":
@@ -221,9 +223,12 @@ elif cat == "unavailable_analysis":
 ```
 
 The key invariant: **route on `category` first, sort by `priority`
-ascending**; within a location-bearing category, rank findings by
-`slots.rank` (then `score_normalized`) rather than array position. Then
-read `slots` / walk `evidence_citations[]`. Do NOT parse `summary`.
+ascending**; within a location-bearing category the array is already in
+`slots.rank` (then `score_normalized`) order, so read **every
+recommendation sharing the leading `slots.rank`** rather than position 0
+alone — suspects that tie on both dimensions are ordered by file path,
+which carries no evidence. Then read `slots` / walk
+`evidence_citations[]`. Do NOT parse `summary`.
 
 ### `evidence_citations[]`
 
@@ -300,9 +305,10 @@ executed by exactly one failing test and no passing one): the two SBFL
 modes drop the run's own test nodes before ranking, and report what they
 dropped under `localization_outcome.metadata.test_file_*` — see
 [`advanced.md`](./advanced.md). Route by
-`category` then `priority`, and within a location-bearing category rank by
-`slots.rank` (then `score_normalized`) rather than array position — the
-array is not guaranteed to be score-ordered.
+`category` then `priority`; within a location-bearing category the array is
+already ordered by `slots.rank` (then `score_normalized`), and suspects
+tying on both are ordered by file path, so consider every recommendation
+sharing `recommendations[0].slots.rank` rather than position 0 alone.
 
 ---
 

@@ -190,11 +190,14 @@ if r.returncode == 0 and top["category"] == "all_green":
 elif r.returncode == 3:
     # top["category"] is one of: investigate_location, investigate_regression,
     # regression_with_localization, coverage_gap, unavailable_analysis.
-    # For a location-bearing category the recommendations are NOT score-ordered,
-    # so pick the strongest by slots.rank (asc) then score_normalized (desc):
+    # Within one category the array is ordered by slots.rank (asc) then
+    # score_normalized (desc), so locs[0] is a top-ranked suspect. Suspects
+    # that tie on BOTH are ordered by file path, which carries no evidence,
+    # so take the whole leading rank rather than position 0 alone:
     locs = [r for r in recs if r["category"] == top["category"] and "rank" in r["slots"]]
-    best = min(locs, key=lambda r: (r["slots"]["rank"], -r["slots"]["score_normalized"]))
-    fix_target = best["slots"]   # -> ["file"], ["primary_line"], ["symbol"]
+    top_rank = min(r["slots"]["rank"] for r in locs)
+    fix_targets = [r["slots"] for r in locs if r["slots"]["rank"] == top_rank]
+    # each -> ["file"], ["primary_line"], ["symbol"]
 ```
 
 The seven categories (closed taxonomy) and the full routing tree are in
