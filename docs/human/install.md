@@ -78,6 +78,15 @@ The script needs a downloader (`curl` or `wget`) and a SHA-256 tool
 Linux i686 / armv7l and Windows arm64 are **not** built. macOS is a single
 universal2 binary — there is no per-arch split.
 
+**Linux hosts have a glibc floor: the binary requires glibc 2.31 or newer.**
+Check yours with `ldd --version`. The binary is a PyApp bundle linked against
+glibc, so on a host below the floor the install succeeds — checksum verified,
+binary written — and then every invocation dies in the dynamic loader before
+any output. Recognizing and recovering from that is covered in
+[troubleshooting.md](./troubleshooting.md); the Python-tooling install in §2
+runs on your own Python and is not subject to the floor. macOS and Windows have
+no equivalent requirement.
+
 ### Where the binary lives
 
 | OS | Default path |

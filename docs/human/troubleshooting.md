@@ -67,6 +67,50 @@ $env:PATH = "$HOME\.local\bin;$env:PATH"
 Then `source` the profile (or open a new shell) and re-check with
 `novetest --version` (it prints `novetest 0.1.2 (Python …)`).
 
+### Linux: `version 'GLIBC_2.xx' not found`
+
+The install *succeeded* — SHA-256 verified, binary written — but every
+`novetest` invocation dies instantly, with no output of its own, on a
+dynamic-loader error:
+
+```
+novetest: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
+  (required by /home/you/.local/bin/novetest)
+```
+
+**Cause.** Your host's glibc is older than the one the binary was built
+against. The Linux binaries of v0.3.0 and newer require **glibc 2.31 or
+newer**; every release up to and including v0.2.1 required **glibc 2.39**,
+which is why an older novetest refuses to start on Debian 11/12, Ubuntu
+20.04/22.04 LTS, RHEL/Rocky 9, Amazon Linux 2023 and the official `node` images.
+Nothing is wrong with your download: the failure happens in the loader, before
+the process starts, so it costs milliseconds and produces **no** `novetest/v1`
+envelope at all.
+
+**Check your host's glibc:**
+
+```bash
+ldd --version | head -1     # e.g. "ldd (Debian GLIBC 2.36-9+deb12u14) 2.36"
+```
+
+**Fix — upgrade novetest.** If that number is at or above the floor, you are
+simply on an old binary; re-run the install one-liner to pick up the current
+release. Note that installing an *older* release never helps — earlier releases
+carry the same floor or higher.
+
+**Fix — below the floor: install from PyPI instead.** The Python-tooling install
+runs novetest on **your host's own Python** rather than the CPython the binary
+bundles, so the binary's glibc floor does not apply to it:
+
+```bash
+uv tool install novetest      # or: pipx install novetest
+novetest --version            # expect ok: true, schema "novetest/v1"
+```
+
+It needs Python **>= 3.11** on the host. Everything after installation — verbs,
+envelopes, exit codes, the Project Store — is identical either way. Otherwise,
+move to a host or base image whose glibc meets the floor.
+
 ### Install script aborts with "SHA-256 mismatch"
 
 The install script downloads the binary plus its published `.sha256`

@@ -47,6 +47,43 @@ Every envelope has exactly these top-level keys (JSON-sorted):
 
 ---
 
+## No envelope at all — the binary did not start (Linux glibc floor)
+
+Check this **before** routing on `errors[0].code`. The process exits `1` within
+milliseconds, stdout is **empty**, and stderr carries a dynamic-loader line:
+
+```
+novetest: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
+  (required by /home/you/.local/bin/novetest)
+```
+
+**Recognize it** by the fragment `GLIBC_2.` together with `not found` on a
+`libc.so.6` line, on a `novetest` invocation that produced no JSON on stdout.
+Do not try to parse stdout — there is nothing there. Exit `1` with an **empty
+stdout** is this case; exit `1` with a `novetest/v1` envelope is `cli-error`
+(below). The process never started, so no `errors[0].code` exists.
+
+**Cause.** The standalone binary is a PyApp bundle linked against glibc, and a
+glibc-linked binary runs only on a host glibc at least as new as its build
+host's. The Linux binaries of v0.3.0 and newer require **glibc 2.31 or newer**;
+every release up to and including v0.2.1 required **glibc 2.39**. Read the
+host's with `ldd --version | head -1`.
+
+**Recovery, in order:**
+
+1. **Re-install the current release.** If `ldd --version` reports at or above
+   the floor, the installed binary is simply an older one.
+2. **Below the floor — switch install channel.** `uv tool install novetest` (or
+   `pipx install novetest`) runs novetest on the host's own Python (>= 3.11)
+   and carries no glibc floor of its own. Verbs, envelopes, exit codes and the
+   Project Store are identical either way.
+
+**Do NOT** retry the binary, re-run the install script, or fall back to an
+older release — earlier releases carry the same floor or higher, so all three
+loop forever.
+
+---
+
 ## Failure-mode reference (real envelopes)
 
 ### `uninitialized` (exit 2)
@@ -556,7 +593,10 @@ if [ -d ./.novetest ]; then
 fi
 ```
 
-Pass = ready to drive. Fail = surface to operator.
+Pass = ready to drive. Fail = surface to operator. One failure mode step 2
+cannot describe: if `novetest --version` exits non-zero with **empty stdout**,
+the binary never started — check stderr for `GLIBC_2.` and route to the
+glibc-floor section above rather than reporting a malformed envelope.
 
 ---
 
