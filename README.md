@@ -8,7 +8,7 @@
 [![CI](https://github.com/Nove-Lab/Nove-Test/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Nove-Lab/Nove-Test/actions/workflows/ci.yml)
 [![Release pipeline](https://github.com/Nove-Lab/Nove-Test/actions/workflows/release-test.yml/badge.svg)](https://github.com/Nove-Lab/Nove-Test/actions/workflows/release-test.yml)
 [![Python](https://img.shields.io/badge/python-3.11_|_3.12_|_3.13-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/version-v0.3.0-success.svg)](https://github.com/Nove-Lab/Nove-Test/releases)
+[![Version](https://img.shields.io/badge/version-v0.1.2-success.svg)](https://github.com/Nove-Lab/Nove-Test/releases)
 
 Stop naive testing — simply running tests and getting pass/fail results.
 
@@ -143,7 +143,7 @@ See [`docs/`](./docs/) for the full envelope reference and integration patterns.
 
 ## Status
 
-**v0.3.0 — production-ready for Linux, macOS, and Windows.**
+**v0.1.2 — production-ready for Linux, macOS, and Windows.**
 
 Stable today:
 - All six native test engines and CLI verbs
