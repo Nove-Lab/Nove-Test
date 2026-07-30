@@ -213,7 +213,8 @@ coverage facts are available (this is what enables SBFL per-test mode).
 ```
 
 (The pytest version shown is *your* project's pytest, not a
-novetest-controlled constant. novetest's own version is `0.1.2`.)
+novetest-controlled constant. novetest's own version is the one
+`novetest --version` reports.)
 
 ---
 

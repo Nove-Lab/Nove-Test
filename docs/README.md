@@ -53,7 +53,9 @@ and can ignore the JSON path entirely.
 
 ## Status
 
-- **Release**: v0.1.2 (Latest on GitHub Releases)
+- **Release**: the latest tag on
+  [GitHub Releases](https://github.com/Nove-Lab/Nove-Test/releases);
+  `novetest --version` reports the build you actually have.
 - **Platforms**: Linux x86_64, Linux aarch64, macOS universal2 (one fat
   binary covering Intel + Apple Silicon), Windows x86_64.
 - **Schema**: `novetest/v1` — top-level keys

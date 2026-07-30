@@ -9,7 +9,7 @@ This page covers:
 
 Nove Test ships as a self-contained PyApp binary (embeds CPython 3.11 + the
 `novetest` wheel) — the install host needs no Python toolchain. Current
-version: **0.1.2**.
+version: **0.3.0**.
 
 ---
 
@@ -99,7 +99,7 @@ Real captured envelope:
   "data": {
     "commandName": "novetest",
     "installLocation": "/home/yjshin/dev/aispace/Nove-Test/.venv/bin/python3",
-    "installedVersion": "0.1.2",
+    "installedVersion": "0.3.0",
     "platform": "linux-x86_64",
     "pythonVersion": "3.11.15",
     "verifiedAt": "2026-06-25T06:20:42.645279Z"
@@ -215,7 +215,8 @@ command -v novetest || { echo "novetest missing"; exit 1; }
 
 # 2) Version envelope round-trips
 NOVETEST_OUTPUT=json novetest --version \
-  | jq -e '.ok == true and .schema == "novetest/v1" and .data.installedVersion == "0.1.2"' \
+  | jq -e '.ok == true and .schema == "novetest/v1"
+           and (.data.installedVersion | type == "string" and length > 0)' \
   || { echo "version envelope malformed"; exit 1; }
 
 # 3) Help envelope enumerates the operating surface
@@ -225,6 +226,12 @@ NOVETEST_OUTPUT=json novetest --help | jq -e '.data.operating | length >= 15' \
 
 If all three pass, you can drive Nove Test. The first real invocation pays a
 one-time 5–15 second PyApp unpack cost; subsequent calls are warm.
+
+Step 2 asserts the envelope round-trips rather than pinning a version number,
+so the probe stays green across upgrades. Compare `.data.installedVersion`
+against a literal only in a job that also pins `NOVETEST_INSTALL_VERSION` (§1)
+— otherwise the assertion fails on the next release rather than on a real
+defect.
 
 ---
 

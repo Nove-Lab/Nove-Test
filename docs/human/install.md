@@ -10,7 +10,7 @@ This page covers:
 
 Nove Test ships as a single self-contained binary (a PyApp bundle that
 embeds CPython 3.11 + the `novetest` wheel), so the binary path needs **no
-Python toolchain on your machine**. Current version: **0.1.2**.
+Python toolchain on your machine**. Current version: **0.3.0**.
 
 ---
 
@@ -165,7 +165,7 @@ mode shown):
   "data": {
     "commandName": "novetest",
     "installLocation": "/home/yjshin/dev/aispace/Nove-Test/.venv/bin/python3",
-    "installedVersion": "0.1.2",
+    "installedVersion": "0.3.0",
     "platform": "linux-x86_64",
     "pythonVersion": "3.11.15",
     "verifiedAt": "2026-06-25T06:20:42.645279Z"
@@ -179,7 +179,7 @@ mode shown):
 
 | Field | Meaning |
 |---|---|
-| `installedVersion` | The CLI version. Should be `0.1.2`. |
+| `installedVersion` | The CLI version — the release you installed. |
 | `commandName` | Always `novetest`. |
 | `installLocation` | Path on disk. On a binary install this points at your installed `novetest`; the example above was captured running from a source checkout, so it shows that interpreter. |
 | `pythonVersion` | The interpreter behind the CLI. The binary brings its own CPython 3.11.x — you did not install it. |

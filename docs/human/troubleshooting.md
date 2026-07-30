@@ -18,7 +18,7 @@ detail, re-run with `novetest --output json <verb>` and read
 `errors[0]`.
 
 > Examples on this page use the canonical `calc` project (a small
-> Python package) and Nove Test **0.1.2**.
+> Python package).
 
 ---
 
@@ -65,7 +65,8 @@ $env:PATH = "$HOME\.local\bin;$env:PATH"
 ```
 
 Then `source` the profile (or open a new shell) and re-check with
-`novetest --version` (it prints `novetest 0.1.2 (Python …)`).
+`novetest --version` — a working install prints one line like
+`novetest 0.3.0 (Python 3.11.15, linux-x86_64)`.
 
 ### Linux: `version 'GLIBC_2.xx' not found`
 

@@ -59,9 +59,18 @@ novetest: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
 
 **Recognize it** by the fragment `GLIBC_2.` together with `not found` on a
 `libc.so.6` line, on a `novetest` invocation that produced no JSON on stdout.
-Do not try to parse stdout — there is nothing there. Exit `1` with an **empty
-stdout** is this case; exit `1` with a `novetest/v1` envelope is `cli-error`
-(below). The process never started, so no `errors[0].code` exists.
+Do not try to parse stdout — there is nothing there.
+
+**Route on that stderr fragment, never on the empty stdout alone.** An empty
+stdout does not identify this case: in text mode a plain usage error also exits
+`1` with zero bytes on stdout and human-readable text on stderr
+(`NOVETEST_OUTPUT=text novetest coverage show --run 01X` → exit `1`, stdout 0
+bytes, stderr an `Unknown option` block). The stderr fragment is the only
+discriminator that holds in both output modes. If stdout does carry a
+`novetest/v1` envelope, the process started — route on `errors[0].code` as
+usual, and note that an exit `1` envelope is not necessarily `cli-error`: the
+same JSON-mode usage error exits `1` with `errors[0].code == "unknown-option"`.
+Here the process never started, so no `errors[0].code` exists at all.
 
 **Cause.** The standalone binary is a PyApp bundle linked against glibc, and a
 glibc-linked binary runs only on a host glibc at least as new as its build
@@ -594,9 +603,13 @@ fi
 ```
 
 Pass = ready to drive. Fail = surface to operator. One failure mode step 2
-cannot describe: if `novetest --version` exits non-zero with **empty stdout**,
-the binary never started — check stderr for `GLIBC_2.` and route to the
-glibc-floor section above rather than reporting a malformed envelope.
+cannot describe: `novetest --version` can exit non-zero with **empty stdout**,
+which makes `jq -e` fail with nothing to parse. Read stderr before reporting a
+malformed envelope. Only stderr carrying `GLIBC_2.` + `not found` on a
+`libc.so.6` line means the binary never started — route that to the glibc-floor
+section above. Any other stderr means the process did start and stderr holds the
+real cause (a bad `NOVETEST_OUTPUT` value, for instance, exits `1` with an empty
+stdout and a Python traceback on stderr).
 
 ---
 
