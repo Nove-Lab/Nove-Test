@@ -472,14 +472,29 @@ Routing facts:
   `test_file_locations_excluded` (how many candidates matched),
   `test_file_exclusion_reverted` (`true` → every positive suspect was a
   test node, so the unfiltered ranking came back instead of an empty one),
-  `test_file_exclusion_basis` (`exact` ∣ `path_suffix` ∣ `none` — `none`
-  means no node id resembled any covered path, the normal state for
-  ecosystems whose node ids carry no file path), and
+  `test_file_exclusion_basis` (`exact` ∣ `path_suffix` ∣ `none`), and
   `test_file_locations_suppressed` (the top removed suspects with their
-  `score_raw`). **Read the suppressed list against `entries[0].score_raw`:
-  when a suppressed test symbol outscores rank 1, the failing test's own
-  expectation is the thing to read first** — the engine cannot tell a
-  wrong assertion apart from the structural bias, so it surfaces both.
+  `score_raw`).
+- `basis: "none"` means no node-id path resembles any candidate path. It
+  is expected for ecosystems whose node ids carry no file path (go, cargo,
+  JUnit, dotnet), where the filter is a deliberate no-op, **and** whenever
+  the coverage tool does not instrument test files at all — istanbul/jest
+  instruments only the modules the tests `require`, so the test file was
+  never a candidate and there is genuinely nothing to exclude; `none`
+  carries no signal about path reconciliation there. Read `none` with an
+  `_excluded: 0` as the signal that the two path bases could not be
+  reconciled only when the run's Coverage Facts do contain the test files.
+- **A suppressed test symbol usually outscores `entries[0]` — that is the
+  normal case, not a signal.** A failing test's own body is `ef = 1,
+  ep = 0`, the maximum-scoring shape by construction, so the top
+  suppressed `score_raw` is ordinarily ≥ `entries[0].score_raw` even when
+  rank 1 is exactly right. The list is there for visibility — nothing the
+  filter removes disappears silently, so a defect that really lives in a
+  failing test stays recoverable rather than erased. Read it **alongside
+  `entries[0]`, never instead of it**: `entries[0]` remains the primary
+  answer. It changes the conclusion in one shape only — a failing test
+  whose own assertion is wrong (it expects the wrong value while the code
+  it calls is correct), where the suppressed entry names the line to fix.
 - Unavailable block has exactly 3 keys + `kind`: `run_reference`
   (nullable), `reason`, `detail`. Localization reasons are
   **hyphenated**, like every other engine's: `no-failed-tests`,
