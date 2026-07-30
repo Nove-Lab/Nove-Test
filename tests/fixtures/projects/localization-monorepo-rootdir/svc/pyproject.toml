@@ -1,0 +1,9 @@
+[project]
+name = "monorepo-svc"
+version = "0.0.0"
+description = "Sub-project with NO pytest config of its own — rootdir resolves to the repo above."
+requires-python = ">=3.11"
+
+# DELIBERATELY no [tool.pytest.ini_options]: that is what makes pytest walk
+# up to ../pytest.ini and record node ids as ``svc/tests/...`` while the
+# coverage facts stay workspace-relative (``tests/...``).

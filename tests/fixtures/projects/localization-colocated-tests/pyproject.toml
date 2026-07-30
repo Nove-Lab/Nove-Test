@@ -1,0 +1,9 @@
+[project]
+name = "localization-colocated-tests"
+version = "0.0.0"
+description = "Production code and collected tests in ONE file (co-located layout)."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+python_files = ["*.py"]
+pythonpath = ["."]

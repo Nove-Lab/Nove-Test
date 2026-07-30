@@ -302,6 +302,24 @@ def test_per_test_mode_reports_the_exclusion_in_metadata(
     # 5 test-function symbols in tests/test_calc.py were dropped.
     assert finding.metadata["test_file_locations_excluded"] == 5
     assert finding.metadata["test_file_exclusion_reverted"] is False
+    # Node-id paths met candidate paths head-on — no re-key was needed, so
+    # ``excluded: 0`` would have meant "nothing to drop", not "no match".
+    assert finding.metadata["test_file_exclusion_basis"] == "exact"
+    # Nothing is deleted silently: the two failing test bodies were the
+    # only removals that scored above zero, and they are named with the
+    # score they would have ranked at.
+    assert finding.metadata["test_file_locations_suppressed"] == [
+        {
+            "file": _TEST_FILE,
+            "symbol": "test_fail_1",
+            "score_raw": pytest.approx(1 / (2**0.5)),
+        },
+        {
+            "file": _TEST_FILE,
+            "symbol": "test_fail_2",
+            "score_raw": pytest.approx(1 / (2**0.5)),
+        },
+    ]
     # Base keys unchanged (mode-invariant metadata contract).
     assert finding.metadata["changed_files_count"] is None
     assert finding.metadata["regression_reweighted"] is None
@@ -449,6 +467,16 @@ def test_aggregate_mode_drops_the_test_file_named_by_its_own_traceback(
     assert finding.entries[0].rank == 1
     assert finding.metadata["test_file_locations_excluded"] == 1
     assert finding.metadata["test_file_exclusion_reverted"] is False
+    assert finding.metadata["test_file_exclusion_basis"] == "exact"
+    # Aggregate mode ranks FILES, so the suppressed suspect carries no
+    # symbol — the mode has none to report (and none to narrow with).
+    assert finding.metadata["test_file_locations_suppressed"] == [
+        {
+            "file": "tests/test_calc.py",
+            "symbol": None,
+            "score_raw": pytest.approx(1 / (2**0.5)),
+        }
+    ]
     # Base keys unchanged.
     assert finding.metadata["regression_reweighted"] is False
     assert finding.metadata["changed_files_count"] == 0
@@ -502,3 +530,7 @@ def test_aggregate_mode_is_a_no_op_when_no_test_file_is_covered(
     assert [e.code_location.file for e in finding.entries] == ["src/calc.py"]
     assert finding.metadata["test_file_locations_excluded"] == 0
     assert finding.metadata["test_file_exclusion_reverted"] is False
+    # ``basis: none`` is what tells a reader this ``0`` is "the test file
+    # was never a candidate", not "the paths failed to line up".
+    assert finding.metadata["test_file_exclusion_basis"] == "none"
+    assert finding.metadata["test_file_locations_suppressed"] == []

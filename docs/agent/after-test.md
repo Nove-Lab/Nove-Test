@@ -265,23 +265,6 @@ Each citation has a `kind` discriminator. The closed `kind` set is
         "evidence_citations": [ "…localization_finding + test_result, elided…" ]
       },
       {
-        "category": "investigate_location",
-        "priority": 2,
-        "recommendation_id": "rec_01KXMC59XX0GVW3R2STYVTXW2A_a1e32879",
-        "slots": {
-          "file": "tests/test_arithmetic.py",
-          "formula": "ochiai",
-          "line_range": [12, 13],
-          "mode": "sbfl_per_test",
-          "primary_line": 13,
-          "rank": 1,
-          "score_normalized": 1.0,
-          "symbol": "test_subtract"
-        },
-        "summary": "Investigate `test_subtract`@13 in `tests/test_arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).",
-        "evidence_citations": [ "…localization_finding + test_result, elided…" ]
-      },
-      {
         "category": "unavailable_analysis",
         "priority": 6,
         "recommendation_id": "rec_01KXMC59XX0GVW3R2STYVTXW2A_de494676",
@@ -304,14 +287,19 @@ Each citation has a `kind` discriminator. The closed `kind` set is
 }
 ```
 
-Exit code: **3** (`ok: true`). Three recommendations: two
-`investigate_location` (priority 2) — the culprit `subtract`@6 and its
-failing test `test_subtract`@13, both rank 1 (`score_normalized: 1.0`,
-tied) — followed by one `unavailable_analysis` (priority 6), because this
-first run of the target has no regression baseline yet
-(`stage_eligibility.regression: "unavailable"`). Zero-score locations
-(e.g. `add`, which no failing test exercises) are filtered out of the
-findings entirely, so they never surface as recommendations. Route by
+Exit code: **3** (`ok: true`). Two recommendations: one
+`investigate_location` (priority 2) — the culprit `subtract`@6 at rank 1
+(`score_normalized: 1.0`) — followed by one `unavailable_analysis`
+(priority 6), because this first run of the target has no regression
+baseline yet (`stage_eligibility.regression: "unavailable"`). Zero-score
+locations (e.g. `add`, which no failing test exercises) are filtered out of
+the findings entirely, so they never surface as recommendations. Neither
+does the failing test `test_subtract`@13, whose own body scores an
+identical `ochiai=1.000` for a structural reason (a failing test is
+executed by exactly one failing test and no passing one): the two SBFL
+modes drop the run's own test nodes before ranking, and report what they
+dropped under `localization_outcome.metadata.test_file_*` — see
+[`advanced.md`](./advanced.md). Route by
 `category` then `priority`, and within a location-bearing category rank by
 `slots.rank` (then `score_normalized`) rather than array position — the
 array is not guaranteed to be score-ordered.

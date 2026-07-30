@@ -52,14 +52,16 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
 from novetest.coverage import CoverageUnavailable, get_coverage_facts
 from novetest.localization.candidate_filter import (
+    ExclusionResult,
     apply_test_file_exclusion,
-    discovered_test_files,
+    discovered_test_nodes,
 )
 from novetest.localization.failure_proximity import (
     derive_failure_proximity,
@@ -153,6 +155,29 @@ def _passed_test_ids(record: RunRecord) -> frozenset[str]:
     return frozenset(
         tr.node_id for tr in record.test_results if tr.outcome in _PASSED_OUTCOMES
     )
+
+
+def _exclusion_metadata(exclusion: ExclusionResult[Any]) -> dict[str, Any]:
+    """The four auditable ``metadata`` keys both SBFL modes publish.
+
+    One renderer so the two pipelines cannot drift. Spec:
+    ``design/interace-contract/localization.md`` §"Result shape".
+    ``_suppressed`` is what keeps a removed suspect visible instead of
+    silently deleted — read it against ``entries[0].score_raw``.
+    """
+    return {
+        "test_file_locations_excluded": exclusion.excluded_count,
+        "test_file_exclusion_reverted": exclusion.reverted,
+        "test_file_exclusion_basis": exclusion.basis,
+        "test_file_locations_suppressed": [
+            {
+                "file": suppressed.file,
+                "symbol": suppressed.symbol,
+                "score_raw": suppressed.score_raw,
+            }
+            for suppressed in exclusion.suppressed
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -325,16 +350,19 @@ def _derive_per_test(
         scores=scores,
     )
 
-    # Drop candidates that live in one of THIS RUN's test files before any
+    # Drop candidates that ARE one of THIS RUN's test nodes before any
     # ranking work: a failing test's own body is ``ef = 1, ep = 0`` by
     # construction and outscores the defect on every project
     # (``candidate_filter`` module docstring carries the measured counts).
-    # Everything below — normalization, dense ranks, tie groups, top_n —
-    # therefore operates on real suspects only.
+    # The match is by file AND symbol, so a co-located file's production
+    # symbols survive alongside the tests it also owns. Everything below —
+    # normalization, dense ranks, tie groups, top_n — therefore operates on
+    # real suspects only.
     exclusion = apply_test_file_exclusion(
         candidates,
-        test_files=discovered_test_files(record),
+        test_nodes=discovered_test_nodes(record),
         file_of=lambda c: c.code_location.file,
+        symbol_of=lambda c: c.code_location.symbol,
         score_of=lambda c: c.scores[formula],
     )
     candidates = exclusion.candidates
@@ -443,10 +471,11 @@ def _derive_per_test(
     # ``design/interace-contract/localization.md`` §"Result shape —
     # mode-invariant".
     #
-    # The two ``test_file_*`` keys make the exclusion auditable: a reader
-    # can tell "we filtered N test-file suspects out" from "nothing was
-    # found", and ``_reverted`` names the case where the run's only
-    # positive suspects WERE test files.
+    # The four ``test_file_*`` keys make the exclusion auditable: a reader
+    # can tell "we filtered N test-node suspects out" from "nothing was
+    # found" (``_excluded` + ``_basis``), sees WHICH suspects were removed
+    # and how they scored (``_suppressed``), and ``_reverted`` names the
+    # case where the run's only positive suspects WERE test nodes.
     return LocalizationFinding(
         run_reference=record.run_reference,
         engine_name=record.engine_name,
@@ -461,8 +490,7 @@ def _derive_per_test(
         metadata={
             "changed_files_count": None,
             "regression_reweighted": None,
-            "test_file_locations_excluded": exclusion.excluded_count,
-            "test_file_exclusion_reverted": exclusion.reverted,
+            **_exclusion_metadata(exclusion),
         },
     )
 
@@ -667,10 +695,18 @@ def _derive_aggregate(
     # collects a hit from EVERY failing test and lands at rank 1 for the
     # same structural reason as the per-test path. Applied before the sort
     # so normalization, dense ranks and truncation all see real suspects.
+    #
+    # ``symbol_of`` is constantly ``None`` here because this mode ranks
+    # FILES — there is no symbol to narrow the exclusion to, so it stays
+    # file-granular (``candidate_filter`` docstring,
+    # "over-approximations"). A co-located file's production code is
+    # therefore still dropped in aggregate mode; the suppressed list is
+    # what keeps that visible.
     exclusion = apply_test_file_exclusion(
         candidates,
-        test_files=discovered_test_files(record),
+        test_nodes=discovered_test_nodes(record),
         file_of=lambda c: c[0],
+        symbol_of=lambda _c: None,
         score_of=lambda c: c[1][formula],
     )
     candidates = exclusion.candidates
@@ -761,8 +797,7 @@ def _derive_aggregate(
     metadata: dict[str, object] = {
         "regression_reweighted": regression_reweighted,
         "changed_files_count": len(changed_files),
-        "test_file_locations_excluded": exclusion.excluded_count,
-        "test_file_exclusion_reverted": exclusion.reverted,
+        **_exclusion_metadata(exclusion),
     }
     if parse_warnings:
         metadata["parse_warnings"] = parse_warnings

@@ -1,0 +1,9 @@
+[project]
+name = "localization-wrong-expectation"
+version = "0.0.0"
+description = "The defect is the test's expected value; the test also calls product code."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

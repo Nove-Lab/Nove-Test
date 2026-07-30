@@ -411,7 +411,7 @@ exit 2:
       "entries": [
         {
           "rank": 1,
-          "tied_with": ["entry_index_1"],
+          "tied_with": [],
           "code_location": {
             "kind": "symbol",
             "file": "calc/arithmetic.py",
@@ -427,10 +427,19 @@ exit 2:
           "related_failed_tests": ["tests/test_arithmetic.py::test_subtract"],
           "evidence_citations": [ "… {kind: test_result|coverage_fact, run_reference, selector} …" ]
         },
-        "… 1 more entry (test_subtract tied at rank 1; zero-score locations — add / test_add_* here — are filtered out of per-test rankings entirely) …"
+        "… zero-score locations — add / test_add_* here — are filtered out of per-test rankings entirely …"
       ],
       "derived_at": 1782370298123,
-      "metadata": { "changed_files_count": null, "regression_reweighted": null }
+      "metadata": {
+        "changed_files_count": null,
+        "regression_reweighted": null,
+        "test_file_locations_excluded": 2,
+        "test_file_exclusion_reverted": false,
+        "test_file_exclusion_basis": "exact",
+        "test_file_locations_suppressed": [
+          { "file": "tests/test_arithmetic.py", "symbol": "test_subtract", "score_raw": 1.0 }
+        ]
+      }
     }
   },
   "errors": [],
@@ -455,6 +464,22 @@ Routing facts:
 - `rank` is **dense** (ties share a rank); `tied_with` holds literal
   `"entry_index_<i>"` handles. `score_normalized` is min-max over the
   full ranking before truncation.
+- The two SBFL modes **exclude the run's own test nodes** before ranking:
+  a failing test's own body is executed by exactly one failing test and no
+  passing test, so it outscores the defect it exposes on every project.
+  Four optional `metadata` keys make that auditable (absent in
+  `failure_proximity`, which does not filter):
+  `test_file_locations_excluded` (how many candidates matched),
+  `test_file_exclusion_reverted` (`true` → every positive suspect was a
+  test node, so the unfiltered ranking came back instead of an empty one),
+  `test_file_exclusion_basis` (`exact` ∣ `path_suffix` ∣ `none` — `none`
+  means no node id resembled any covered path, the normal state for
+  ecosystems whose node ids carry no file path), and
+  `test_file_locations_suppressed` (the top removed suspects with their
+  `score_raw`). **Read the suppressed list against `entries[0].score_raw`:
+  when a suppressed test symbol outscores rank 1, the failing test's own
+  expectation is the thing to read first** — the engine cannot tell a
+  wrong assertion apart from the structural bias, so it surfaces both.
 - Unavailable block has exactly 3 keys + `kind`: `run_reference`
   (nullable), `reason`, `detail`. Localization reasons are
   **hyphenated**, like every other engine's: `no-failed-tests`,
