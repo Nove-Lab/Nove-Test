@@ -92,20 +92,103 @@ class Envelope:
         }
 
 
+class InvalidOutputModeError(ValueError):
+    """An explicit ``--output`` / ``NOVETEST_OUTPUT`` value names no known mode.
+
+    Subclasses ``ValueError`` so it stays a drop-in for the bare
+    ``OutputMode(value)`` failure it replaces; the added ``value`` /
+    ``source`` attributes let ``main`` build a ``novetest/v1`` envelope
+    that names both what was rejected and where it came from.
+
+    Before this existed the enum's own ``ValueError`` escaped
+    ``resolve_output_mode`` uncaught — the very first thing ``main`` does —
+    so any unrecognized value (``NOVETEST_OUTPUT=bogus``, or the
+    one-capitalization-away ``NOVETEST_OUTPUT=JSON``) produced a raw
+    traceback on stderr and **zero bytes on stdout, on every verb**: an
+    agent's JSON pipe got an empty-string parse failure with no diagnosis
+    (delivery-phasing row 48, superseding row 37(d)).
+    """
+
+    def __init__(self, value: str, source: str) -> None:
+        self.value = value
+        self.source = source
+        super().__init__(
+            f"Invalid {source}={value!r}; expected one of "
+            f"{', '.join(m.value for m in OutputMode)}"
+        )
+
+
 def resolve_output_mode(
     explicit: str | None, stream: TextIO | None = None, env: dict[str, str] | None = None
 ) -> OutputMode:
     if explicit is not None:
-        return OutputMode(explicit)
+        return _coerce_output_mode(explicit, "--output")
     source_env = env if env is not None else os.environ
     env_value = source_env.get("NOVETEST_OUTPUT")
     if env_value:
-        return OutputMode(env_value)
+        return _coerce_output_mode(env_value, "NOVETEST_OUTPUT")
+    return fallback_output_mode(stream)
+
+
+def _coerce_output_mode(value: str, source: str) -> OutputMode:
+    """``OutputMode(value)`` with the failure carrying its provenance.
+
+    Matching stays EXACT (no case folding, no trimming): ``JSON`` is
+    rejected rather than silently accepted, because a mode that resolves
+    differently per capitalization is a worse contract than one that
+    refuses and says so. The refusal is now a proper envelope, which is
+    what row 48 was about.
+    """
+
+    try:
+        return OutputMode(value)
+    except ValueError:
+        raise InvalidOutputModeError(value, source) from None
+
+
+def fallback_output_mode(stream: TextIO | None = None) -> OutputMode:
+    """The no-value default: TEXT on a tty, JSON otherwise.
+
+    Split out of ``resolve_output_mode`` so the error path can reuse the
+    identical rule. When the requested mode is the thing that failed to
+    resolve, *something* still has to decide how to render the refusal;
+    deriving it from the same isatty probe keeps that choice deterministic
+    per stream and consistent with what an unconfigured invocation would
+    have produced. Non-interactive stdout (every agent invocation, every
+    pipe, every CI job) therefore gets JSON — the case row 48 exists to
+    protect.
+    """
+
     target = stream if stream is not None else sys.stdout
     isatty = getattr(target, "isatty", None)
     if callable(isatty) and isatty():
         return OutputMode.TEXT
     return OutputMode.JSON
+
+
+def invalid_output_mode_envelope(exc: InvalidOutputModeError) -> Envelope:
+    """The ``novetest/v1`` refusal for an unresolvable output mode.
+
+    ``command`` is ``"cli"`` — the failure happens in ``main`` before any
+    verb is parsed, so there is no verb to attribute it to (same
+    convention as the existing ``cli-error`` envelope).
+    """
+
+    return Envelope(
+        command="cli",
+        ok=False,
+        errors=(
+            EnvelopeError(
+                code="invalid-output-mode",
+                message=str(exc),
+                details={
+                    "value": exc.value,
+                    "source": exc.source,
+                    "supported": [m.value for m in OutputMode],
+                },
+            ),
+        ),
+    )
 
 
 def apply_no_color(mode: OutputMode) -> None:

@@ -39,8 +39,11 @@ from novetest.orchestration.recommendation import (
     FactBundle,
     ReplayResult,
     StageEligibility,
+    synthesize_recommendation,
 )
+from novetest.orchestration.recommendation.fact_bundle import has_failed_tests
 from novetest.orchestration.recommendation.categories import (
+    CATEGORIES,
     CATEGORY_ALL_GREEN,
     CATEGORY_COVERAGE_GAP,
     CATEGORY_FLAKY_SUSPECTED,
@@ -48,6 +51,7 @@ from novetest.orchestration.recommendation.categories import (
     CATEGORY_INVESTIGATE_REGRESSION,
     CATEGORY_REGRESSION_WITH_LOCALIZATION,
     CATEGORY_UNAVAILABLE_ANALYSIS,
+    MATCHERS_BY_PRIORITY,
     PRIORITIES,
     CategoryHit,
     apply_mutual_exclusion,
@@ -633,10 +637,14 @@ class TestUnavailableAnalysis:
         assert match_unavailable_analysis(bundle) == []
 
     def test_no_fire_when_unavailable_but_no_failures(self) -> None:
-        """Tests must have failed to owe the user an explanation.
+        """A run that EXECUTED and had no failures owes no explanation.
 
-        Brief §1 trigger row: ``unavailable_analysis`` requires
-        "≥1 test failed" — otherwise the run is just incomplete-but-fine.
+        Brief §1 trigger row: ``unavailable_analysis`` requires "≥1 test
+        failed" — otherwise the run is just incomplete-but-fine. Since row
+        45 that is only half the gate: the run must ALSO have executed as
+        a suite (see ``TestCollectionFailureRow45``). Both halves are
+        exercised here — this record is ``status: "passed"`` with real
+        passing tests, so neither disjunct fires.
         """
 
         ref = _make_run_reference()
@@ -687,6 +695,264 @@ class TestAllGreen:
         ).to_bundle()
         # rf reports regressed=1 → all_green refuses to fire.
         assert match_all_green(bundle) == []
+
+
+# ---------------------------------------------------------------------------
+# Row 45 — a suite that never executed must not be reported green
+# ---------------------------------------------------------------------------
+
+
+def _errored_zero_result_record(ref: RunReference) -> RunRecord:
+    """The exact Run Record a pytest collection failure persists.
+
+    Measured against ``tests/fixtures/projects/pytest-collection-error``:
+    ``status: "errored"``, ``summary_counts == {"total": 0, "collected": 0}``
+    (note there is no ``"failed"`` key at all, so ``record_has_failed_tests``
+    falls through to scanning ``test_results``) and zero ``test_results``.
+    """
+
+    return RunRecord(
+        run_reference=ref,
+        target_expression="tests/",
+        target_type="dir",
+        engine_name="pytest",
+        ecosystem="python",
+        status="errored",
+        started_at=ref.created_at,
+        completed_at=ref.created_at + 1,
+        engine_version="8.2.0",
+        summary_counts={"total": 0, "collected": 0},
+        test_results=(),
+    )
+
+
+class TestCollectionFailureRow45:
+    """A zero-collected, ``errored`` run routes to explanation, not to green.
+
+    Delivery-phasing row 45. The counting predicates cannot separate
+    "nothing failed because everything passed" from "nothing failed
+    because nothing ran" — only ``run_record.status`` can, and before this
+    fix no matcher consulted it.
+    """
+
+    def _bundle(self) -> FactBundle:
+        ref = _make_run_reference()
+        return _BundleParts(
+            run_reference=ref,
+            run_record=_errored_zero_result_record(ref),
+            eligibility=_all_unavailable_eligibility(),
+        ).to_bundle()
+
+    def test_the_vacuous_precondition_still_holds(self) -> None:
+        """Pin WHY the defect existed, so a future refactor cannot hide it.
+
+        ``has_failed_tests`` is False on this bundle — correctly, there are
+        no failures. Any gate built on that predicate alone is therefore
+        vacuously satisfied. This assertion is the premise the two tests
+        below defend against; if it ever flips, they stop testing the
+        thing they were written for.
+        """
+
+        assert has_failed_tests(self._bundle()) is False
+
+    def test_all_green_refuses(self) -> None:
+        assert match_all_green(self._bundle()) == []
+
+    def test_unavailable_analysis_fires_instead(self) -> None:
+        hits = match_unavailable_analysis(self._bundle())
+        assert len(hits) == 1
+        assert hits[0].category == CATEGORY_UNAVAILABLE_ANALYSIS
+        assert hits[0].payload["unavailable_stages"] == [
+            "coverage",
+            "regression",
+            "localization",
+        ]
+
+    def test_synthesis_emits_exactly_one_non_green_recommendation(self) -> None:
+        """End of the pipeline, not just the matcher: what the agent reads."""
+
+        recs = synthesize_recommendation(self._bundle())
+        assert [r.category for r in recs] == [CATEGORY_UNAVAILABLE_ANALYSIS]
+        assert "green" not in recs[0].summary.lower()
+        # NFR-ORCH-002 — a recommendation always carries evidence.
+        assert recs[0].evidence_citations
+
+    def test_all_green_survives_when_the_suite_actually_ran_empty(self) -> None:
+        """The adjacent case is deliberately NOT swept up by this fix.
+
+        An engine that ran to completion and exited clean with zero tests
+        (go / junit / xunit — ``status: "passed"``) keeps its existing
+        ``all_green`` + ``zero-tests-collected`` treatment. Same zero
+        counts, different status, different answer: this is the assertion
+        that proves the fix discriminates on status rather than on
+        emptiness.
+        """
+
+        ref = _make_run_reference()
+        bundle = _BundleParts(
+            run_reference=ref,
+            run_record=_make_run_record(ref, passed=0, failed=0, skipped=0),
+        ).to_bundle()
+        assert bundle.run_record.status == "passed"
+        hits = match_all_green(bundle)
+        assert len(hits) == 1
+        assert hits[0].payload["total_tests"] == 0
+
+    def test_unknown_future_status_also_refuses_green(self) -> None:
+        """The status gate is an ALLOW-list, so it is safe against growth.
+
+        A status this code has never seen must read as "did not execute",
+        never as "clean". A deny-list (``status != "errored"``) would pass
+        this and silently re-open row 45 for the next status the Run
+        engine adds.
+        """
+
+        ref = _make_run_reference()
+        record = _make_run_record(ref, passed=0, failed=0, status="interrupted")
+        bundle = _BundleParts(
+            run_reference=ref,
+            run_record=record,
+            eligibility=_all_unavailable_eligibility(),
+        ).to_bundle()
+        assert match_all_green(bundle) == []
+        assert len(match_unavailable_analysis(bundle)) == 1
+
+    @pytest.mark.parametrize(
+        ("status", "passed", "failed", "expect_unavailable"),
+        [
+            ("passed", 3, 0, False),
+            ("failed", 2, 1, True),
+            ("errored", 2, 1, True),
+        ],
+    )
+    def test_widened_gate_does_not_misfire_on_executed_runs(
+        self, status: str, passed: int, failed: int, expect_unavailable: bool
+    ) -> None:
+        """Regression matrix for the widened ``unavailable_analysis`` gate.
+
+        Every stage is unavailable in all three rows, so only the second
+        half of the gate varies. The pre-row-45 answers must be unchanged:
+        a green run stays silent, a failing run still explains itself, and
+        an ``errored`` run that DID collect tests is handled by the
+        original ``has_failed_tests`` disjunct, not by the new one.
+        """
+
+        ref = _make_run_reference()
+        bundle = _BundleParts(
+            run_reference=ref,
+            run_record=_make_run_record(
+                ref, passed=passed, failed=failed, status=status
+            ),
+            eligibility=_all_unavailable_eligibility(),
+        ).to_bundle()
+        fired = len(match_unavailable_analysis(bundle)) == 1
+        assert fired is expect_unavailable
+
+    def test_mutual_exclusion_is_not_the_thing_holding_the_line(self) -> None:
+        """``apply_mutual_exclusion`` swept for the same vacuous shape.
+
+        Its rule-1 drop is keyed on the PRESENCE of another hit, so it is
+        not vacuous — but it is also not a second line of defence: fed an
+        ``all_green`` hit alone it passes it straight through. That is why
+        the fix had to land in ``match_all_green`` itself rather than
+        relying on ``unavailable_analysis`` happening to fire alongside.
+        """
+
+        lone_green = CategoryHit(
+            category=CATEGORY_ALL_GREEN,
+            priority=PRIORITIES[CATEGORY_ALL_GREEN],
+            primary_slot="",
+            payload={},
+        )
+        assert apply_mutual_exclusion([lone_green]) == [lone_green]
+
+
+# ---------------------------------------------------------------------------
+# Row 46 — which categories carry a ``rank`` slot (the docs route on this)
+# ---------------------------------------------------------------------------
+
+
+class TestRankBearingCategoriesRow46:
+    """Pin the premise the documented routing recipes are built on.
+
+    ``docs/agent/quick-start.md`` and ``docs/agent/after-test.md`` both
+    branch on ``slots["rank"]``, and ``after-test.md`` used to read it off
+    a ``coverage_gap`` recommendation — which raises ``KeyError: 'rank'``,
+    unreachable today only because priority 4 always loses to a priority-2
+    ``investigate_location`` when both are present. That is an ordering
+    accident, not a guarantee, so the doc was corrected to route
+    ``coverage_gap`` separately.
+
+    This test guards the OTHER direction of that drift: if a matcher ever
+    gains or loses a ``rank`` slot, the docs' branch assignment silently
+    becomes wrong again. Failing here means a doc edit is owed.
+    """
+
+    RANK_BEARING = {
+        CATEGORY_INVESTIGATE_LOCATION,
+        CATEGORY_REGRESSION_WITH_LOCALIZATION,
+    }
+
+    def _all_hits(self) -> list[CategoryHit]:
+        baseline_ref = _make_run_reference("01PRIORRUNREF00000000000A", at=900)
+        ref = _make_run_reference()
+        bundle = _BundleParts(
+            run_reference=ref,
+            run_record=_make_run_record(ref, failed=1),
+            coverage=_make_coverage(ref),
+            regression=_make_regression(baseline_ref, ref),
+            localization=_make_localization(ref),
+            replay=ReplayResult(
+                run_reference=ref,
+                classification="inconsistent",
+                reruns_total=5,
+                reruns_failed=2,
+                test_id="tests/test_calc.py::test_divide",
+            ),
+            eligibility=_all_unavailable_eligibility(),
+        ).to_bundle()
+        hits: list[CategoryHit] = []
+        for _priority, _name, matcher in MATCHERS_BY_PRIORITY:
+            hits.extend(matcher(bundle))
+        return hits
+
+    def test_every_category_is_exercised_by_this_bundle(self) -> None:
+        """Guard the guard: an unexercised category proves nothing below."""
+
+        fired = {h.category for h in self._all_hits()}
+        # ``all_green`` cannot coexist with failures by construction, so it
+        # is asserted separately (it has no ``rank`` slot either).
+        assert fired == CATEGORIES - {CATEGORY_ALL_GREEN}
+
+    def test_rank_slot_membership_matches_what_the_docs_route_on(self) -> None:
+        for hit in self._all_hits():
+            has_rank = "rank" in hit.payload
+            assert has_rank is (hit.category in self.RANK_BEARING), (
+                f"{hit.category} rank-slot membership changed; "
+                "docs/agent/{quick-start,after-test}.md route on this"
+            )
+
+    def test_coverage_gap_slot_keys_are_exactly_what_the_docs_read(self) -> None:
+        """``after-test.md``'s ``coverage_gap`` branch reads file + lines."""
+
+        hits = [
+            h for h in self._all_hits() if h.category == CATEGORY_COVERAGE_GAP
+        ]
+        assert hits
+        assert set(hits[0].payload) == {
+            "file",
+            "lines",
+            "mode",
+            "related_finding_id",
+        }
+
+    def test_all_green_carries_no_rank_either(self) -> None:
+        ref = _make_run_reference()
+        bundle = _BundleParts(
+            run_reference=ref, run_record=_make_run_record(ref, passed=2)
+        ).to_bundle()
+        hits = match_all_green(bundle)
+        assert hits and "rank" not in hits[0].payload
 
 
 # ---------------------------------------------------------------------------

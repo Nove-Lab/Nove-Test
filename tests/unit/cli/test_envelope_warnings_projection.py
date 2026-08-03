@@ -134,6 +134,15 @@ class TestBuildTestEnvelopeWarningsProjection:
 # attributes on the outcome (``memory_entry.run_record.run_reference``,
 # ``stage_eligibility``, ``recommendations``, ``run_record_status``,
 # ``warnings``), so a fake satisfies the duck-typed surface.
+#
+# Since delivery-phasing row 45 the helper ALSO reads the run record's
+# ``status`` / ``summary_counts`` / ``test_results`` to decide whether the
+# ``suite-did-not-execute`` warning rides along, so the fake record carries
+# those three too. Defaults describe an ordinary clean run (``passed``, 3
+# tests) — i.e. the warning does NOT fire for any case in this file, which
+# keeps these adapter-projection assertions measuring only what they were
+# written to measure. The row-45 warning has its own coverage in
+# ``tests/integration/orchestration/test_collection_failure_envelope.py``.
 # ---------------------------------------------------------------------------
 
 
@@ -149,6 +158,13 @@ class _FakeRunReference:
 @dataclass(slots=True)
 class _FakeRunRecord:
     run_reference: _FakeRunReference = field(default_factory=_FakeRunReference)
+    status: str = "passed"
+    engine_name: str = "pytest"
+    ecosystem: str = "python"
+    summary_counts: dict[str, int] = field(
+        default_factory=lambda: {"total": 3, "passed": 3, "failed": 0}
+    )
+    test_results: tuple[object, ...] = ()
 
 
 @dataclass(slots=True)

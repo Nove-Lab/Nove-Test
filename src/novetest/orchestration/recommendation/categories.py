@@ -33,8 +33,10 @@ from novetest.models.regression_fact_set import TestTransition
 
 from novetest.orchestration.recommendation.fact_bundle import (
     FactBundle,
+    executed_as_suite,
     has_failed_tests,
     passed_count,
+    run_is_clean,
     skipped_count,
     total_count,
 )
@@ -386,19 +388,30 @@ def match_flaky_suspected(bundle: FactBundle) -> list[CategoryHit]:
 
 
 def match_unavailable_analysis(bundle: FactBundle) -> list[CategoryHit]:
-    """Trigger when any downstream stage is unavailable AND tests failed.
+    """Trigger when a stage is unavailable AND we owe the user an explanation.
 
     Brief §1 (priority 6). At most one hit per run — there's only one
     "we owe the user an explanation" surface. The compound mutual
     exclusion rule (brief §1 — "literally zero facts available AND tests
     failed → emit ONLY ``unavailable_analysis``") fires later in
     ``apply_mutual_exclusion``.
+
+    We owe an explanation in **two** shapes:
+
+    1. Tests failed (the original trigger) — analysis was wanted and some
+       stage could not deliver it.
+    2. The suite never executed (``run_record.status`` outside
+       ``EXECUTED_RUN_STATUSES``, e.g. a pytest collection error). Zero
+       collected tests means zero failures *by construction*, so the
+       ``has_failed_tests`` gate alone silently excused this run — and
+       ``all_green``, gated on the same vacuous predicate, claimed it
+       instead. Delivery-phasing row 45.
     """
 
     unavailable_stages = bundle.stage_eligibility.unavailable_stages()
     if not unavailable_stages:
         return []
-    if not has_failed_tests(bundle):
+    if not has_failed_tests(bundle) and executed_as_suite(bundle):
         return []
     reasons_map = bundle.stage_eligibility.per_stage_reasons
     reason_per_stage: dict[str, str | None] = {
@@ -419,7 +432,7 @@ def match_unavailable_analysis(bundle: FactBundle) -> list[CategoryHit]:
 
 
 def match_all_green(bundle: FactBundle) -> list[CategoryHit]:
-    """Trigger when zero failures AND zero regression-flagged tests.
+    """Trigger when the run passed cleanly, with no regression and no flake.
 
     Brief §1 (priority 7). The mutual exclusion rule drops this hit
     later if any other (non-``all_green``) category fired. So the
@@ -428,8 +441,21 @@ def match_all_green(bundle: FactBundle) -> list[CategoryHit]:
     + the regression-summary check — rather than re-running every other
     matcher and observing zero output. The mutual exclusion step is the
     final arbiter; redundant signals are fine here.
+
+    The FIRST gate is the run's own status, and it is an allow-list
+    (``run_is_clean`` → ``status == "passed"``). Without it the matcher
+    was vacuously satisfied by any run with zero collected tests: a
+    pytest suite that fails to COLLECT persists ``status: "errored"`` with
+    zero ``test_results``, so ``has_failed_tests`` is False "because
+    nothing failed" when the truth is "because nothing ran", and the
+    product told the agent "All tests green" about a suite that did not
+    parse (delivery-phasing row 45). Reading the status here is what makes
+    the two cases distinguishable; the counting predicates cannot tell
+    them apart even in principle.
     """
 
+    if not run_is_clean(bundle):
+        return []
     if has_failed_tests(bundle):
         return []
     rf = bundle.regression_facts

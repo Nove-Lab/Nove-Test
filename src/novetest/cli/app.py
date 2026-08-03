@@ -73,11 +73,15 @@ from novetest.cli.handlers.test import build_test_envelope, test_cmd
 from novetest.cli.output import (
     EXIT_GENERIC,
     EXIT_OK,
+    EXIT_USAGE,
     Envelope,
     EnvelopeError,
+    InvalidOutputModeError,
     OutputMode,
     apply_no_color,
     emit_envelope,
+    fallback_output_mode,
+    invalid_output_mode_envelope,
     resolve_output_mode,
 )
 from novetest.cli.usage import (
@@ -163,7 +167,22 @@ localization_app.command(localization_latest, name="latest")
 def main(argv: list[str] | None = None) -> None:
     raw = list(sys.argv[1:] if argv is None else argv)
     explicit, args = _extract_output_flag(raw)
-    mode = resolve_output_mode(explicit)
+    try:
+        mode = resolve_output_mode(explicit)
+    except InvalidOutputModeError as exc:
+        # Row 48: the mode that failed to resolve is the very thing that
+        # would normally decide how to render this error, so fall back to
+        # the no-value default (JSON off a tty, TEXT on one). This is the
+        # ONLY pre-dispatch failure — it precedes verb parsing, the help /
+        # version intents and the alias injection — so it gets its own
+        # emit rather than routing through the machinery below, none of
+        # which has run yet. EXIT_USAGE (2), the same bucket
+        # ``_validate_engine_flag``'s ``invalid-flag`` uses: a bad value
+        # for a known option is a usage problem, not a tool failure.
+        mode = fallback_output_mode()
+        apply_no_color(mode)
+        emit_envelope(invalid_output_mode_envelope(exc), mode)
+        sys.exit(EXIT_USAGE)
     apply_no_color(mode)
     set_active_mode(mode)
 

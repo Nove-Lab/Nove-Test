@@ -183,22 +183,48 @@ r = subprocess.run(["novetest", "test"],
                    env={**os.environ, "NOVETEST_OUTPUT": "json"})
 env = json.loads(r.stdout)
 recs = env["data"]["recommendations"]
-top = min(recs, key=lambda x: x["priority"])   # lowest priority int = most urgent
+warn = {w["code"] for w in env["warnings"]}
+top = min(recs, key=lambda x: x["priority"]) if recs else None   # lowest int = most urgent
 
-if r.returncode == 0 and top["category"] == "all_green":
+if r.returncode == 0 and top and top["category"] == "all_green":
     pass                                       # nothing to do
-elif r.returncode == 3:
+elif "suite-did-not-execute" in warn:
+    # Exit 3, but NOT a test failure: the suite never ran. A collection-time
+    # error (a syntax error, a failing module-scope import) stopped the engine
+    # before any test executed, so nothing has been learned about the code.
+    # There is nothing to localize — read the native engine output, fix the
+    # parse/import error, re-run. Check this BEFORE routing on category:
+    # the categories below all assume tests actually ran.
+    pass
+elif r.returncode == 3 and top:
     # top["category"] is one of: investigate_location, investigate_regression,
-    # regression_with_localization, coverage_gap, unavailable_analysis.
+    # regression_with_localization, coverage_gap, flaky_suspected,
+    # unavailable_analysis. (`all_green` never pairs with exit 3.)
+    # Only the first three carry a `rank` slot — coverage_gap,
+    # flaky_suspected and unavailable_analysis have none, so `locs` is
+    # legitimately empty for them and must be guarded before `min()`.
     # Within one category the array is ordered by slots.rank (asc) then
-    # score_normalized (desc), so locs[0] is a top-ranked suspect. Suspects
-    # that tie on BOTH are ordered by file path, which carries no evidence,
-    # so take the whole leading rank rather than position 0 alone:
-    locs = [r for r in recs if r["category"] == top["category"] and "rank" in r["slots"]]
-    top_rank = min(r["slots"]["rank"] for r in locs)
-    fix_targets = [r["slots"] for r in locs if r["slots"]["rank"] == top_rank]
-    # each -> ["file"], ["primary_line"], ["symbol"]
+    # score_normalized (desc). Suspects that tie on BOTH are ordered by file
+    # path, which carries no evidence, so take the whole leading rank rather
+    # than position 0 alone:
+    locs = [x for x in recs if x["category"] == top["category"] and "rank" in x["slots"]]
+    if locs:
+        top_rank = min(x["slots"]["rank"] for x in locs)
+        fix_targets = [x["slots"] for x in locs if x["slots"]["rank"] == top_rank]
+        # each -> ["file"], ["primary_line"], ["symbol"]
+    else:
+        fix_targets = [x["slots"] for x in recs if x["category"] == top["category"]]
+        # rank-less categories: read the category's own slots
+        # (see after-test.md for the per-category slot keys)
 ```
+
+Three guards, each closing a real crash: `recs` can be empty (nothing to
+take a `min` of), `rank` is **not** a universal slot (only
+`investigate_location`, `investigate_regression` and
+`regression_with_localization` carry one), and exit 3 does not imply a
+test failed — a suite that fails to *collect* also exits 3, with the
+`suite-did-not-execute` warning as the only positive signal that no test
+ever ran.
 
 The seven categories (closed taxonomy) and the full routing tree are in
 [after-test.md](./after-test.md#closed-taxonomy-7-categories).

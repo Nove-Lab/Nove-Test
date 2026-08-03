@@ -48,6 +48,17 @@ def coverage_workspace(tmp_path: Path) -> Path:
     return _materialize_fixture("pytest-coverage", tmp_path)
 
 
+@pytest.fixture
+def collection_error_workspace(tmp_path: Path) -> Path:
+    """A pytest project whose test module does not parse (row 45).
+
+    The suite never executes: pytest raises at collection, collects zero
+    tests and exits non-zero, so the Run Record lands ``status: "errored"``
+    with no ``test_results`` at all.
+    """
+    return _materialize_fixture("pytest-collection-error", tmp_path)
+
+
 @dataclass(slots=True, frozen=True)
 class CLIRun:
     returncode: int

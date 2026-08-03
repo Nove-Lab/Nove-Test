@@ -180,10 +180,10 @@ Each recommendation has exactly these keys: `recommendation_id`,
 | 3 | `investigate_regression` | A `regressed` (newly-failing) transition vs baseline. |
 | 4 | `coverage_gap` | Uncovered lines overlap a localization entry's span. |
 | 5 | `flaky_suspected` | Replay classified `inconsistent`. Reachable via `novetest test --reruns N` (N ≥ 1, default 0 = never replays): one whole-run replay when the run has failures; `stage_eligibility.replay` flips `not_run` → `available`/`unavailable`. When divergence spreads across several tests, v1 emits ONE hit whose `test_id` is empty — do not assume per-test attribution. |
-| 6 | `unavailable_analysis` | Tests failed AND some stage was `unavailable`. |
+| 6 | `unavailable_analysis` | Some stage was `unavailable` AND either tests failed **or** the suite never executed (see below). |
+| 7 | `all_green` | The run's `status` is `passed` AND zero failures AND zero regressed. Mutually exclusive with all others. |
 
 (Category strings are the authoritative code constants — `design/implementation-plan/recommendation-synthesis.md` §8. Never route on paraphrases.)
-| 7 | `all_green` | Zero failures AND zero regressed. Mutually exclusive with all others. |
 
 Behavioural notes:
 
@@ -192,11 +192,28 @@ Behavioural notes:
   not re-emit them.
 - `flaky_suspected` never appears in real `test` output.
 - `all_green` never coexists with another category.
+- **`all_green` is gated on the run's `status`, not on the failure count
+  alone.** A suite that fails to *collect* (a syntax error or a failing
+  module-scope import in a test file) collects zero tests, so it has zero
+  failures — by construction, not because anything passed. Such a run
+  records `status: "errored"`, routes to `unavailable_analysis`, and
+  carries a `suite-did-not-execute` warning. Do not infer "green" from
+  "no failures"; infer it from `category == "all_green"`.
+- Only `investigate_location`, `investigate_regression` and
+  `regression_with_localization` carry a **`rank`** slot. `coverage_gap`,
+  `flaky_suspected`, `unavailable_analysis` and `all_green` do not — a
+  routing branch that reads `slots["rank"]` for them raises `KeyError`.
 
 ### Routing decision tree
 
 ```python
 recs = envelope["data"]["recommendations"]
+warn = {w["code"] for w in envelope["warnings"]}
+
+# Check this FIRST: every branch below assumes tests actually ran.
+if "suite-did-not-execute" in warn:
+    return          # collection-time error; nothing was tested, nothing to localize
+
 recs_sorted = sorted(recs, key=lambda r: r["priority"])   # lower = higher priority
 if not recs_sorted:
     return
@@ -205,8 +222,8 @@ cat = top["category"]
 
 if cat == "all_green":
     return                                  # nothing to do
-elif cat in {"investigate_location", "regression_with_localization", "coverage_gap"}:
-    # location-bearing slots: file, primary_line, line_range, rank, symbol, formula, mode.
+elif cat in {"investigate_location", "regression_with_localization"}:
+    # rank-bearing slots: file, primary_line, line_range, rank, symbol, formula, mode.
     # Within one category the array is ordered by rank (asc) then
     # score_normalized (desc); suspects tying on BOTH are ordered by file
     # path, so read the whole leading rank rather than position 0 alone:
@@ -215,20 +232,37 @@ elif cat in {"investigate_location", "regression_with_localization", "coverage_g
     targets = [(r["slots"]["file"], r["slots"]["primary_line"])
                for r in hits if r["slots"]["rank"] == top_rank]
     # walk each hit's evidence_citations for kind == "localization_finding" / "test_result"
+elif cat == "coverage_gap":
+    # NO rank, NO primary_line. coverage_gap's slots are exactly
+    # file, lines, mode, related_finding_id — `lines` is the uncovered
+    # line list, and related_finding_id ties back to the localization entry.
+    hits = [r for r in recs if r["category"] == cat]
+    targets = [(r["slots"]["file"], r["slots"]["lines"]) for r in hits]
 elif cat == "investigate_regression":
     test_id = top["slots"]["test_id"]       # newly-failing test
+elif cat == "flaky_suspected":
+    test_id = top["slots"]["test_id"]       # may be "" — see the taxonomy table
 elif cat == "unavailable_analysis":
     stages  = top["slots"]["unavailable_stages"]
     reasons = top["slots"]["reason_per_stage"]   # informational, no action
 ```
 
 The key invariant: **route on `category` first, sort by `priority`
-ascending**; within a location-bearing category the array is already in
+ascending**; within a rank-bearing category the array is already in
 `slots.rank` (then `score_normalized`) order, so read **every
 recommendation sharing the leading `slots.rank`** rather than position 0
 alone — suspects that tie on both dimensions are ordered by file path,
 which carries no evidence. Then read `slots` / walk
 `evidence_citations[]`. Do NOT parse `summary`.
+
+Two traps this tree exists to avoid. `coverage_gap` used to share the
+rank-bearing branch above, which raises `KeyError: 'rank'` the moment it
+sorts to the top — it survived only because priority 4 always loses to a
+priority-2 `investigate_location` when both are present, an ordering
+accident rather than a guarantee. And the `suite-did-not-execute` check
+has to come before the category switch, because a suite that never
+compiled produces `unavailable_analysis` — indistinguishable, on
+`category` alone, from a failing run whose baseline was missing.
 
 ### `evidence_citations[]`
 
@@ -278,7 +312,7 @@ Each citation has a `kind` discriminator. The closed `kind` set is
           "run_reference": "01KXMC59XX0GVW3R2STYVTXW2A",
           "unavailable_stages": ["regression"]
         },
-        "summary": "Failing tests but downstream analysis incomplete: regression (no-comparable-baseline).",
+        "summary": "Downstream analysis incomplete: regression (no-comparable-baseline).",
         "evidence_citations": [ "…run_reference, elided…" ]
       }
     ],

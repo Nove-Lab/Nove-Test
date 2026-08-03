@@ -132,9 +132,17 @@ SUMMARY_TEMPLATES: Final[dict[str, str]] = {
     CATEGORY_FLAKY_SUSPECTED: (
         "Test `{test_id}` flaky: {reruns_failed}/{reruns_total} reruns failed."
     ),
+    # 2026-08-03 (delivery-phasing row 45): the leading "Failing tests but"
+    # clause was DELETED, not reworded. Since ``match_unavailable_analysis``
+    # also fires for a suite that never executed (a pytest collection error
+    # collects zero tests, so zero tests failed), the clause was an
+    # unqualified claim that is false in the new shape — the exact defect
+    # class row 44 registers. The remaining sentence is true in both shapes
+    # and strictly weaker. **No slot key changed**, so
+    # ``recommendation_schema_version`` stays 1 per the design doc §8
+    # checklist item 4 ("bump if slot keys changed").
     CATEGORY_UNAVAILABLE_ANALYSIS: (
-        "Failing tests but downstream analysis incomplete: "
-        "{unavailable_stages_str}."
+        "Downstream analysis incomplete: {unavailable_stages_str}."
     ),
     CATEGORY_ALL_GREEN: (
         "All tests green; no action recommended "

@@ -78,7 +78,7 @@ def test_test_investigate_and_unavailable(
                     "recommendation_id": "rec_x_cccc",
                     "category": "unavailable_analysis",
                     "priority": 6,
-                    "summary": "Failing tests but downstream analysis incomplete: regression (no-comparable-baseline).",
+                    "summary": "Downstream analysis incomplete: regression (no-comparable-baseline).",
                     "slots": {"unavailable_stages": ["regression"]},
                     "evidence_citations": [
                         {"kind": "run_reference", "run_reference": ref(), "selector": {}}

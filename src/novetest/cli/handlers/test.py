@@ -62,9 +62,25 @@ from novetest.cli.output import (
 from novetest.memory import ProjectStoreCorruptError
 from novetest.orchestration.anchor_resolution import EngineAmbiguousError
 from novetest.orchestration.recommendation import RECOMMENDATION_SCHEMA_VERSION
+from novetest.orchestration.recommendation.fact_bundle import (
+    record_suite_did_not_execute,
+    record_total_count,
+)
 from novetest.orchestration.workflows import test_target_in_store
 from novetest.orchestration.workflows.test import TestOutcome
 from novetest.run import RunEngineError
+
+
+# Envelope warning emitted when the run's own status says the suite never
+# executed and it produced zero test outcomes (delivery-phasing row 45).
+#
+# Deliberately NOT the Run engine's ``zero-tests-collected`` code, which
+# covers a materially different run: one that executed, exited clean
+# (``status: "passed"``) and simply had nothing to run. Routing both through
+# one code would make the two indistinguishable to a consumer switching on
+# ``warnings[].code`` — which is the only wire surface that separates
+# "ran, found nothing" from "never ran".
+WARNING_SUITE_DID_NOT_EXECUTE = "suite-did-not-execute"
 
 
 def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
@@ -96,7 +112,7 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
     envelope_warnings: tuple[EnvelopeWarning, ...] = tuple(
         EnvelopeWarning(code=w.code, message=w.message, details=dict(w.details))
         for w in outcome.warnings
-    )
+    ) + _suite_execution_warnings(outcome)
     return (
         Envelope(
             command="test",
@@ -105,6 +121,42 @@ def build_test_envelope(outcome: TestOutcome) -> tuple[Envelope, int]:
             warnings=envelope_warnings,
         ),
         exit_code,
+    )
+
+
+def _suite_execution_warnings(outcome: TestOutcome) -> tuple[EnvelopeWarning, ...]:
+    """Warn when the run never became a suite (row 45), else emit nothing.
+
+    Pure projection — the *predicate* is orchestration's
+    (``record_suite_did_not_execute``), this function only renders it onto
+    the envelope's warning channel. The recommendation set answers "what
+    should I do" (``unavailable_analysis``: which stages could not run);
+    this warning answers "why is there nothing here" (the suite never
+    executed), which no frozen ``unavailable_analysis`` slot can carry.
+    """
+
+    record = outcome.memory_entry.run_record
+    if not record_suite_did_not_execute(record):
+        return ()
+    return (
+        EnvelopeWarning(
+            code=WARNING_SUITE_DID_NOT_EXECUTE,
+            message=(
+                f"The test suite did not execute: {record.engine_name} reported "
+                f"status {record.status!r} with 0 collected tests, so no test "
+                "outcomes were produced. A collection-time error (a syntax "
+                "error or a failing module-scope import in a test file) is the "
+                "usual cause; read the native engine output under "
+                "data.run_reference's artifacts. Nothing about this run's "
+                "correctness has been established."
+            ),
+            details={
+                "run_status": record.status,
+                "collected_tests": record_total_count(record),
+                "engine_name": record.engine_name,
+                "ecosystem": record.ecosystem,
+            },
+        ),
     )
 
 
@@ -187,4 +239,4 @@ def test_cmd(
     _emit_and_exit(envelope, exit_code)
 
 
-__all__ = ["build_test_envelope", "test_cmd"]
+__all__ = ["WARNING_SUITE_DID_NOT_EXECUTE", "build_test_envelope", "test_cmd"]

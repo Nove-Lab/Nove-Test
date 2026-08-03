@@ -47,13 +47,21 @@ from novetest.models.run_reference import RunReference
 
 
 __all__ = [
+    "EXECUTED_RUN_STATUSES",
     "FactBundle",
     "ReplayResult",
+    "RUN_STATUS_FAILED",
+    "RUN_STATUS_PASSED",
     "StageEligibility",
     "build_fact_bundle",
+    "executed_as_suite",
     "has_failed_tests",
     "passed_count",
+    "record_executed_as_suite",
     "record_has_failed_tests",
+    "record_suite_did_not_execute",
+    "record_total_count",
+    "run_is_clean",
     "skipped_count",
     "total_count",
 ]
@@ -251,6 +259,74 @@ def build_fact_bundle(
     )
 
 
+# ---------------------------------------------------------------------------
+# Run-status predicates — "did the suite actually execute?"
+# ---------------------------------------------------------------------------
+
+
+# The Run Record status vocabulary is closed (``passed`` / ``failed`` /
+# ``errored``) — see ``cli/output.py::run_status_to_ok_exit``, which maps the
+# same three onto exit codes. Synthesis needs a second, orthogonal reading of
+# that vocabulary: not "did tests fail?" but "did the suite execute at all?".
+RUN_STATUS_PASSED: Final[str] = "passed"
+RUN_STATUS_FAILED: Final[str] = "failed"
+
+# Statuses that mean "the suite executed and its per-test outcomes are data".
+# ``errored`` is deliberately EXCLUDED: a collection-time exception (a syntax
+# error, a failed module-scope import) makes the engine exit non-zero having
+# collected nothing, so the run produced no outcomes to reason over. Anything
+# outside this allow-list — including a future status this code has never seen
+# — is treated as "did not execute", which is the fail-safe polarity.
+EXECUTED_RUN_STATUSES: Final[frozenset[str]] = frozenset(
+    {RUN_STATUS_PASSED, RUN_STATUS_FAILED}
+)
+
+
+def record_executed_as_suite(record: RunRecord) -> bool:
+    """Return True iff ``record``'s status means the suite actually ran.
+
+    An **allow-list**, not a deny-list: only the statuses positively known
+    to mean "the tests executed and their outcomes are data" pass. This is
+    the polarity that makes the predicate safe against vocabulary growth —
+    a new status nobody taught this function about reads as "did not
+    execute" and routes to the explanation path, never to ``all_green``.
+    """
+    return record.status in EXECUTED_RUN_STATUSES
+
+
+def executed_as_suite(bundle: FactBundle) -> bool:
+    """``record_executed_as_suite`` for the bundle's Run Record."""
+    return record_executed_as_suite(bundle.run_record)
+
+
+def run_is_clean(bundle: FactBundle) -> bool:
+    """Return True iff the run reached the single clean terminal status.
+
+    Stricter than :func:`executed_as_suite` — ``failed`` executed but is
+    not clean. ``all_green`` gates on this: a run may only be called green
+    when the engine positively reported ``passed``.
+    """
+    return bundle.run_record.status == RUN_STATUS_PASSED
+
+
+def record_suite_did_not_execute(record: RunRecord) -> bool:
+    """Return True iff the run did not execute as a suite AND produced nothing.
+
+    The conjunction is the point. ``status == "errored"`` alone is NOT
+    enough: pytest also reports ``errored`` for a run that collected fine
+    and had individual tests raise, and those runs carry real failed
+    outcomes that the ordinary failure path already explains. This
+    predicate isolates the shape where there is literally nothing to
+    reason over — the suite never became data.
+
+    Distinct from the Run engine's ``zero-tests-collected`` warning, which
+    covers the *clean* empty run (``passed`` + zero tests, e.g. a go
+    package with no test functions). That run executed and found nothing;
+    this one never executed.
+    """
+    return not record_executed_as_suite(record) and record_total_count(record) == 0
+
+
 def has_failed_tests(bundle: FactBundle) -> bool:
     """Return True iff the Run Record reports at least one failing test.
 
@@ -323,10 +399,20 @@ def skipped_count(bundle: FactBundle) -> int:
 def total_count(bundle: FactBundle) -> int:
     """Return the total number of tests reported by the Run Record.
 
+    Thin wrapper over :func:`record_total_count` so the bundle-level and
+    record-level call sites (the latter is used pre-bundle by the
+    ``suite-did-not-execute`` envelope warning) share one counting rule.
+    """
+    return record_total_count(bundle.run_record)
+
+
+def record_total_count(record: RunRecord) -> int:
+    """Return the total number of tests reported by ``record``.
+
     Prefers ``summary_counts['total']`` (the canonical key adapters
     populate); falls back to ``len(test_results)`` when absent.
     """
-    counts = bundle.run_record.summary_counts
+    counts = record.summary_counts
     if "total" in counts:
         return counts["total"]
-    return len(bundle.run_record.test_results)
+    return len(record.test_results)

@@ -13,7 +13,7 @@
   
     ! [investigate_location] Investigate `divide`@7 in `src/calc.py` (rank 1, ochiai=1.000, sbfl_per_test).
         ↳ localization_finding src/calc.py:7 (rank 1)
-    — [unavailable_analysis] Failing tests but downstream analysis incomplete: regression (no-comparable-baseline).
+    — [unavailable_analysis] Downstream analysis incomplete: regression (no-comparable-baseline).
         ↳ run_reference 01TESTRUN000000000000000000
   '''
 # ---
