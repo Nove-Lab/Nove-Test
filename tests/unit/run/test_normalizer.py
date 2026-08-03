@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from novetest.models import FAIL_LIKE_OUTCOMES, TestResult
 from novetest.run.errors import AdapterInvocationError
-from novetest.run.normalizer import normalize_native_result
+from novetest.run.normalizer import (
+    _aggregate_pytest_status,
+    _map_pytest_outcome,
+    normalize_native_result,
+)
 from novetest.run.types import NativeEngineContext, NativeResult
 
 
@@ -167,6 +172,259 @@ def test_artifact_paths_serialized_as_strings(tmp_path: Path) -> None:
     )
     for value in record.artifact_paths.values():
         assert isinstance(value, str)
+
+
+# ---------------------------------------------------------------------------
+# pytest outcome mapping — delivery-phasing row 49
+#
+# pytest-json-report writes the category returned by pytest's
+# `pytest_report_teststatus` hook, so a setup OR teardown failure arrives as
+# singular `"error"`. That spelling is not in `FAIL_LIKE_OUTCOMES`, so copying
+# it through verbatim (the pre-fix behaviour) made a suite whose only trouble
+# was an erroring fixture aggregate to `status="passed"` — `all_green` at exit
+# 0. The payloads below are TRANSCRIBED from real pytest-json-report output
+# produced by `tests/fixtures/projects/pytest-fixture-error/` (pytest 8.x +
+# pytest-json-report 1.5.0), not invented: note that the setup-error entry has
+# NO `call` key at all, while the teardown-error entry has a passing `call`.
+# ---------------------------------------------------------------------------
+
+
+SETUP_ERROR_PAYLOAD: dict[str, object] = {
+    "exitcode": 1,
+    "summary": {"error": 1, "passed": 1, "total": 2, "collected": 2},
+    "tests": [
+        {
+            "nodeid": "tests/test_setup_error.py::test_needs_warehouse",
+            "outcome": "error",
+            "setup": {
+                "duration": 0.0001,
+                "outcome": "failed",
+                "crash": {
+                    "path": "/abs/tests/test_setup_error.py",
+                    "lineno": 26,
+                    "message": "RuntimeError: warehouse service unavailable",
+                },
+                "longrepr": ">       raise RuntimeError('warehouse service unavailable')",
+            },
+            # No `call` phase: the body never ran.
+            "teardown": {"duration": 0.0001, "outcome": "passed"},
+        },
+        {
+            "nodeid": "tests/test_setup_error.py::test_needs_nothing",
+            "outcome": "passed",
+            "setup": {"duration": 0.0001, "outcome": "passed"},
+            "call": {"duration": 0.0001, "outcome": "passed"},
+            "teardown": {"duration": 0.0001, "outcome": "passed"},
+        },
+    ],
+}
+
+
+TEARDOWN_ERROR_PAYLOAD: dict[str, object] = {
+    "exitcode": 1,
+    # Real pytest-json-report output: the item resolves to the non-passing
+    # category, so the summary block carries NO `passed` key even though
+    # pytest's own terminal line reads "1 passed, 1 error".
+    "summary": {"error": 1, "total": 1, "collected": 1},
+    "tests": [
+        {
+            "nodeid": "tests/test_teardown_error.py::test_with_session",
+            "outcome": "error",
+            "setup": {"duration": 0.0001, "outcome": "passed"},
+            "call": {"duration": 0.0001, "outcome": "passed"},
+            "teardown": {
+                "duration": 0.0001,
+                "outcome": "failed",
+                "crash": {
+                    "path": "/abs/tests/test_teardown_error.py",
+                    "lineno": 26,
+                    "message": "RuntimeError: warehouse session close failed",
+                },
+                "longrepr": ">       raise RuntimeError('warehouse session close failed')",
+            },
+        }
+    ],
+}
+
+
+def test_pytest_outcome_table_maps_error_to_errored(tmp_path: Path) -> None:
+    """The one mapping that changes behaviour: singular `"error"` (pytest's
+    setup/teardown-failure category) becomes the Run Record's `"errored"`,
+    which IS in `FAIL_LIKE_OUTCOMES` — the whole point of the row-49 fix."""
+
+    assert _map_pytest_outcome("error") == "errored"
+    # The claim that makes it load-bearing, asserted rather than assumed.
+    assert "errored" in FAIL_LIKE_OUTCOMES
+    assert "error" not in FAIL_LIKE_OUTCOMES
+
+
+@pytest.mark.parametrize(
+    "outcome", ["passed", "failed", "skipped", "xfailed", "xpassed"]
+)
+def test_pytest_outcome_table_passes_every_other_outcome_through(
+    outcome: str,
+) -> None:
+    """Every other pytest category is already spelled the way the Run Record
+    spells it, so the table is an identity on all of them. Pinned so a future
+    edit to the table cannot quietly rename e.g. `xfailed` -> `skipped`."""
+
+    assert _map_pytest_outcome(outcome) == outcome
+
+
+def test_unrecognized_pytest_outcome_maps_to_unknown_without_raising() -> None:
+    """An unseen category (a plugin may register one — `"rerun"` from
+    pytest-rerunfailures is the canonical example) degrades to `"unknown"`
+    rather than raising, matching `_map_jest_outcome` /
+    `_GOTEST_ACTION_TO_OUTCOME` / `_CARGO_EVENT_TO_OUTCOME`. Losing a whole
+    run over one unrecognized string would be strictly worse than one test
+    row reading `unknown`."""
+
+    assert _map_pytest_outcome("rerun") == "unknown"
+    assert _map_pytest_outcome("") == "unknown"
+
+
+def test_setup_error_payload_yields_failed_status(tmp_path: Path) -> None:
+    """THE row-49 reproducer, at payload level: a fixture that raises plus a
+    passing test. Pre-fix this normalized to `status="passed"` with outcomes
+    `["error", "passed"]`; the run is now honestly `"failed"`."""
+
+    record = normalize_native_result(
+        _native_result(SETUP_ERROR_PAYLOAD, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_setup_error.py",
+        target_type="file",
+    )
+    assert record.status == "failed"
+    assert sorted(tr.outcome for tr in record.test_results) == ["errored", "passed"]
+    errored = [tr for tr in record.test_results if tr.outcome == "errored"]
+    assert errored[0].node_id == "tests/test_setup_error.py::test_needs_warehouse"
+    # The crash text lives in the `setup` phase; the extractor reads `call`
+    # only, so an errored test carries no failure_reference today. Pinned as
+    # the CURRENT contract (downstream `failure_proximity` treats a missing
+    # reference as "no evidence" and does not crash) — not as a desirable
+    # one; widening the extraction to setup/teardown is a separate change.
+    assert errored[0].failure_reference is None
+
+
+def test_teardown_error_payload_yields_failed_status(tmp_path: Path) -> None:
+    """The other half of the same shape: the body passed and teardown blew
+    up. Same singular `"error"` category, same `"failed"` run status — one
+    mapping covers both phases."""
+
+    record = normalize_native_result(
+        _native_result(TEARDOWN_ERROR_PAYLOAD, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_teardown_error.py",
+        target_type="file",
+    )
+    assert record.status == "failed"
+    assert [tr.outcome for tr in record.test_results] == ["errored"]
+    # The payload's own summary block is passed through verbatim — it carries
+    # no `failed` key at all, which is why the status must be derived from the
+    # per-test outcomes and not from the summary.
+    assert "failed" not in record.summary_counts
+
+
+def test_all_error_suite_yields_failed_status(tmp_path: Path) -> None:
+    """Every test errored, nothing failed, exit code 1 — the case the
+    two-test reproducer does not cover. `"passed"` here would be the same
+    falsehood row 49 registers, with a fully-red suite behind it."""
+
+    payload: dict[str, object] = {
+        "exitcode": 1,
+        "summary": {"error": 3, "total": 3, "collected": 3},
+        "tests": [
+            {
+                "nodeid": f"tests/test_all.py::test_{i}",
+                "outcome": "error",
+                "setup": {"duration": 0.0001, "outcome": "failed"},
+            }
+            for i in range(3)
+        ],
+    }
+    record = normalize_native_result(
+        _native_result(payload, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/",
+        target_type="directory",
+    )
+    assert record.status == "failed"
+    assert {tr.outcome for tr in record.test_results} == {"errored"}
+
+
+def test_error_plus_real_failure_payload_still_failed(tmp_path: Path) -> None:
+    """The blast-radius row that was ALREADY correct before the fix (one
+    genuine `failed` test makes the run non-green on its own). Pinned so the
+    mapping change cannot move it: still `"failed"`, and the failing test
+    still carries its inline failure reference."""
+
+    payload: dict[str, object] = {
+        "exitcode": 1,
+        "summary": {"error": 1, "failed": 1, "total": 2, "collected": 2},
+        "tests": [
+            SETUP_ERROR_PAYLOAD["tests"][0],  # type: ignore[index]
+            {
+                "nodeid": "tests/test_mixed.py::test_wrong_expectation",
+                "outcome": "failed",
+                "call": {
+                    "duration": 0.0002,
+                    "outcome": "failed",
+                    "crash": {
+                        "path": "tests/test_mixed.py",
+                        "lineno": 36,
+                        "message": "assert 8 == 99",
+                    },
+                },
+            },
+        ],
+    }
+    record = normalize_native_result(
+        _native_result(payload, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/",
+        target_type="directory",
+    )
+    assert record.status == "failed"
+    assert sorted(tr.outcome for tr in record.test_results) == ["errored", "failed"]
+    failed = [tr for tr in record.test_results if tr.outcome == "failed"]
+    assert failed[0].failure_reference is not None
+    assert "assert 8 == 99" in failed[0].failure_reference
+
+
+def test_aggregate_pytest_status_failed_on_errored_result_tuple() -> None:
+    """`_aggregate_pytest_status` directly, on the reproducer's tuple: exit
+    code 1 (NOT in `(2, 3, 5)`) + one `errored` + one `passed` -> `"failed"`.
+
+    No new status value and no new branch: the existing
+    `outcome in FAIL_LIKE_OUTCOMES` count is what carries it, exactly as
+    `_aggregate_junit_status` / `_aggregate_xunit_status` already fold an
+    errored test into a failed run.
+    """
+
+    results = (
+        TestResult(node_id="tests/t.py::test_a", outcome="errored"),
+        TestResult(node_id="tests/t.py::test_b", outcome="passed"),
+    )
+    assert _aggregate_pytest_status({"exitcode": 1}, results) == "failed"
+
+
+def test_aggregate_pytest_status_collection_failure_branch_is_unmoved() -> None:
+    """Row 45's shape (a genuine collection failure) never reaches the
+    outcome question at all: exit codes 2 / 3 / 5 short-circuit to
+    `"errored"` BEFORE any per-test outcome is read.
+
+    Adversarial construction: the tuples below are all-`passed`, so if the
+    exit-code branch were ever reordered below the failure count this would
+    return `"passed"` and the test would fail loudly.
+    """
+
+    all_passed = (TestResult(node_id="tests/t.py::test_a", outcome="passed"),)
+    for exit_code in (2, 3, 5):
+        assert _aggregate_pytest_status({"exitcode": exit_code}, all_passed) == "errored"
+    # And the ordinary green path is still green.
+    assert _aggregate_pytest_status({"exitcode": 0}, all_passed) == "passed"
+    # A missing / non-int exit code stays `errored` too.
+    assert _aggregate_pytest_status({}, all_passed) == "errored"
 
 
 # ---------------------------------------------------------------------------

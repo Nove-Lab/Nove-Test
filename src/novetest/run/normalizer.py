@@ -147,9 +147,41 @@ def _normalize_pytest_payload(
     return status, summary, test_results
 
 
+_PYTEST_OUTCOME_TO_OUTCOME: dict[str, str] = {
+    "passed": "passed",
+    "failed": "failed",
+    "skipped": "skipped",
+    "xfailed": "xfailed",
+    "xpassed": "xpassed",
+    "error": "errored",
+}
+
+
+def _map_pytest_outcome(pytest_outcome: str) -> str:
+    """Map pytest's own outcome vocabulary onto the Run Record's.
+
+    pytest-json-report writes the *category* returned by pytest's
+    ``pytest_report_teststatus`` hook (`plugin.py::pytest_runtest_logreport`),
+    not the phase report's ``outcome`` — so a setup **or** teardown failure
+    arrives as singular ``"error"``, a spelling that is NOT in
+    ``FAIL_LIKE_OUTCOMES`` (`models/test_result.py`). Copying it verbatim was
+    board row 49: a suite whose only trouble was an erroring fixture
+    aggregated to ``status="passed"`` at exit 0.
+
+    Unrecognized categories map to ``"unknown"`` rather than raising, matching
+    `_map_jest_outcome` / `_GOTEST_ACTION_TO_OUTCOME` / `_CARGO_EVENT_TO_OUTCOME`:
+    a plugin may register a new category (``"rerun"`` from
+    pytest-rerunfailures is the canonical example) and an unseen spelling is
+    not a reason to lose the whole run. Plugin autoload is disabled for our
+    subprocess, so this is a guard, not an expected path.
+    """
+
+    return _PYTEST_OUTCOME_TO_OUTCOME.get(pytest_outcome, "unknown")
+
+
 def _build_pytest_test_result(test_entry: Mapping[str, Any]) -> TestResult:
     node_id = str(test_entry.get("nodeid", ""))
-    outcome = str(test_entry.get("outcome", "unknown"))
+    outcome = _map_pytest_outcome(str(test_entry.get("outcome", "unknown")))
     call_phase = test_entry.get("call")
     call_phase_map = call_phase if isinstance(call_phase, Mapping) else None
 
@@ -200,7 +232,18 @@ def _pytest_phase_duration(phase: object) -> float | None:
 def _aggregate_pytest_status(
     payload: Mapping[str, Any], test_results: tuple[TestResult, ...]
 ) -> str:
-    """Boil the pytest exit code + per-test outcomes down to a Run status."""
+    """Boil the pytest exit code + per-test outcomes down to a Run status.
+
+    Rules (in order) — the same convention `_aggregate_junit_status` /
+    `_aggregate_xunit_status` already state:
+    - Missing / non-int exit code, or one of ``(2, 3, 5)`` (internal error,
+      usage error, no tests collected) → ``"errored"``: the suite did not run.
+      This branch is decided before any per-test outcome is read.
+    - Any fail-like TestResult (``"failed"`` OR ``"errored"``) → ``"failed"``.
+      An erroring fixture reaches this line via `_map_pytest_outcome`; a run
+      with errors but no outright failures is NOT green.
+    - Otherwise → ``"passed"``.
+    """
 
     exit_code = payload.get("exitcode")
     if not isinstance(exit_code, int):
