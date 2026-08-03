@@ -2,20 +2,24 @@
 
 Two layers:
 
-1. **Policy tests** — the full Defect-5 / Defect-7 scenario matrix
-   exercised directly at the workflow seam
+1. **Policy tests** — the full Defect-5 / Defect-7 / row-41 / row-43
+   scenario matrix exercised directly at the workflow seam
    (``orchestration/workflows/localization.py``): passthroughs,
-   invalidate+re-derive, and the failure_proximity formula-noop
-   carve-out, including WHICH audit structure comes back.
+   invalidate+re-derive (on explicit AND on defaulted flags since the
+   2026-08-03 determinism fix), the failure_proximity formula-noop
+   carve-out, and the stale-build detector — including WHICH audit
+   structure comes back.
 
 2. **Behavior-preservation oracle (S17 precedent)** — a verbatim replica
    of the pre-S22 ``cli/app.py::_rederive_if_cache_overrode_flags``
    (policy + immediate ``EnvelopeWarning`` construction) is run side by
    side with the NEW pipeline (workflow policy → audit →
-   ``cli/app.py::_localization_audit_warning``). For every scenario the
-   two pipelines must produce the same outcome object and an EQUAL
-   ``EnvelopeWarning | None`` — proving the extraction changed nothing
-   on the wire.
+   ``cli/app.py::_localization_audit_warning``). Every scenario but one
+   must produce the same outcome object and an EQUAL
+   ``EnvelopeWarning | None`` — proving the S22 extraction still changed
+   nothing on the wire. The single exception is the row-41 fix's own
+   input (defaulted flags differing from the cache), where the oracle
+   pins the DIVERGENCE instead: see ``diverges_by_design``.
 
 The engine seams (``derive_localization_findings``,
 ``invalidate_localization_findings``) are monkeypatched at the workflow
@@ -63,11 +67,36 @@ def _ref() -> RunReference:
     return RunReference(run_id=_RUN_ID, created_at=1_700_000_000_000)
 
 
+def _current_build_metadata(mode: str) -> dict[str, Any]:
+    """``metadata`` exactly as THIS build's engine renders it, per mode.
+
+    Both SBFL pipelines run every finding through
+    ``localization/derive.py::_exclusion_metadata``, so the four
+    ``test_file_*`` keys are unconditional there since ``088091e``;
+    ``failure_proximity`` carries only the two older keys and never had
+    the four. The row-43 staleness detector reads exactly this
+    difference, so a fixture that hand-waves ``metadata={}`` on an SBFL
+    mode is not a payload this build can emit — it is a PRE-088091e
+    payload, and tests that want the ordinary case must say so.
+    """
+    base: dict[str, Any] = {"changed_files_count": None, "regression_reweighted": None}
+    if mode == "failure_proximity":
+        return {"changed_files_count": 0, "regression_reweighted": False}
+    return {
+        **base,
+        "test_file_locations_excluded": 1,
+        "test_file_exclusion_reverted": False,
+        "test_file_exclusion_basis": "exact",
+        "test_file_locations_suppressed": [],
+    }
+
+
 def _make_finding(
     *,
     formula: str = "ochiai",
     top_n: int = 10,
     mode: str = "sbfl_per_test",
+    metadata: dict[str, Any] | None = None,
 ) -> LocalizationFinding:
     ref = _ref()
     citation = EvidenceCitation(
@@ -105,7 +134,28 @@ def _make_finding(
         top_n=top_n,
         entries=(entry,),
         derived_at=9_000,
-        metadata={},
+        metadata=_current_build_metadata(mode) if metadata is None else metadata,
+    )
+
+
+def _stale_build_finding(
+    *,
+    formula: str = "ochiai",
+    top_n: int = 10,
+    mode: str = "sbfl_per_test",
+) -> LocalizationFinding:
+    """A finding in the shape a PRE-``088091e`` build persisted (row 43).
+
+    Same payload minus the four ``test_file_*`` keys — measured, not
+    guessed: a real v0.2.1 build derives ``metadata`` keys
+    ``['changed_files_count', 'regression_reweighted']`` and nothing
+    else.
+    """
+    return _make_finding(
+        formula=formula,
+        top_n=top_n,
+        mode=mode,
+        metadata={"changed_files_count": 0, "regression_reweighted": False},
     )
 
 
@@ -175,10 +225,73 @@ def test_unavailable_outcome_passes_through_with_no_audit(
     assert fake_cache.exists  # never invalidated
 
 
-def test_defaulted_flags_never_trigger_rederive_despite_cache_diff(
+def test_defaulted_formula_rederives_when_cache_holds_another_formula(
     monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
 ) -> None:
-    cached = _make_finding(formula="dstar2", top_n=3)
+    """Row-41 fix: an OMITTED ``--formula`` asks for ``DEFAULT_FORMULA``.
+
+    Pre-fix this returned the cached ``dstar2`` finding untouched, which
+    is how a bare ``localization latest`` came to serve back the last
+    EXPLICITLY requested formula (same command, same inputs, different
+    answer). The defaults are already substituted into
+    ``resolved_formula`` before the policy runs, so the mismatch is real
+    and the cache must be re-derived.
+    """
+    cached = _make_finding(formula="dstar2", top_n=10)
+    fresh = _make_finding(formula="ochiai", top_n=10)
+    fake = _two_phase_derive(cached, fresh)
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert isinstance(audit, CacheRederivedAudit)
+    assert (audit.previous_formula, audit.requested_formula) == ("dstar2", "ochiai")
+    # The audit still DISCLOSES that neither flag was typed by the user —
+    # the booleans stopped gating and became pure disclosure.
+    assert audit.formula_explicit is False
+    assert audit.top_n_explicit is False
+    assert fake_cache.invalidations == [(_STORE, _RUN_ID)]
+    assert len(fake.calls) == 2  # type: ignore[attr-defined]
+    _, second_kwargs = fake.calls[1]  # type: ignore[attr-defined]
+    assert second_kwargs == {"top_n": 10, "formula": "ochiai"}
+
+
+def test_defaulted_top_n_rederives_when_cache_holds_another_top_n(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """Row-41 fix, ``top_n`` half — the same gating covered both fields."""
+    cached = _make_finding(formula="ochiai", top_n=3)
+    fresh = _make_finding(formula="ochiai", top_n=10)
+    fake = _two_phase_derive(cached, fresh)
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert isinstance(audit, CacheRederivedAudit)
+    assert (audit.previous_top_n, audit.requested_top_n) == (3, 10)
+    assert not fake_cache.exists
+
+
+def test_defaulted_flags_matching_the_cache_stay_a_silent_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """The common case must stay cheap: bare call, cache already at the
+    defaults, current-build metadata → one engine call, no invalidation,
+    no warning. (Guards the row-41 fix against becoming "re-derive on
+    every bare call".)"""
+    cached = _make_finding(formula="ochiai", top_n=10)
     fake = _two_phase_derive(cached, cached)
     monkeypatch.setattr(wf, "derive_localization_findings", fake)
     outcome, audit = derive_localization_with_flag_policy(
@@ -317,6 +430,41 @@ def test_failure_proximity_top_n_mismatch_still_rederives(
     assert not fake_cache.exists
 
 
+def test_failure_proximity_bare_calls_never_warn_however_often_repeated(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """Defect-7 no-loop guard against the row-41 change.
+
+    The Defect-7 loop was "every retry re-derives, gets the same
+    placeholder back, warns again". Making DEFAULTED flags trigger
+    re-derives could have re-armed it through the default path — it does
+    not, because ``failure_proximity``'s placeholder IS
+    ``DEFAULT_FORMULA`` (``localization/failure_proximity.py::
+    _PLACEHOLDER_FORMULA`` == ``"ochiai"``), so a bare call finds no
+    mismatch at all. Ten consecutive bare calls: no audit, no
+    invalidation, one engine call each.
+    """
+    placeholder = _make_finding(
+        formula="ochiai", top_n=10, mode="failure_proximity"
+    )
+    fake = _two_phase_derive(placeholder, placeholder)
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    for _ in range(10):
+        outcome, audit = derive_localization_with_flag_policy(
+            _STORE,  # type: ignore[arg-type]
+            _ref(),
+            formula="ochiai",
+            top_n=10,
+            formula_explicit=False,
+            top_n_explicit=False,
+        )
+        assert outcome is placeholder
+        assert audit is None
+    assert len(fake.calls) == 10  # type: ignore[attr-defined]
+    assert fake_cache.invalidations == []
+    assert fake_cache.exists
+
+
 def test_latest_variant_applies_the_same_policy(
     monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
 ) -> None:
@@ -345,6 +493,171 @@ def test_latest_variant_applies_the_same_policy(
     assert latest_calls == [{"formula": "dstar2", "top_n": 10}]
     assert outcome is fresh
     assert isinstance(audit, CacheRederivedAudit)
+    assert fake_cache.invalidations == [(_STORE, _RUN_ID)]
+
+
+# ---------------------------------------------------------------------------
+# 1b) Row-43 — the stale-build detector (an SBFL-mode finding whose
+#     ``metadata`` lacks ``test_file_exclusion_basis`` predates 088091e).
+# ---------------------------------------------------------------------------
+
+
+def test_stale_build_sbfl_finding_is_invalidated_and_rederived(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """Flags agree, so pre-row-43 this was served verbatim: a v0.2.1-derived
+    ranking returned by a v0.3.0 binary at ``ok: true`` with no warning.
+    Now the four-key detector fires: invalidate, re-derive at the resolved
+    flags, and report the DISTINCT stale-build audit."""
+    stale = _stale_build_finding(formula="ochiai", top_n=10)
+    fresh = _make_finding(formula="ochiai", top_n=10)
+    fake = _two_phase_derive(stale, fresh)
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert audit == wf.StaleBuildRederivedAudit(
+        run_id=_RUN_ID,
+        mode="sbfl_per_test",
+        missing_metadata_key="test_file_exclusion_basis",
+        requested_formula="ochiai",
+        requested_top_n=10,
+    )
+    # Invalidation through the PUBLIC engine API, re-derive at the
+    # resolved flags — the same mechanics as the flag-override path.
+    assert fake_cache.invalidations == [(_STORE, _RUN_ID)]
+    assert not fake_cache.exists
+    assert len(fake.calls) == 2  # type: ignore[attr-defined]
+    _, second_kwargs = fake.calls[1]  # type: ignore[attr-defined]
+    assert second_kwargs == {"top_n": 10, "formula": "ochiai"}
+
+
+def test_stale_build_detector_also_covers_sbfl_aggregate(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """Both SBFL modes render the four keys, so both are in scope."""
+    stale = _stale_build_finding(mode="sbfl_aggregate")
+    fresh = _make_finding(mode="sbfl_aggregate")
+    monkeypatch.setattr(
+        wf, "derive_localization_findings", _two_phase_derive(stale, fresh)
+    )
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert isinstance(audit, wf.StaleBuildRederivedAudit)
+    assert audit.mode == "sbfl_aggregate"
+
+
+def test_current_build_finding_is_not_rederived_by_the_stale_detector(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """The common case stays a cheap cache hit: a finding carrying the
+    four keys triggers exactly ONE engine call and no invalidation."""
+    cached = _make_finding(formula="ochiai", top_n=10)
+    assert "test_file_exclusion_basis" in cached.metadata  # fixture guard
+    fake = _two_phase_derive(cached, _make_finding())
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is cached
+    assert audit is None
+    assert len(fake.calls) == 1  # type: ignore[attr-defined]
+    assert fake_cache.invalidations == []
+    assert fake_cache.exists
+
+
+def test_failure_proximity_missing_keys_is_not_treated_as_stale(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """The SBFL-mode guard is load-bearing, not decoration.
+
+    A FRESH ``failure_proximity`` finding from this build also lacks the
+    four keys (measured: its metadata is
+    ``['changed_files_count', 'regression_reweighted']``), so applying
+    the detector there would re-derive every no-coverage run forever.
+    """
+    fp = _make_finding(mode="failure_proximity")
+    assert "test_file_exclusion_basis" not in fp.metadata  # fixture guard
+    fake = _two_phase_derive(fp, _make_finding(mode="failure_proximity"))
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fp
+    assert audit is None
+    assert len(fake.calls) == 1  # type: ignore[attr-defined]
+    assert fake_cache.exists
+
+
+def test_stale_build_plus_flag_mismatch_reports_the_flag_audit(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """Precedence, pinned: when the flags ALREADY force a re-derive, the
+    payload is refreshed by this build anyway and
+    ``localization-cache-rederived`` already discloses it — so the
+    stale-build check does not double-fire and the wire behaviour of
+    every pre-existing flag-override case is untouched."""
+    stale = _stale_build_finding(formula="ochiai", top_n=10)
+    fresh = _make_finding(formula="op2", top_n=10)
+    fake = _two_phase_derive(stale, fresh)
+    monkeypatch.setattr(wf, "derive_localization_findings", fake)
+    outcome, audit = derive_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        _ref(),
+        formula="op2",
+        top_n=10,
+        formula_explicit=True,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert isinstance(audit, CacheRederivedAudit)
+    # ONE invalidation + ONE re-derive, not two of each.
+    assert fake_cache.invalidations == [(_STORE, _RUN_ID)]
+    assert len(fake.calls) == 2  # type: ignore[attr-defined]
+
+
+def test_stale_build_detector_on_the_latest_variant(
+    monkeypatch: pytest.MonkeyPatch, fake_cache: _FakeCache
+) -> None:
+    """``localization latest`` shares the policy, so it shares the fix."""
+    stale = _stale_build_finding()
+    fresh = _make_finding()
+    monkeypatch.setattr(wf, "derive_latest_localization", lambda *_a, **_k: stale)
+    monkeypatch.setattr(
+        wf, "derive_localization_findings", lambda *_a, **_k: fresh
+    )
+    outcome, audit = derive_latest_localization_with_flag_policy(
+        _STORE,  # type: ignore[arg-type]
+        formula="ochiai",
+        top_n=10,
+        formula_explicit=False,
+        top_n_explicit=False,
+    )
+    assert outcome is fresh
+    assert isinstance(audit, wf.StaleBuildRederivedAudit)
     assert fake_cache.invalidations == [(_STORE, _RUN_ID)]
 
 
@@ -429,7 +742,10 @@ _ORACLE_SCENARIOS: list[dict[str, Any]] = [
         "top_n_explicit": True,
     },
     {
+        # The ONE scenario the row-41 fix deliberately changed: the
+        # oracle asserts DIVERGENCE here, not equality (see the test).
         "name": "defaulted-flags-keep-cache",
+        "diverges_by_design": True,
         "cached": {"formula": "dstar2", "top_n": 3},
         "fresh": {"formula": "ochiai", "top_n": 10},
         "formula": "ochiai",
@@ -557,6 +873,22 @@ def test_oracle_new_pipeline_equals_premove_inline_policy(
         derive_localization_findings=old_fake,
         localization_findings_path=lambda *_a, **_k: old_cache_file,
     )
+
+    if scenario.get("diverges_by_design"):
+        # Row-41 (2026-08-03) intentionally broke the pre-move behaviour
+        # for exactly this input: defaulted flags that differ from the
+        # cache. The oracle keeps the scenario and pins the divergence so
+        # a future refactor cannot quietly restore the old answer.
+        assert old_outcome is cached and old_warning is None, (
+            "the pre-row-41 replica is supposed to serve the stale cache here"
+        )
+        assert new_outcome is fresh, (
+            "post-row-41 a bare call must re-derive at the DEFAULT values"
+        )
+        assert new_warning is not None
+        assert new_warning.code == "localization-cache-rederived"
+        assert new_cache.exists is False and old_cache_file.exists() is True
+        return
 
     assert new_outcome is old_outcome or new_outcome == old_outcome
     assert new_warning == old_warning

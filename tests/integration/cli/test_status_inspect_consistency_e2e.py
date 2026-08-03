@@ -196,7 +196,23 @@ def _seed_store_with_all_facts(workspace: Path) -> Path:
         top_n=10,
         entries=(localization_entry,),
         derived_at=_LATEST_REF.created_at + 2_000,
-        metadata={},
+        # Load-bearing since the row-43 stale-build detector (2026-08-03):
+        # every SBFL-mode finding THIS build persists carries the four
+        # ``test_file_*`` keys (``localization/derive.py::
+        # _exclusion_metadata``), so a seed without them is not a
+        # current-build artifact — it is a pre-``088091e`` one, and the
+        # ``localization`` verb would (correctly) invalidate it and
+        # re-derive instead of serving it. This seed exists to exercise
+        # the Defect-6 availability agreement, so it must look like what
+        # this build writes.
+        metadata={
+            "changed_files_count": None,
+            "regression_reweighted": None,
+            "test_file_locations_excluded": 0,
+            "test_file_exclusion_reverted": False,
+            "test_file_exclusion_basis": "exact",
+            "test_file_locations_suppressed": [],
+        },
     )
     write_localization_findings(store, finding)
 

@@ -59,6 +59,7 @@ from novetest.cli.handlers.licenses import licenses_cmd
 from novetest.cli.handlers.localization import (
     _build_localization_cache_rederived_warning,
     _build_localization_formula_noop_warning,
+    _build_localization_stale_build_rederived_warning,
     _localization_audit_warning,
     localization_latest,
     localization_run,
@@ -311,6 +312,7 @@ __all__ = [
     "build_test_envelope",
     "_build_localization_cache_rederived_warning",
     "_build_localization_formula_noop_warning",
+    "_build_localization_stale_build_rederived_warning",
     "_localization_audit_warning",
     "coverage_delta_payload",
     "coverage_outcome_payload",

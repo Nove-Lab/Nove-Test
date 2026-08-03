@@ -73,6 +73,37 @@ def _make_memory_entry(run_id: str, *, created_at: int = 1_700_000_000_000) -> M
     return MemoryEntry(entry_id=run_id, run_record=record, stored_at=created_at + 2_000)
 
 
+_STALE_BUILD_METADATA: dict[str, Any] = {
+    # What a PRE-``088091e`` build persisted — measured against a real
+    # v0.2.1 binary, whose findings carry exactly these two keys.
+    "changed_files_count": 0,
+    "regression_reweighted": False,
+}
+
+
+def _current_build_metadata(mode: str) -> dict[str, Any]:
+    """``metadata`` as THIS build's engine renders it, per mode.
+
+    Both SBFL pipelines route through
+    ``localization/derive.py::_exclusion_metadata``, so the four
+    ``test_file_*`` keys are unconditional there; ``failure_proximity``
+    never carried them. The row-43 staleness detector reads exactly that
+    difference, so an SBFL-mode fixture with ``metadata={}`` is not a
+    payload this build can emit — it is a stale-build payload, and tests
+    for the ordinary case must not accidentally use one.
+    """
+    if mode == "failure_proximity":
+        return dict(_STALE_BUILD_METADATA)
+    return {
+        "changed_files_count": None,
+        "regression_reweighted": None,
+        "test_file_locations_excluded": 1,
+        "test_file_exclusion_reverted": False,
+        "test_file_exclusion_basis": "exact",
+        "test_file_locations_suppressed": [],
+    }
+
+
 def _make_finding(
     run_id: str = _RUN_ID,
     *,
@@ -80,6 +111,7 @@ def _make_finding(
     top_n: int = 10,
     derived_at: int = 9_000,
     mode: str = "sbfl_per_test",
+    metadata: dict[str, Any] | None = None,
 ) -> LocalizationFinding:
     """Construct a deterministic ``LocalizationFinding`` for unit tests.
 
@@ -132,7 +164,9 @@ def _make_finding(
             top_n=top_n,
             entries=(fp_entry,),
             derived_at=derived_at,
-            metadata={},
+            metadata=_current_build_metadata("failure_proximity")
+            if metadata is None
+            else metadata,
         )
     # SBFL shape — symbol-level entry, populated alternate scores.
     loc = CodeLocation(
@@ -166,7 +200,7 @@ def _make_finding(
         top_n=top_n,
         entries=(entry,),
         derived_at=derived_at,
-        metadata={},
+        metadata=_current_build_metadata(mode) if metadata is None else metadata,
     )
 
 
@@ -794,7 +828,7 @@ def test_localization_run_no_warning_when_request_matches_cache(
     assert stub_cache_path.exists()
 
 
-def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
+def test_localization_run_rederives_at_defaults_when_flags_omitted(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     force_json_mode: None,
@@ -802,13 +836,60 @@ def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
     stub_history: None,
     stub_cache_path: Path,
 ) -> None:
-    """Case (e) — cache stored ``dstar2 / top_n=3`` but the user passes
-    NEITHER flag (both default in effect). Per brief scope §1, a
-    defaulted flag never triggers re-derive even when it differs from
-    the cache. Cache returned verbatim; no warning. Regression-pin for
-    the "no explicit signal → keep cache" path."""
+    """Case (e), INVERTED by the row-41 determinism fix (2026-08-03).
+
+    Cache stored ``dstar2 / top_n=3``; the user passes NEITHER flag. The
+    pre-fix policy returned that cached finding verbatim with no warning
+    — which is how a bare ``localization`` / ``localization latest``
+    came to answer with the last explicitly-requested formula (board row
+    41: same command, same inputs, history-dependent answer). Post-fix an
+    omitted flag means "the default value", so the cache is invalidated
+    and re-derived at ``ochiai`` / ``top_n=10``, and the existing
+    ``localization-cache-rederived`` warning discloses it with
+    ``formula_explicit``/``top_n_explicit`` BOTH false — the audit's
+    booleans became disclosure rather than a gate."""
 
     cached_finding = _make_finding(formula="dstar2", top_n=3)
+    fresh_finding = _make_finding(formula=DEFAULT_FORMULA, top_n=DEFAULT_TOP_N)
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID)
+    assert exc_info.value.code == 0
+
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
+    assert not stub_cache_path.exists()
+    payload = _captured_envelope(capsys)
+    outcome = payload["data"]["localization_outcome"]
+    assert outcome["formula"] == DEFAULT_FORMULA
+    assert outcome["top_n"] == DEFAULT_TOP_N
+
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["code"] == _CACHE_WARN_CODE
+    details = warning["details"]
+    assert details["previous"] == {"formula": "dstar2", "top_n": 3}
+    assert details["requested"]["formula"] == DEFAULT_FORMULA
+    assert details["requested"]["top_n"] == DEFAULT_TOP_N
+    assert details["requested"]["formula_explicit"] is False
+    assert details["requested"]["top_n_explicit"] is False
+
+
+def test_localization_run_no_warning_when_defaults_match_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """The row-41 fix must not turn every bare call into a re-derive: a
+    cache already sitting at the defaults is served with ONE engine call,
+    no invalidation and no warning."""
+
+    cached_finding = _make_finding(formula=DEFAULT_FORMULA, top_n=DEFAULT_TOP_N)
     fake_derive = _two_phase_derive(cached_finding, cached_finding)
     monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
@@ -817,13 +898,9 @@ def test_localization_run_no_warning_when_flags_omitted_despite_cache_diff(
     assert exc_info.value.code == 0
 
     assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    assert stub_cache_path.exists()
     payload = _captured_envelope(capsys)
     assert payload["warnings"] == []
-    # User saw the cached finding verbatim (no re-derive).
-    outcome = payload["data"]["localization_outcome"]
-    assert outcome["formula"] == "dstar2"
-    assert outcome["top_n"] == 3
-    assert stub_cache_path.exists()
 
 
 def test_localization_run_no_warning_when_outcome_is_unavailable(
@@ -1007,32 +1084,39 @@ def test_localization_run_sbfl_default_formula_unchanged_behavior(
     stub_cache_path: Path,
 ) -> None:
     """Matrix #3: ``sbfl_per_test`` mode + no ``--formula`` flag. The
-    Defect 7 carve-out MUST NOT change behavior here — engine called
-    exactly once (whatever the cached formula is matches the resolved
-    default since the user didn't pass it explicitly). Regression-pin
-    that the new mode-aware branch only activates for failure_proximity.
+    Defect 7 carve-out MUST NOT activate here — it is
+    ``failure_proximity``-only, so an SBFL-mode cache whose formula
+    differs from the resolved default takes the ORDINARY re-derive path
+    and reports ``localization-cache-rederived``, never
+    ``localization-formula-noop-in-mode``.
 
-    (This mirrors the pre-existing "no warning when flags omitted
-    despite cache diff" assertion above but explicitly pins the
-    ``mode = "sbfl_per_test"`` axis.)"""
+    Updated for row-41 (2026-08-03): the "engine called exactly once"
+    half of this pin belonged to the pre-fix policy (a defaulted flag
+    could not trigger a re-derive). The Defect-7 axis it exists to guard
+    — WHICH branch a non-``failure_proximity`` mode takes — is pinned
+    below on the warning code instead, and the "no re-derive when the
+    defaults already match" case has its own test."""
 
     cached_finding = _make_finding(
         formula="dstar2", top_n=7, mode="sbfl_per_test"
     )
-    fake_derive = _two_phase_derive(cached_finding, cached_finding)
+    fresh_finding = _make_finding(
+        formula=DEFAULT_FORMULA, top_n=DEFAULT_TOP_N, mode="sbfl_per_test"
+    )
+    fake_derive = _two_phase_derive(cached_finding, fresh_finding)
     monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
 
     with pytest.raises(SystemExit) as exc_info:
         app_module.localization_run(_RUN_ID)
     assert exc_info.value.code == 0
 
-    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
     payload = _captured_envelope(capsys)
-    assert payload["warnings"] == []
     outcome = payload["data"]["localization_outcome"]
     assert outcome["mode"] == "sbfl_per_test"
-    assert outcome["formula"] == "dstar2"
-    assert stub_cache_path.exists()
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == _CACHE_WARN_CODE
+    assert warnings[0]["code"] != "localization-formula-noop-in-mode"
 
 
 def test_localization_run_sbfl_non_default_formula_unchanged_behavior(
@@ -1134,3 +1218,103 @@ def test_localization_run_failure_proximity_non_default_formula_no_rederive_loop
     warnings = payload["warnings"]
     assert len(warnings) == 1
     assert warnings[0]["code"] == _NOOP_WARN_CODE
+
+
+# ---------------------------------------------------------------------------
+# Stale-build re-derive suite (board row 43, 2026-08-03).
+#
+# The derived finding is cached per run reference with NO version
+# component, so a store written by a build older than the SBFL
+# test-file-exclusion fix (``088091e``) used to be served back verbatim by
+# a current binary — ``ok: true``, exit 0, ``warnings: []`` — silently
+# reinstating the test-file misroute that fix removed. The workflow policy
+# now applies the documented four-key detector (SBFL mode + no
+# ``test_file_exclusion_basis`` in ``metadata``) and re-derives; these
+# tests pin the TRANSPORT half: the distinct warning code and its details.
+# ---------------------------------------------------------------------------
+
+
+_STALE_WARN_CODE = "localization-stale-build-rederived"
+
+
+def test_localization_run_stale_build_cache_emits_stale_build_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """A cached SBFL finding missing the four ``test_file_*`` keys, read
+    with NO flags: cache invalidated, engine re-invoked, and exactly one
+    ``localization-stale-build-rederived`` warning — a code distinct from
+    ``localization-cache-rederived`` so a consumer can tell "your cached
+    ranking predates this binary" from "your flag overrode the cache"."""
+
+    stale_finding = _make_finding(
+        formula=DEFAULT_FORMULA,
+        top_n=DEFAULT_TOP_N,
+        metadata=dict(_STALE_BUILD_METADATA),
+    )
+    fresh_finding = _make_finding(formula=DEFAULT_FORMULA, top_n=DEFAULT_TOP_N)
+    fake_derive = _two_phase_derive(stale_finding, fresh_finding)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID)
+    assert exc_info.value.code == 0
+
+    assert len(fake_derive.calls) == 2  # type: ignore[attr-defined]
+    assert not stub_cache_path.exists()
+
+    payload = _captured_envelope(capsys)
+    assert payload["ok"] is True
+    outcome = payload["data"]["localization_outcome"]
+    # The consumer receives the RE-DERIVED payload, which carries the
+    # exclusion metadata the stale one lacked.
+    assert "test_file_exclusion_basis" in outcome["metadata"]
+
+    warnings = payload["warnings"]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning["code"] == _STALE_WARN_CODE
+    assert warning["code"] != _CACHE_WARN_CODE
+    assert "older build" in warning["message"]
+    assert "test_file_exclusion_basis" in warning["message"]
+    details = warning["details"]
+    assert details["run_id"] == _RUN_ID
+    assert details["mode"] == "sbfl_per_test"
+    assert details["missing_metadata_key"] == "test_file_exclusion_basis"
+    assert details["requested"] == {
+        "formula": DEFAULT_FORMULA,
+        "top_n": DEFAULT_TOP_N,
+    }
+    assert details["cache_path"].endswith(
+        f"run_{_RUN_ID}/localization_findings.json"
+    )
+
+
+def test_localization_run_current_build_cache_emits_no_stale_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    force_json_mode: None,
+    stub_store: object,
+    stub_history: None,
+    stub_cache_path: Path,
+) -> None:
+    """Symmetric companion: the ordinary cache hit (all four keys present)
+    stays one engine call, no unlink, no warning — the stale detector must
+    not tax the common path."""
+
+    finding = _make_finding(formula=DEFAULT_FORMULA, top_n=DEFAULT_TOP_N)
+    assert "test_file_exclusion_basis" in finding.metadata  # fixture guard
+    fake_derive = _two_phase_derive(finding, finding)
+    monkeypatch.setattr(localization_workflow, "derive_localization_findings", fake_derive)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module.localization_run(_RUN_ID)
+    assert exc_info.value.code == 0
+
+    assert len(fake_derive.calls) == 1  # type: ignore[attr-defined]
+    assert stub_cache_path.exists()
+    assert _captured_envelope(capsys)["warnings"] == []

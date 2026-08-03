@@ -15,6 +15,7 @@ from novetest.orchestration.workflows.localization import (
     CacheRederivedAudit,
     FormulaNoopAudit,
     LocalizationAudit,
+    StaleBuildRederivedAudit,
     derive_latest_localization_with_flag_policy,
     derive_localization_with_flag_policy,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "LocalizationAudit",
     "ResetResult",
     "RunOutcome",
+    "StaleBuildRederivedAudit",
     "StatusView",
     "TestOutcome",
     "build_compare_view",

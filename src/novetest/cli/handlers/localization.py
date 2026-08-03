@@ -36,6 +36,7 @@ from novetest.orchestration.projection import localization_outcome_payload
 from novetest.orchestration.workflows import (
     CacheRederivedAudit,
     LocalizationAudit,
+    StaleBuildRederivedAudit,
     derive_latest_localization_with_flag_policy,
     derive_localization_with_flag_policy,
 )
@@ -111,17 +112,25 @@ def localization_run(
     "user explicitly passed this value" from "Cyclopts default in effect".
 
     Cache-invalidation policy (Defect 5 fix, 2026-06-01): when the engine
-    serves from cache AND the user explicitly passed ``--formula`` /
-    ``--top-n`` differing from the cached values, the orchestration
-    workflow (``orchestration/workflows/localization.py``) invalidates
-    the cache and re-derives at the requested flags. The audit signal
-    surfaces as the ``localization-cache-rederived`` envelope warning
-    (built HERE from the workflow's audit structure — warning wording is
+    serves from cache AND the resolved ``--formula`` / ``--top-n`` differ
+    from the cached values, the orchestration workflow
+    (``orchestration/workflows/localization.py``) invalidates the cache
+    and re-derives at the requested flags. The audit signal surfaces as
+    the ``localization-cache-rederived`` envelope warning (built HERE
+    from the workflow's audit structure — warning wording is
     transport-owned); pre-Defect-5 the same condition surfaced as
     ``localization-cache-args-ignored`` and the stale cached result was
     returned. See task brief / history at
     ``agent-comms/history/2026-06-01-defect4-closed-and-defects-5-6-surfaced.md``
-    §"Defect 5 surfaced".
+    §"Defect 5 surfaced". Since the row-41 determinism fix (2026-08-03)
+    "resolved" means the DEFAULT value too — omitting ``--formula`` asks
+    for ``ochiai``, it does not accept whatever the cache last stored.
+
+    Stale-build policy (row 43, 2026-08-03): a cached SBFL-mode finding
+    with no ``test_file_exclusion_basis`` in ``metadata`` was derived by
+    a build older than the test-file-exclusion fix; the workflow
+    invalidates and re-derives it, surfacing the distinct
+    ``localization-stale-build-rederived`` warning.
     """
 
     store = _require_store("localization")
@@ -169,12 +178,17 @@ def localization_latest(
     runs are all non-analyzable surfaces ``run-not-analyzable``. Flag
     validation mirrors the explicit-run verb.
 
-    Cache-invalidation policy matches the explicit-run verb (Defect 5 fix):
-    the ``None`` sentinel defaults let the handler distinguish "user
-    explicitly passed this value" from "Cyclopts default in effect", and an
-    explicit-flag mismatch against the cached findings triggers a re-derive
-    + ``localization-cache-rederived`` warning via the shared
-    ``derive_latest_localization_with_flag_policy`` workflow.
+    Cache-invalidation policy matches the explicit-run verb (Defect 5 fix
+    + the row-41/row-43 fixes): the ``None`` sentinels still let the
+    handler tell "user typed this value" from "Cyclopts default in
+    effect" — the audit discloses which — but a mismatch between the
+    RESOLVED flags and the cached findings triggers the re-derive +
+    ``localization-cache-rederived`` warning either way, and a cached
+    finding derived by a pre-exclusion-fix build triggers the re-derive +
+    ``localization-stale-build-rederived`` warning, both via the shared
+    ``derive_latest_localization_with_flag_policy`` workflow. A bare
+    ``localization latest`` therefore always answers at
+    ``DEFAULT_FORMULA`` / ``DEFAULT_TOP_N``, whatever the store's history.
     """
 
     store = _require_store("localization.latest")
@@ -221,7 +235,9 @@ def _localization_audit_warning(
     the workflow reports WHAT happened via an audit structure and this
     transport-side mapper owns the wire wording: a
     :class:`CacheRederivedAudit` becomes the
-    ``localization-cache-rederived`` warning, a :class:`FormulaNoopAudit`
+    ``localization-cache-rederived`` warning, a
+    :class:`StaleBuildRederivedAudit` becomes
+    ``localization-stale-build-rederived``, a :class:`FormulaNoopAudit`
     becomes ``localization-formula-noop-in-mode``, and ``None`` (no
     policy event) stays warning-free.
     """
@@ -235,6 +251,14 @@ def _localization_audit_warning(
             resolved_top_n=audit.requested_top_n,
             formula_explicit=audit.formula_explicit,
             top_n_explicit=audit.top_n_explicit,
+        )
+    if isinstance(audit, StaleBuildRederivedAudit):
+        return _build_localization_stale_build_rederived_warning(
+            run_id=audit.run_id,
+            mode=audit.mode,
+            missing_metadata_key=audit.missing_metadata_key,
+            resolved_formula=audit.requested_formula,
+            resolved_top_n=audit.requested_top_n,
         )
     return _build_localization_formula_noop_warning(
         requested_formula=audit.requested_formula,
@@ -266,17 +290,11 @@ def _build_localization_cache_rederived_warning(
     ``previous`` vs ``requested`` to know what changed and learn that the
     re-compute cost was paid.
 
-    The ``cache_path`` is computed by template — the on-disk layout is
-    pinned by ``localization/persistence.py`` and Memory's availability
-    probe both reference the exact
-    ``<store>/localization/findings/run_<id>/localization_findings.json``
-    path. Hardcoding the template here avoids a redundant disk read and
-    keeps the transport-side warning construction self-contained.
+    The ``cache_path`` comes from :func:`_localization_cache_path` — see
+    that helper for why the layout is templated rather than read.
     """
     prev_formula, prev_top_n = previous_cached_args
-    cache_path = (
-        f".novetest/localization/findings/run_{run_id}/localization_findings.json"
-    )
+    cache_path = _localization_cache_path(run_id)
     message = (
         f"cached findings (--formula='{prev_formula}' --top-n={prev_top_n}) "
         f"were re-derived at requested --formula='{resolved_formula}' "
@@ -295,6 +313,70 @@ def _build_localization_cache_rederived_warning(
                 "top_n": resolved_top_n,
                 "formula_explicit": formula_explicit,
                 "top_n_explicit": top_n_explicit,
+            },
+            "cache_path": cache_path,
+        },
+    )
+
+
+def _localization_cache_path(run_id: str) -> str:
+    """The project-relative path of a run's persisted Localization Findings.
+
+    Computed by template — ``localization/persistence.py`` and Memory's
+    availability probe both reference the exact
+    ``<store>/localization/findings/run_<id>/localization_findings.json``
+    path. Hardcoding the template here avoids a redundant disk read and
+    keeps the transport-side warning construction self-contained; ONE
+    home for it so the two re-derive warnings cannot disagree about where
+    the cache they just overwrote lives.
+    """
+    return f".novetest/localization/findings/run_{run_id}/localization_findings.json"
+
+
+def _build_localization_stale_build_rederived_warning(
+    *,
+    run_id: str,
+    mode: str,
+    missing_metadata_key: str,
+    resolved_formula: str,
+    resolved_top_n: int,
+) -> EnvelopeWarning:
+    """Format the ``localization-stale-build-rederived`` warning payload.
+
+    Reached only via ``_localization_audit_warning`` on a
+    :class:`StaleBuildRederivedAudit`, i.e. after the workflow policy
+    detected that the cached finding was derived by a build predating the
+    test-file-exclusion fix (an SBFL-mode payload with no
+    ``test_file_exclusion_basis`` in ``metadata``), invalidated it and
+    re-derived with THIS build.
+
+    Distinct from ``localization-cache-rederived`` on purpose: that code
+    means "your explicit/default flags differed from the cache", this one
+    means "the cache itself predates this binary and its ranking could
+    not be trusted". A consumer routing on ``warnings[].code`` must be
+    able to tell the upgrade story (the ranking may have MOVED, and the
+    old one was the buggy one) from a flag override. ``details`` names
+    the detector inputs — ``mode`` and ``missing_metadata_key`` — so the
+    documented rule and the enforced rule stay legible as the same rule.
+    """
+    cache_path = _localization_cache_path(run_id)
+    message = (
+        f"cached findings for run {run_id} were derived by an older build "
+        f"(mode='{mode}' with no '{missing_metadata_key}' in metadata — the "
+        f"test-file-exclusion fix postdates them); they were re-derived by "
+        f"this build at --formula='{resolved_formula}' "
+        f"--top-n={resolved_top_n}; cache overwritten at {cache_path}"
+    )
+    return EnvelopeWarning(
+        code="localization-stale-build-rederived",
+        message=message,
+        details={
+            "run_id": run_id,
+            "mode": mode,
+            "missing_metadata_key": missing_metadata_key,
+            "requested": {
+                "formula": resolved_formula,
+                "top_n": resolved_top_n,
             },
             "cache_path": cache_path,
         },

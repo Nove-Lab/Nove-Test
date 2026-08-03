@@ -52,12 +52,44 @@ from novetest.orchestration.workflows import localization as localization_workfl
 _RUN_ID = "01LATESTLOCLATESTLOCLATEST0"
 
 
+_STALE_BUILD_METADATA: dict[str, Any] = {
+    # What a PRE-``088091e`` build persisted — measured against a real
+    # v0.2.1 binary, whose findings carry exactly these two keys.
+    "changed_files_count": 0,
+    "regression_reweighted": False,
+}
+
+
+def _current_build_metadata(mode: str) -> dict[str, Any]:
+    """``metadata`` as THIS build's engine renders it, per mode.
+
+    Both SBFL pipelines route through
+    ``localization/derive.py::_exclusion_metadata``, so the four
+    ``test_file_*`` keys are unconditional there; ``failure_proximity``
+    never carried them. The row-43 staleness detector reads exactly that
+    difference, so an SBFL-mode fixture with ``metadata={}`` is not a
+    payload this build can emit — it is a stale-build payload, and tests
+    for the ordinary case must not accidentally use one.
+    """
+    if mode == "failure_proximity":
+        return dict(_STALE_BUILD_METADATA)
+    return {
+        "changed_files_count": None,
+        "regression_reweighted": None,
+        "test_file_locations_excluded": 1,
+        "test_file_exclusion_reverted": False,
+        "test_file_exclusion_basis": "exact",
+        "test_file_locations_suppressed": [],
+    }
+
+
 def _make_finding(
     *,
     formula: str = "ochiai",
     top_n: int = 10,
     derived_at: int = 7_000,
     mode: str = "sbfl_per_test",
+    metadata: dict[str, Any] | None = None,
 ) -> LocalizationFinding:
     """Construct a deterministic ``LocalizationFinding`` for unit tests.
 
@@ -103,7 +135,9 @@ def _make_finding(
             top_n=top_n,
             entries=(fp_entry,),
             derived_at=derived_at,
-            metadata={},
+            metadata=_current_build_metadata("failure_proximity")
+            if metadata is None
+            else metadata,
         )
     loc = CodeLocation(
         kind="symbol",
@@ -136,7 +170,7 @@ def _make_finding(
         top_n=top_n,
         entries=(entry,),
         derived_at=derived_at,
-        metadata={},
+        metadata=_current_build_metadata(mode) if metadata is None else metadata,
     )
 
 

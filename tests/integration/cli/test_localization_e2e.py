@@ -275,8 +275,10 @@ def test_localization_latest_rederives_when_explicit_flag_overrides_cache(
       ``alternate_scores_available`` field NO LONGER lists ``dstar2``
       since it is now the primary formula).
     - The on-disk ``localization_findings.json`` is overwritten with the
-      fresh payload — a follow-up ``localization`` call with no flags
-      would now return ``dstar2`` (cache-as-source-of-truth).
+      fresh payload — checked below by a follow-up bare call, which since
+      the row-41 determinism fix (2026-08-03) re-derives that payload
+      back to the DEFAULT formula and says so in a warning (pre-fix it
+      returned the leftover ``dstar2``; that was the defect).
     - The envelope-level ``warnings`` tuple carries exactly one
       ``localization-cache-rederived`` warning with
       ``details.previous.formula == "ochiai"`` /
@@ -331,8 +333,11 @@ def test_localization_latest_rederives_when_explicit_flag_overrides_cache(
     # "re-derive happened with the new formula", not "DStar2 picks divide".
     assert top["code_location"]["file"].endswith("calculator.py")
 
-    # The on-disk cache file is overwritten — a follow-up call with no
-    # flags would now return dstar2 (cache-as-source-of-truth post-rederive).
+    # The on-disk cache file WAS overwritten with the dstar2 payload —
+    # proven by the follow-up bare call, which finds a cached formula
+    # differing from ``DEFAULT_FORMULA`` and (row-41 fix) re-derives it
+    # back to ochiai rather than serving dstar2 on. The previous-values
+    # disclosure in the warning is what names the overwritten payload.
     follow_up_code, follow_up_envelope, follow_up_stderr = _run_cli(
         workspace, ["localization", "latest"]
     )
@@ -340,9 +345,17 @@ def test_localization_latest_rederives_when_explicit_flag_overrides_cache(
         f"Follow-up call failed: stderr={follow_up_stderr!r}"
     )
     follow_up_outcome = follow_up_envelope["data"]["localization_outcome"]
-    assert follow_up_outcome["formula"] == "dstar2", (
-        "Cache should have been overwritten with the re-derived dstar2 finding; "
-        f"follow-up reads back {follow_up_outcome.get('formula')!r}"
+    assert follow_up_outcome["formula"] == "ochiai", (
+        "A bare follow-up call must answer at DEFAULT_FORMULA; got "
+        f"{follow_up_outcome.get('formula')!r}"
+    )
+    follow_up_warnings = follow_up_envelope["warnings"]
+    assert isinstance(follow_up_warnings, list)
+    assert len(follow_up_warnings) == 1
+    assert follow_up_warnings[0]["code"] == "localization-cache-rederived"
+    assert follow_up_warnings[0]["details"]["previous"]["formula"] == "dstar2", (
+        "the payload the bare call replaced must be the dstar2 one this "
+        "test just wrote — that is the evidence the cache was overwritten"
     )
 
     warnings = envelope.get("warnings")
@@ -618,3 +631,227 @@ def test_dstar2_alternate_score_is_positive_for_the_bug_symbol(
     dstar2_score = top.alternate_scores["dstar2"]
     assert dstar2_score > 0.0
     assert math.isfinite(dstar2_score)
+
+
+# ---------------------------------------------------------------------------
+# E2E Test 8: the bare-call determinism reproduction (board row 41).
+#
+# Manual Test's measured sequence, run here as a real subprocess triple:
+# bare -> ``--formula op2`` -> bare. Pre-fix the third call answered
+# ``op2`` — same command, same store, a different answer depending on what
+# had been asked before, which is REQ-FOUND's determinism promise failing
+# on the derived-artifact RETRIEVAL path. Post-fix the third call is
+# byte-comparable to the first on every field the formula selects.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_localization_latest_is_not_history_dependent(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """Row 41: bare -> explicit -> bare returns the DEFAULT formula again."""
+
+    workspace = seeded_workspace["workspace"]
+
+    def _outcome(args: list[str]) -> tuple[dict[str, object], list[dict[str, object]]]:
+        code, envelope, stderr = _run_cli(workspace, args)
+        assert code == 0, f"{args} failed: stderr={stderr!r}"
+        data = envelope["data"]
+        assert isinstance(data, dict)
+        outcome = data["localization_outcome"]
+        assert isinstance(outcome, dict)
+        warnings = envelope["warnings"]
+        assert isinstance(warnings, list)
+        return outcome, warnings
+
+    # 1) Bare call — the reference answer. Its own warnings are not
+    #    asserted: this test shares a module-scoped store, so whether THIS
+    #    call re-derives depends on what earlier tests left cached. Every
+    #    call below starts from a known state and is asserted exactly.
+    first, _ = _outcome(["localization", "latest"])
+    assert first["formula"] == "ochiai"
+    assert first["top_n"] == 10
+    first_scores = [e["score_raw"] for e in first["entries"]]
+
+    # 2) Explicit non-default formula — Defect 5's behaviour, unchanged:
+    #    the explicit flag wins and the re-derive is disclosed.
+    second, second_warnings = _outcome(
+        ["localization", "latest", "--formula", "op2"]
+    )
+    assert second["formula"] == "op2"
+    assert [w["code"] for w in second_warnings] == ["localization-cache-rederived"]
+
+    # 3) Bare call again — the defect: pre-fix this returned ``op2``.
+    third, third_warnings = _outcome(["localization", "latest"])
+    assert third["formula"] == "ochiai", (
+        "a bare call must answer at DEFAULT_FORMULA regardless of what was "
+        f"asked before it; got {third.get('formula')!r}"
+    )
+    assert [e["score_raw"] for e in third["entries"]] == first_scores
+    assert third["entries"] == first["entries"], (
+        "the same command on the same inputs must return the same ranking"
+    )
+    # The re-derive is disclosed rather than silent, and the disclosure
+    # names the defaulted flags as defaulted.
+    assert [w["code"] for w in third_warnings] == ["localization-cache-rederived"]
+    requested = third_warnings[0]["details"]["requested"]
+    assert requested["formula_explicit"] is False
+    assert requested["top_n_explicit"] is False
+
+    # 4) A fourth bare call costs nothing and says nothing — the fix must
+    #    not turn every bare call into a re-derive.
+    fourth, fourth_warnings = _outcome(["localization", "latest"])
+    assert fourth_warnings == []
+    assert fourth["entries"] == first["entries"]
+
+
+def test_bare_localization_latest_restores_default_top_n(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """The ``top_n`` half of row 41 — same gate covered both fields."""
+
+    workspace = seeded_workspace["workspace"]
+
+    code, envelope, stderr = _run_cli(
+        workspace, ["localization", "latest", "--top-n", "1"]
+    )
+    assert code == 0, f"stderr={stderr!r}"
+    pinned = envelope["data"]["localization_outcome"]
+    assert pinned["top_n"] == 1
+    assert len(pinned["entries"]) == 1
+
+    code, envelope, stderr = _run_cli(workspace, ["localization", "latest"])
+    assert code == 0, f"stderr={stderr!r}"
+    bare = envelope["data"]["localization_outcome"]
+    assert bare["top_n"] == 10, (
+        f"a bare call must answer at DEFAULT_TOP_N; got {bare.get('top_n')!r}"
+    )
+    assert [w["code"] for w in envelope["warnings"]] == [
+        "localization-cache-rederived"
+    ]
+    assert envelope["warnings"][0]["details"]["previous"]["top_n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# E2E Test 9: the stale-build reproduction (board row 43).
+#
+# Reproduced for real against a v0.2.1 binary built from its tag during
+# this slice: v0.2.1 derives ``tests/test_totals.py::test_total_...`` at
+# rank 1 with ``metadata`` keys ``['changed_files_count',
+# 'regression_reweighted']``, and the current build used to serve that
+# ranking back verbatim at ``ok: true`` / exit 0 / ``warnings: []``.
+# Building an old binary is not something the test suite can do, so the
+# in-suite reproduction fabricates the same on-disk SHAPE — the four
+# ``test_file_*`` keys stripped from a real cached finding — which is
+# precisely what the shipped detector reads.
+# ---------------------------------------------------------------------------
+
+
+_EXCLUSION_METADATA_KEYS = (
+    "test_file_locations_excluded",
+    "test_file_exclusion_reverted",
+    "test_file_exclusion_basis",
+    "test_file_locations_suppressed",
+)
+
+
+def _findings_path(workspace: Path, run_id: str) -> Path:
+    return (
+        workspace
+        / ".novetest"
+        / "localization"
+        / "findings"
+        / f"run_{run_id}"
+        / "localization_findings.json"
+    )
+
+
+def test_pre_upgrade_cached_finding_is_rederived_not_served(
+    seeded_workspace: dict[str, object],
+) -> None:
+    """Row 43: an SBFL finding cached without ``test_file_exclusion_basis``
+    can only have been written by a build predating the test-file-exclusion
+    fix, so it is invalidated and re-derived instead of being served."""
+
+    workspace = seeded_workspace["workspace"]
+    run_id = seeded_workspace["run_id"]
+    assert isinstance(workspace, Path)
+    assert isinstance(run_id, str)
+
+    # Normalize the cache to a current-build payload first, then age it.
+    _run_cli(workspace, ["localization", "latest"])
+    path = _findings_path(workspace, run_id)
+    current = json.loads(path.read_text(encoding="utf-8"))
+    assert current["mode"] == "sbfl_per_test"
+    for key in _EXCLUSION_METADATA_KEYS:
+        assert key in current["metadata"], (
+            "precondition: this build's SBFL findings carry all four keys"
+        )
+
+    aged = json.loads(json.dumps(current))
+    for key in _EXCLUSION_METADATA_KEYS:
+        del aged["metadata"][key]
+    # A visible marker that survives ONLY if the stale payload is served
+    # back verbatim — the strongest evidence that a re-derive happened.
+    aged["derived_at"] = 1
+    path.write_text(json.dumps(aged), encoding="utf-8")
+
+    code, envelope, stderr = _run_cli(workspace, ["localization", "latest"])
+    assert code == 0, f"stderr={stderr!r}"
+    assert envelope["ok"] is True
+    outcome = envelope["data"]["localization_outcome"]
+    assert isinstance(outcome, dict)
+    assert outcome["derived_at"] != 1, (
+        "the stale payload was served verbatim — no re-derive happened"
+    )
+    for key in _EXCLUSION_METADATA_KEYS:
+        assert key in outcome["metadata"]
+
+    warnings = envelope["warnings"]
+    assert isinstance(warnings, list)
+    assert [w["code"] for w in warnings] == ["localization-stale-build-rederived"]
+    details = warnings[0]["details"]
+    assert details["run_id"] == run_id
+    assert details["mode"] == "sbfl_per_test"
+    assert details["missing_metadata_key"] == "test_file_exclusion_basis"
+    assert details["cache_path"] == (
+        f".novetest/localization/findings/run_{run_id}/localization_findings.json"
+    )
+
+    # The on-disk cache was overwritten with the fresh payload, so the
+    # NEXT call is an ordinary silent cache hit — the stale-build check
+    # costs one re-derive per stale store, not one per invocation.
+    code, envelope, stderr = _run_cli(workspace, ["localization", "latest"])
+    assert code == 0, f"stderr={stderr!r}"
+    assert envelope["warnings"] == []
+    assert "test_file_exclusion_basis" in (
+        envelope["data"]["localization_outcome"]["metadata"]
+    )
+
+
+def test_failure_proximity_cache_is_never_treated_as_pre_upgrade(
+    seeded_no_coverage_workspace: dict[str, object],
+) -> None:
+    """The detector's SBFL-mode guard is load-bearing: a FRESH
+    ``failure_proximity`` finding from this build also lacks the four
+    keys, so applying the check there would re-derive every no-coverage
+    run on every call, forever."""
+
+    workspace = seeded_no_coverage_workspace["workspace"]
+    run_id = seeded_no_coverage_workspace["run_id"]
+    assert isinstance(workspace, Path)
+    assert isinstance(run_id, str)
+
+    path = _findings_path(workspace, run_id)
+    cached = json.loads(path.read_text(encoding="utf-8"))
+    assert cached["mode"] == "failure_proximity"
+    assert "test_file_exclusion_basis" not in cached["metadata"], (
+        "precondition: failure_proximity never carried the exclusion keys"
+    )
+
+    pre_mtime = path.stat().st_mtime
+    code, envelope, stderr = _run_cli(workspace, ["localization", run_id])
+    assert code == 0, f"stderr={stderr!r}"
+    assert envelope["warnings"] == []
+    assert path.stat().st_mtime == pre_mtime, (
+        "no re-derive may run for a failure_proximity finding"
+    )
