@@ -143,7 +143,7 @@ def _suite_execution_warnings(outcome: TestOutcome) -> tuple[EnvelopeWarning, ..
             code=WARNING_SUITE_DID_NOT_EXECUTE,
             message=(
                 f"The test suite did not execute: {record.engine_name} reported "
-                f"status {record.status!r} with 0 collected tests, so no test "
+                f"status {record.status!r} with 0 tests executed, so no test "
                 "outcomes were produced. A collection-time error (a syntax "
                 "error or a failing module-scope import in a test file) is the "
                 "usual cause; read the native engine output under "
@@ -152,7 +152,16 @@ def _suite_execution_warnings(outcome: TestOutcome) -> tuple[EnvelopeWarning, ..
             ),
             details={
                 "run_status": record.status,
-                "collected_tests": record_total_count(record),
+                # ``executed_tests``, NOT ``collected_tests``: the value is
+                # ``summary_counts["total"]``, which counts what RAN. On a
+                # PARTIAL collection failure (one broken module, the rest
+                # fine) pytest collects the good tests and then refuses to
+                # run anything, so the same record carries
+                # ``summary_counts == {"collected": 3, "total": 0}`` — 0 is
+                # the truthful executed count and "collected" was the lying
+                # label. Renamed 2026-08-03 before it shipped in any tagged
+                # version (findings §6.1).
+                "executed_tests": record_total_count(record),
                 "engine_name": record.engine_name,
                 "ecosystem": record.ecosystem,
             },

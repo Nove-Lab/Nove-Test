@@ -12,7 +12,8 @@ non-executing suite as green (delivery-phasing row 45).
 - `data.recommendations[0].category` is **`unavailable_analysis`**, never
   `all_green`.
 - `warnings[]` carries exactly one `suite-did-not-execute` entry whose
-  `details` name the status (`errored`) and the collected count (`0`).
+  `details` name the status (`errored`) and the executed count
+  (`executed_tests: 0`).
 
 ## The intentional bug
 

@@ -102,7 +102,8 @@ class TestCollectionFailureEnvelope:
         assert len(matching) == 1, warnings
         warning = matching[0]
         assert warning["details"]["run_status"] == "errored"
-        assert warning["details"]["collected_tests"] == 0
+        assert warning["details"]["executed_tests"] == 0
+        assert "collected_tests" not in warning["details"]
         assert "did not execute" in warning["message"]
 
     def test_warning_code_is_distinct_from_zero_tests_collected(

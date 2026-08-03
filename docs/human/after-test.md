@@ -117,10 +117,10 @@ priority** (1 is the most urgent). There is no "severity" field;
 | 3 | `investigate_regression` | A test newly failed versus the baseline (a regression transition). |
 | 4 | `coverage_gap` | Uncovered lines overlap a suspicious location. |
 | 5 | `flaky_suspected` | A replay classified the run inconsistent. Fires from `novetest test --reruns N` (N ≥ 1): when the run has failures, the whole run is replayed N times and divergence produces this recommendation. Default (`--reruns 0`) never replays. |
-| 6 | `unavailable_analysis` | Tests failed but a downstream stage couldn't run (e.g. no baseline). Informational. |
+| 6 | `unavailable_analysis` | A downstream stage couldn't run (e.g. no baseline), and either tests failed or the suite never ran at all. Informational. |
+| 7 | `all_green` | The run itself finished cleanly *and* had zero failures and zero regressions. A suite that fails to start — a syntax error in a test file, say — also has zero failures, and is deliberately **not** counted as green. Exclusive — never appears alongside another category. |
 
 (Category names are pinned verbatim to the code — see "Closed taxonomy v1" in `design/implementation-plan/recommendation-synthesis.md` §8.)
-| 7 | `all_green` | Zero failures, zero regressions. Exclusive — never appears alongside another category. |
 
 Notes worth internalising:
 

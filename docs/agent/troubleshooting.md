@@ -441,19 +441,27 @@ Route on `category`:
 | `investigate_regression` | 3 | Newly-failing transition vs baseline. |
 | `coverage_gap` | 4 | Uncovered lines overlap a suspect location. |
 | `flaky_suspected` | 5 | Fires only with `novetest test --reruns N` (N ≥ 1) when the failed run's whole-run replay diverges. Empty `test_id` = divergence across several tests. |
-| `unavailable_analysis` | 6 | Tests failed but a stage was unavailable. Read `slots.reason_per_stage`. |
+| `unavailable_analysis` | 6 | A stage was unavailable AND either tests failed **or** the suite never executed. Read `slots.reason_per_stage`. |
+| `all_green` | 7 | The run's `status` is `passed` AND no failures AND no regressions. A suite that fails to collect has no failures either, by construction, and is **not** `all_green`. (Exclusive — never coexists with another.) |
 
 (Authoritative category list: `design/implementation-plan/recommendation-synthesis.md` §8.)
-| `all_green` | 7 | No failures, no regressions. (Exclusive — never coexists with another.) |
 
 ---
 
 ## Zero-collected explicit targets (NOT an error — but check)
 
 An explicit target that matches nothing (typo, non-anchor-relative
-path) yields `collected: 0, total: 0, status: "passed"`, exit 0.
-Before treating a targeted run as green, assert
-`data.memory_entry.run_record.total > 0`.
+path) yields `collected: 0, total: 0, status: "passed"`, exit 0 — and
+`all_green`, because everything that ran did pass.
+
+**The verb-independent signal is the warning code**: before treating a
+targeted run as green, assert `"zero-tests-collected" not in
+{w["code"] for w in envelope["warnings"]}`. It rides on both `test` and
+`run`. The count itself lives at different paths per verb —
+`data.memory_entry.run_record.summary_counts.total` on `run`, and on
+`test` there is **no `memory_entry` at all** (read the run id from
+`data.run_reference.run_id` and use `novetest inspect` if you need the
+number).
 
 ## Stage-eligibility surprises (NOT errors)
 
@@ -523,19 +531,29 @@ exit 4; `original-not-found` → exit 2; `tombstoned-original` /
 ## Warning codes (NOT errors)
 
 `envelope.warnings[].code` never affects `ok` or the exit code. Log them
-for observability:
+for observability. **This table is the product-wide catalog** — every
+`warnings[].code` any verb can emit. ([after-test.md](./after-test.md#warnings)
+carries a routing-scoped view of the same codes with their `details` keys.)
 
 | Code | Source | Meaning |
 |---|---|---|
-| `localization-cache-rederived` | localization | Cache invalidated + re-derived because explicit `--formula`/`--top-n` differed. Result is correct. |
-| `localization-formula-noop-in-mode` | localization | `--formula` ignored because mode is `failure_proximity`. Drop the flag. |
-| `ambiguous-build-tool` | junit | Both `pom.xml` and `build.gradle` present; Maven chosen. |
-| `missing-jacoco` | junit | `--coverage` requested but JaCoCo not declared; coverage degraded. |
-| `xunit-v3-coverage-deferred` | xunit | xUnit v3 detected; coverage deferred. |
-| `ambiguous-project-layout` | xunit | Multiple candidate test projects. |
-| `coverlet-below-floor` | xunit | Coverlet below the 6.0.2 floor; coverage degraded to aggregate mode. |
-| `coverlet-absent` | xunit | `--coverage` requested but `coverlet.collector` not in the package graph; coverage not collected. |
+| `suite-did-not-execute` | orchestration | The suite never ran: the Run Record's `status` is outside `passed`/`failed` **and** it produced zero test outcomes (a collection-time syntax error or failing module-scope import). Zero failures here means nothing was tested, *not* that anything passed — so the run routes to `unavailable_analysis`, never `all_green`. `details`: `run_status`, `executed_tests`, `engine_name`, `ecosystem`. Emitted by the **`test` verb only** (`novetest run` returns `warnings: []` on the same tree). |
+| `zero-tests-collected` | run | The engine **ran to completion**, exited clean (`status: "passed"`) and collected zero tests — e.g. an explicit target matching nothing. `details`: `engine_name`. Reachable from `test` and `run`. Today: go / junit / xunit (jest and cargo raise loudly instead; pytest maps this case to `errored`). **Not** `suite-did-not-execute`: these two are "ran, found nothing" vs. "never ran", and the `code` is the only wire surface that separates them. |
+| `localization-cache-rederived` | localization | Cache invalidated + re-derived because the **resolved** `--formula`/`--top-n` differed from the cached ones. An omitted flag resolves to its default (`ochiai` / `10`), so a bare call can trigger this too; `details.requested.formula_explicit` / `.top_n_explicit` disclose whether you typed the flag. Result is correct. `details`: `previous`, `requested`, `cache_path`. |
+| `localization-formula-noop-in-mode` | localization | `--formula` ignored because mode is `failure_proximity`. Drop the flag. `details`: `requested_formula`, `returned_formula`, `mode`. |
+| `localization-stale-build-rederived` | localization | The **cache predates this binary** and its ranking could not be trusted: an `sbfl_per_test` / `sbfl_aggregate` finding with no `test_file_exclusion_basis` in its metadata was derived before the test-file-exclusion fix, so it was invalidated and re-derived by this build. Distinct from `localization-cache-rederived`, which means "your flags differed from the cache" — this one is an upgrade story, and the ranking may have **moved** (the old one was the buggy one). `details`: `run_id`, `mode`, `missing_metadata_key`, `requested` (`{formula, top_n}`), `cache_path`. `failure_proximity` findings are exempt — they never carried those keys on any build. |
+| `ambiguous-build-tool` | junit | Both `pom.xml` and `build.gradle` present; Maven chosen. `details`: `chosen_build_tool`. |
+| `missing-jacoco` | junit | Coverage requested but JaCoCo not declared; coverage degraded. `details`: `build_tool`. |
+| `xunit-v3-coverage-deferred` | xunit | xUnit v3 detected; coverage deferred. `details`: `xunit_major_version`. |
+| `ambiguous-project-layout` | xunit | Multiple candidate test projects. `details`: `csproj_candidates`, `sln_files`, `chosen_csproj`. |
+| `coverlet-below-floor` | xunit | Coverlet below the 6.0.2 floor; coverage degraded to aggregate mode. `details`: `csproj`, `detected_coverlet_version`, `coverlet_floor`. |
+| `coverlet-absent` | xunit | Coverage requested but `coverlet.collector` not in the package graph; coverage not collected. `details`: `csproj`, `coverlet_floor`. |
 | `corrupt-run-record-skipped` | memory | A corrupt `record.json` was skipped during a history scan (`memory list` / `show` / `delete`). The message carries the corrupt file's absolute path verbatim; `details.path` holds the same path. Healthy runs still return. |
+
+The `junit` / `xunit` rows are raised by the native adapters, so they
+ride on whichever verb triggered the run — **`test` and `run` both**
+(`test` always requests coverage, so the coverage-tooling ones are
+reachable from it without any flag).
 
 ---
 

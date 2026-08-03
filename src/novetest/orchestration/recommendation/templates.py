@@ -109,8 +109,17 @@ class Recommendation:
 # ---------------------------------------------------------------------------
 
 
-# Brief §1 froze the slot keys per category. The summary strings below are
-# the pinned templates — wording change requires a ``schema_version`` bump.
+# Brief §1 froze the SLOT KEYS per category, and that freeze is what
+# ``recommendation_schema_version`` versions. Per
+# ``design/implementation-plan/recommendation-synthesis.md`` §8 checklist
+# item 4 — "Bump ``recommendation_schema_version`` if slot keys changed" —
+# adding, removing or renaming a slot key below requires the bump; changing
+# a summary template's *wording* alone does not. Agents are told to pin
+# against ``recommendations[].category`` and the slot keys, never against
+# the human-readable ``summary`` (``docs/agent/README.md`` §5), so prose is
+# not part of the versioned surface. Shipped precedent: the 2026-08-03
+# ``unavailable_analysis`` clause deletion below changed wording, no slot
+# key, and stayed at version 1.
 SUMMARY_TEMPLATES: Final[dict[str, str]] = {
     CATEGORY_REGRESSION_WITH_LOCALIZATION: (
         "Test `{test_id}` newly failing in this run; "
@@ -138,9 +147,7 @@ SUMMARY_TEMPLATES: Final[dict[str, str]] = {
     # collects zero tests, so zero tests failed), the clause was an
     # unqualified claim that is false in the new shape — the exact defect
     # class row 44 registers. The remaining sentence is true in both shapes
-    # and strictly weaker. **No slot key changed**, so
-    # ``recommendation_schema_version`` stays 1 per the design doc §8
-    # checklist item 4 ("bump if slot keys changed").
+    # and strictly weaker. No slot key changed; see the version rule above.
     CATEGORY_UNAVAILABLE_ANALYSIS: (
         "Downstream analysis incomplete: {unavailable_stages_str}."
     ),

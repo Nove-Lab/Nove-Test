@@ -133,8 +133,12 @@ Run Record **without** the analysis pipeline, and takes `--coverage` /
 
 ## Step 3 — read the recommendation
 
-For the happy path there is nothing to do: `[all_green]` means every test
-passed and no action is recommended. When a test fails, `test` instead
+For the happy path there is nothing to do: `[all_green]` means the run
+finished cleanly, every test passed, and no action is recommended. (A
+suite that never starts — a syntax error in a test file, say — has no
+failures either, so it is deliberately **not** reported green; you get
+`[unavailable_analysis]` and a `suite-did-not-execute` warning instead.)
+When a test fails, `test` instead
 emits one or more `[investigate_location]` recommendations that point at
 the most suspicious code — and the exit code becomes **3** (your tests
 failed) while the envelope itself still reports success. The

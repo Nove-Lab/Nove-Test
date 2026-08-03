@@ -499,13 +499,37 @@ bad value is `code: "invalid-flag"`, exit 2. `localization_outcome` is
 
 Independent of `errors[]`. Advisory — the command still succeeded;
 warnings never change exit code or `ok`. Same `{code, message, details}`
-shape. The two real codes both come from `localization`:
+shape. Route on `code`, never on `message`.
+
+Codes `novetest test` can emit:
 
 | `code` | `details` keys | Meaning |
 |---|---|---|
-| `localization-cache-rederived` | `previous`, `requested`, `cache_path` | Explicit `--formula`/`--top-n` differed from the cached finding; it was re-derived at the new flags. |
-| `localization-formula-noop-in-mode` | `requested_formula`, `returned_formula`, `mode` | `--formula` mismatched, but the run's mode is `failure_proximity`, which pins `formula` to a placeholder — nothing to re-derive. |
+| `suite-did-not-execute` | `run_status`, `executed_tests`, `engine_name`, `ecosystem` | The suite never ran — `status` outside `passed`/`failed` **and** zero test outcomes (collection-time syntax error, failing module-scope import). Nothing was tested, so nothing is green; the run routes to `unavailable_analysis`. Branch on this **first** (see the routing tree above). `executed_tests` counts what *ran*: on a partial collection failure the record's own `summary_counts.collected` can be non-zero while this is `0`. |
+| `zero-tests-collected` | `engine_name` | The opposite shape: the engine **ran to completion**, exited clean (`status: "passed"`) and found no tests — e.g. an explicit target that matches nothing. The run is genuinely `all_green` at exit 0, which is why you must check this before trusting it. Today: go / junit / xunit. |
+| `ambiguous-build-tool` | `chosen_build_tool` | junit: both `pom.xml` and `build.gradle` present; one was chosen. |
+| `missing-jacoco` | `build_tool` | junit: JaCoCo not declared, so coverage was not collected — `stage_eligibility.coverage` will be `unavailable`. |
+| `ambiguous-project-layout` | `csproj_candidates`, `sln_files`, `chosen_csproj` | xunit: several candidate test projects; one was chosen. |
+| `xunit-v3-coverage-deferred` | `xunit_major_version` | xunit: v3 detected; coverage deferred, tests still ran. |
+| `coverlet-absent` | `csproj`, `coverlet_floor` | xunit: `coverlet.collector` not in the package graph; coverage not collected. |
+| `coverlet-below-floor` | `csproj`, `detected_coverlet_version`, `coverlet_floor` | xunit: Coverlet below the supported floor; coverage degraded to aggregate mode. |
 
+`test` always requests coverage, so the coverage-tooling rows above need
+no flag to fire.
+
+Codes the follow-up verbs on this page emit (**not** reachable from
+`test` — `test` derives localization for a brand-new run, so there is no
+cache to reconcile):
+
+| `code` | verb | `details` keys | Meaning |
+|---|---|---|---|
+| `localization-cache-rederived` | `localization` / `latest` | `previous`, `requested`, `cache_path` | The **resolved** `--formula`/`--top-n` differed from the cached finding, so it was re-derived at the resolved values. An omitted flag resolves to its default (`ochiai` / `10`) and can trigger this on a bare call; `requested.formula_explicit` / `.top_n_explicit` disclose whether you typed it. |
+| `localization-formula-noop-in-mode` | `localization` / `latest` | `requested_formula`, `returned_formula`, `mode` | `--formula` mismatched, but the run's mode is `failure_proximity`, which pins `formula` to a placeholder — nothing to re-derive. Retrying with another formula changes nothing. |
+| `localization-stale-build-rederived` | `localization` / `latest` | `run_id`, `mode`, `missing_metadata_key`, `requested`, `cache_path` | The cache **predates this binary**: an SBFL-mode finding with no `test_file_exclusion_basis` was derived before the test-file-exclusion fix, so it was invalidated and re-derived. Unlike `localization-cache-rederived` this is an upgrade story — the ranking may have **moved**, and the old one was the buggy one. |
+| `corrupt-run-record-skipped` | `memory list` / `show` / `delete` | `path` | An unreadable `record.json` was skipped during the history scan. Healthy runs still return. |
+
+The product-wide catalog — every code any verb can emit — is
+[troubleshooting.md](./troubleshooting.md#warning-codes-not-errors).
 Production agents should log warnings even when ignoring them.
 
 ---
