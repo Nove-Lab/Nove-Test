@@ -19,10 +19,12 @@ this adapter ships:
 
 Foundations parity with the five prior adapters:
 
-- ``cwd`` is required and MUST be the workspace root containing one
-  ``*.csproj`` (multi-csproj + ``*.sln`` workspaces get an
-  ``ambiguous-project-layout`` warning + alphabetical-first csproj
-  selection — Maven-style precedent from the JUnit cycle).
+- ``cwd`` is required and MUST be the workspace root of the .NET
+  project — the directory holding the ``*.csproj``, or the solution
+  root of a ``*.sln`` (multi-csproj + ``*.sln`` workspaces get an
+  ``ambiguous-project-layout`` warning + single-test-project
+  selection — Maven-style precedent from the JUnit cycle). See
+  ``_detect_test_project`` for the discovery and selection rules.
 - All native artifacts (``stdout.log``, ``stderr.log``, the TRX file,
   optional Cobertura coverage XML) land under
   ``<artifact_dir>/native/``. The orchestration layer rewrites those
@@ -247,6 +249,28 @@ _XUNIT_V2_PACKAGEREF_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 
+# Project entry line of the .sln text format (format version 12.00):
+#   Project("{<type guid>}") = "<name>", "<relative\path>", "{<guid>}"
+# Group 1 is the path slot. Solution folders share this exact shape with
+# a label in the path slot, so the caller filters on the ``.csproj``
+# suffix + ``is_file()`` instead of on the folder type GUID — see
+# ``_csprojs_listed_in_sln``.
+_SLN_PROJECT_LINE_RE: Final[re.Pattern[str]] = re.compile(
+    r"^Project\(\"\{[^}]*\}\"\)\s*=\s*\"[^\"]*\"\s*,\s*\"([^\"]+)\"",
+    re.MULTILINE,
+)
+
+# "This project is a test project" markers. ``Microsoft.NET.Test.Sdk`` is
+# the package that makes a project runnable by ``dotnet test`` at all;
+# ``<IsTestProject>`` is the property it sets, which templates often
+# also spell explicitly. Framework-neutral on purpose — see
+# ``_declares_test_project``.
+_TEST_PROJECT_MARKER_RE: Final[re.Pattern[str]] = re.compile(
+    r"<PackageReference\s+[^>]*Include\s*=\s*[\"']Microsoft\.NET\.Test\.Sdk[\"']"
+    r"|<IsTestProject>\s*true\s*</IsTestProject>",
+    re.IGNORECASE,
+)
+
 
 async def run_xunit(
     test_target: TestTarget,
@@ -258,9 +282,11 @@ async def run_xunit(
     """Run xUnit tests via the user's ``dotnet test`` invocation.
 
     Sequence:
-    1. Detect the test project (single ``*.csproj`` at the workspace root,
-       OR alphabetical-first match when multiple ``*.csproj`` / ``*.sln``
-       coexist — with an ``ambiguous-project-layout`` warning).
+    1. Detect the test project: ``*.csproj`` at the workspace root, one
+       level deep, or listed by a root ``*.sln`` at any depth; when
+       several coexist, the self-declared test project wins (see
+       ``_detect_test_project``) and an ``ambiguous-project-layout``
+       warning is emitted.
     2. Detect xUnit major version from the csproj. v3 → emit
        ``xunit-v3-coverage-deferred`` warning + force coverage off
        (omit ``--collect`` / ``--settings``).
@@ -334,11 +360,19 @@ async def run_xunit(
     result_warnings: list[AdapterWarning] = []
 
     if is_ambiguous:
-        sibling_names = sorted({p.name for p in all_csprojs} | {s.name for s in all_slns})
+        # Candidates are reported as workspace-relative POSIX paths, not
+        # bare filenames: solution walking can surface two projects that
+        # share a basename at different depths, and a bare name would
+        # make the pair indistinguishable in the envelope.
+        candidate_paths = [_workspace_relative(p, workspace) for p in all_csprojs]
+        sibling_names = sorted(
+            set(candidate_paths) | {_workspace_relative(s, workspace) for s in all_slns}
+        )
         ambiguous_msg = (
-            f"multiple .csproj / .sln files detected at the "
-            f"workspace root ({', '.join(sibling_names)}); the "
-            f"adapter picked '{chosen_csproj.name}' alphabetically "
+            f"multiple .csproj / .sln files detected in the "
+            f"workspace ({', '.join(sibling_names)}); novetest runs "
+            f"one test project per invocation and picked "
+            f"'{_workspace_relative(chosen_csproj, workspace)}' "
             f"for v1 — to scope explicitly, pass the project file "
             f"as the run target (e.g. ``novetest run "
             f"MyProject.Tests/MyProject.Tests.csproj``) in a "
@@ -352,9 +386,9 @@ async def run_xunit(
                 code=WARNING_AMBIGUOUS_PROJECT,
                 message=ambiguous_msg,
                 details={
-                    "csproj_candidates": [p.name for p in all_csprojs],
-                    "sln_files": [s.name for s in all_slns],
-                    "chosen_csproj": chosen_csproj.name,
+                    "csproj_candidates": candidate_paths,
+                    "sln_files": [_workspace_relative(s, workspace) for s in all_slns],
+                    "chosen_csproj": _workspace_relative(chosen_csproj, workspace),
                 },
             )
         )
@@ -653,48 +687,180 @@ def _detect_test_project(
 ) -> tuple[Path | None, list[Path], list[Path]]:
     """Return ``(chosen, all_csprojs, all_slns)`` for ``workspace``.
 
-    ``chosen`` is None if no ``*.csproj`` exists. Otherwise the
+    ``chosen`` is None if no ``*.csproj`` was discovered. Otherwise the
     test-project-preferring selection (see below) returns the best
     candidate to keep behavior deterministic across hosts.
 
-    The selection is recursive **one level deep** so the canonical
-    library + test split pattern (``MathLib/MathLib.csproj`` +
-    ``MathLib.Tests/MathLib.Tests.csproj`` at the workspace root) is
-    discovered without forcing users to nest their fixture under a
-    redundant top-level directory. Deeper nesting would require either
-    `**` glob (slow + ambiguous) or solution-file walking (deferred
-    per task brief §8 — multi-csproj solution execution is v2 work).
+    **Discovery** unions two sources:
 
-    Test-project selection rule when multiple ``*.csproj`` are found:
-    prefer paths whose name contains ``Test`` / ``Tests`` /
-    ``Specs`` (case-insensitive) — these are the canonical .NET
-    test-project naming conventions. Falls back to alphabetical-first
-    if no name carries one of those tokens.
+    1. The workspace root and **one level deep** (``*.csproj`` +
+       ``*/*.csproj``) — the canonical library + test split
+       (``MathLib/MathLib.csproj`` + ``MathLib.Tests/MathLib.Tests.csproj``).
+    2. Every ``*.csproj`` **listed by a root ``*.sln``**, resolved
+       relative to the solution file at whatever depth it names.
+
+    Source 2 exists because the depth-1 glob refuses the OTHER canonical
+    .NET layout — the one ``dotnet new sln`` conventions produce and
+    ``src/Foo/Foo.csproj`` + ``tests/Foo.Tests/Foo.Tests.csproj`` spell.
+    Those projects sit at depth **2**, so a solution-rooted workspace
+    resolved to no csproj at all and readiness answered
+    ``engine-misconfigured`` on a perfectly runnable solution (measured
+    on the ``dotnet-expensable`` evaluation seed, 2026-08-04). Walking
+    the ``.sln`` is preferred over widening the glob to
+    ``src/*/*.csproj`` + ``tests/*/*.csproj`` because the solution file
+    is the project list the **user already wrote**: it is exact at any
+    depth and under any directory naming, whereas a wider glob only
+    guesses two popular directory names and would still refuse
+    ``source/``, ``Test/`` or a grouping level. It is also the marker
+    that got this workspace detected as .NET in the first place
+    (``engine_selector._ENGINE_MARKER_TABLE``'s dotnet row) — the tool
+    found the workspace *by* its solution file and then declined to
+    read it.
+
+    Solution walking here is **discovery only**. novetest still runs a
+    single ``dotnet test <csproj>``; running a whole solution
+    (``dotnet test <sln>``, per-project TRX + coverage merge) stays v2
+    work per ``design/implementation-plan/engine-adapters.md`` §6.
+
+    **Selection** when multiple ``*.csproj`` are discovered, in order:
+
+    1. Prefer projects that **declare themselves test projects** —
+       ``<PackageReference Include="Microsoft.NET.Test.Sdk">`` or
+       ``<IsTestProject>true</IsTestProject>``. This tier is
+       load-bearing for source 2: a solution routinely also lists
+       sample / benchmark / tool / analyzer projects, and some of them
+       carry a test-ish *name* (``samples/TestBed/TestBed.csproj``
+       sorts BEFORE ``tests/Foo.Tests/Foo.Tests.csproj``), so a
+       name-only rule picks the sample and blocks a runnable solution.
+       Only ``Microsoft.NET.Test.Sdk`` makes a project runnable by
+       ``dotnet test`` at all, which is why it is the discriminator.
+       Which *framework* it then declares (xunit vs MSTest / NUnit) is
+       readiness's judgment, not discovery's — so this tier stays
+       framework-neutral and the MSTest/NUnit diagnostics still name
+       the project the user meant.
+    2. Within that pool, prefer names containing ``Test`` / ``Tests`` /
+       ``Spec`` / ``Specs`` (case-insensitive) — the canonical .NET
+       test-project naming conventions.
+    3. Otherwise the sort-first candidate (case-insensitive full-path
+       sort, so the pick is stable across hosts).
 
     The returned ``all_csprojs`` is the full list of discovered csprojs
     INCLUDING the chosen one — used by the caller to detect ambiguity.
-    Per the docstring rationale: the library + test split is NOT
-    ambiguous (it's the canonical pattern); only the multi-test-
-    project case is ambiguous. The caller does that determination
-    via ``_is_layout_ambiguous`` below, not in this function.
+    Per the rationale above: the library + test split is NOT ambiguous
+    (it's the canonical pattern); only the multi-test-project case is.
+    The caller does that determination via ``_is_layout_ambiguous``
+    below, not in this function.
     """
 
-    direct = list(workspace.glob("*.csproj"))
-    one_deep = [p for p in workspace.glob("*/*.csproj")]
-    all_csprojs = sorted(direct + one_deep, key=lambda p: str(p).lower())
     all_slns = sorted(workspace.glob("*.sln"), key=lambda p: str(p).lower())
+    discovered: set[Path] = set(workspace.glob("*.csproj"))
+    discovered.update(workspace.glob("*/*.csproj"))
+    for sln_path in all_slns:
+        discovered.update(_csprojs_listed_in_sln(sln_path, workspace))
+    all_csprojs = sorted(discovered, key=lambda p: str(p).lower())
     if not all_csprojs:
         return None, [], all_slns
 
-    test_csprojs = [
-        p for p in all_csprojs
-        if any(
-            token in p.name.lower()
-            for token in ("tests", "test", "specs", "spec")
-        )
-    ]
-    chosen = test_csprojs[0] if test_csprojs else all_csprojs[0]
-    return chosen, all_csprojs, all_slns
+    return _pick_test_project(all_csprojs), all_csprojs, all_slns
+
+
+def _csprojs_listed_in_sln(sln_path: Path, workspace: Path) -> list[Path]:
+    """Return the ``*.csproj`` files ``sln_path`` lists, at any depth.
+
+    Every project entry in the (text, format-version-12, 15-year-stable)
+    solution format is one line::
+
+        Project("{<type guid>}") = "<name>", "<path>", "{<project guid>}"
+
+    Three quirks of the real format are handled here rather than
+    assumed away — all three verified against the ``dotnet-expensable``
+    seed's own ``expensable.sln`` before this parser was written:
+
+    - **Paths are Windows-separated** (``tests\\Foo\\Foo.csproj``) even
+      in solutions authored on Linux, so ``\\`` is translated before
+      the join. Without it, POSIX hosts read the whole thing as one
+      absurd filename and match nothing.
+    - **Solution folders use the same line shape** — ``= "src", "src",
+      "{guid}"`` — with a directory (or a plain label) in the path
+      slot. The ``.csproj`` suffix test plus ``is_file()`` drops them,
+      which is more robust than matching the folder type GUID.
+    - **The file is UTF-8 with a BOM and CRLF line endings**, hence
+      ``utf-8-sig``.
+
+    Non-C# project types (``.fsproj`` / ``.vbproj`` / ``.vcxproj``) are
+    dropped by the same suffix test: this adapter shells out to
+    ``dotnet test`` over C# xUnit only.
+
+    Entries are resolved relative to the solution file and **must stay
+    inside the workspace** — a ``..``-escaping entry is skipped, so a
+    solution cannot point the run at a project outside the Project
+    Store's root. Normalization is lexical (``os.path.normpath``), so
+    no symlink is resolved and a symlinked workspace root (pytest's
+    ``tmp_path`` on macOS) still compares equal.
+    """
+
+    text = _safe_read_text(sln_path, encoding="utf-8-sig")
+    listed: list[Path] = []
+    for match in _SLN_PROJECT_LINE_RE.finditer(text):
+        raw_path = match.group(1).strip().replace("\\", "/")
+        if not raw_path.lower().endswith(".csproj"):
+            continue
+        candidate = Path(os.path.normpath(sln_path.parent / raw_path))
+        if not candidate.is_file() or not candidate.is_relative_to(workspace):
+            continue
+        listed.append(candidate)
+    return listed
+
+
+def _pick_test_project(all_csprojs: list[Path]) -> Path:
+    """Choose the one csproj ``dotnet test`` will be pointed at.
+
+    Tiering is documented in ``_detect_test_project``: self-declared
+    test projects first, then the test-name token, then sort-first.
+    ``all_csprojs`` must be non-empty and already sorted.
+    """
+
+    declared = [p for p in all_csprojs if _declares_test_project(_safe_read_text(p))]
+    pool = declared or all_csprojs
+    test_named = [p for p in pool if _has_test_name_token(p)]
+    return test_named[0] if test_named else pool[0]
+
+
+def _declares_test_project(csproj_content: str) -> bool:
+    """Return True iff the csproj declares itself runnable by ``dotnet test``.
+
+    ``Microsoft.NET.Test.Sdk`` is what actually makes a project a test
+    project to the .NET SDK (every ``dotnet new xunit`` / ``nunit`` /
+    ``mstest`` template references it); ``<IsTestProject>true</...>`` is
+    the property that reference sets, and templates frequently spell it
+    explicitly too. Either is accepted — deliberately framework-neutral
+    (see ``_detect_test_project`` selection tier 1).
+    """
+
+    return bool(csproj_content) and _TEST_PROJECT_MARKER_RE.search(csproj_content) is not None
+
+
+def _has_test_name_token(csproj_path: Path) -> bool:
+    """Return True iff the csproj filename carries a test-project token."""
+
+    name = csproj_path.name.lower()
+    return any(token in name for token in ("tests", "test", "specs", "spec"))
+
+
+def _workspace_relative(path: Path, workspace: Path) -> str:
+    """Render ``path`` for an envelope: workspace-relative, POSIX form.
+
+    POSIX separators are load-bearing for the same reason they are in
+    ``engine_selector._marker_evidence``: these strings reach AI agents
+    through the envelope, so one workspace must serialize identically on
+    Windows and POSIX hosts. Falls back to the absolute path for the
+    (unreachable-by-construction, since ``_csprojs_listed_in_sln``
+    enforces containment) out-of-workspace case.
+    """
+
+    if path.is_relative_to(workspace):
+        return path.relative_to(workspace).as_posix()
+    return path.as_posix()
 
 
 def _is_layout_ambiguous(
@@ -710,12 +876,15 @@ def _is_layout_ambiguous(
 
     1. **Multiple test-named csprojs** are present (e.g.
        ``MyLib.Tests/`` + ``MyLib.Integration.Tests/``). The adapter
-       picks the alphabetical-first, but the user might have meant
-       the other; surface the ambiguity.
-    2. A ``*.sln`` is present alongside the csprojs. Solution-file
-       layouts can pull in test projects from arbitrary locations and
-       the adapter's one-level walk may miss them; the warning points
-       the user at the gap until solution-file walking lands.
+       picks one, but the user might have meant the other; surface the
+       ambiguity.
+    2. A ``*.sln`` is present alongside the csprojs. A solution builds
+       and tests **several** projects; novetest runs exactly one
+       ``dotnet test <csproj>`` per invocation, so the warning tells
+       the user which project of theirs the run actually covered.
+       (Before solution walking landed the reason was different — the
+       one-level glob could not *see* solution-listed projects at all.
+       It now sees them; what remains is that only one of them runs.)
 
     Pure library/test split (1 test csproj + N non-test csprojs at
     one level deep, no .sln) is the silent happy path — no warning.
@@ -723,14 +892,7 @@ def _is_layout_ambiguous(
 
     if all_slns:
         return True
-    test_csprojs = [
-        p for p in all_csprojs
-        if any(
-            token in p.name.lower()
-            for token in ("tests", "test", "specs", "spec")
-        )
-    ]
-    return len(test_csprojs) > 1
+    return len([p for p in all_csprojs if _has_test_name_token(p)]) > 1
 
 
 # ---------------------------------------------------------------------------
@@ -1455,14 +1617,23 @@ def _glob_coverage_xml(
 # ---------------------------------------------------------------------------
 
 
-def _safe_read_text(path: Path) -> str:
-    """Return ``path``'s text content, or empty string on any error."""
+def _safe_read_text(path: Path, *, encoding: str = "utf-8") -> str:
+    """Return ``path``'s text content, or empty string on any error.
+
+    ``encoding`` exists for the solution file, which Visual Studio
+    writes as UTF-8 **with a BOM** (``utf-8-sig`` strips it; plain
+    ``utf-8`` would leave ``\\ufeff`` glued to the first line).
+    ``UnicodeDecodeError`` joins ``OSError`` in the caught set because a
+    non-UTF-8 build manifest is a real thing in older Windows-authored
+    trees and "empty content" is the same degradation path the caller
+    already handles for an unreadable file.
+    """
 
     if not path.is_file():
         return ""
     try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
+        return path.read_text(encoding=encoding)
+    except (OSError, UnicodeDecodeError):
         return ""
 
 
@@ -1512,6 +1683,8 @@ __all__ = [
     "WARNING_XUNIT_V3_DEFERRED",
     "_COVERLET_RUNSETTINGS_AGGREGATE",
     "_COVERLET_RUNSETTINGS_PER_TEST",
+    "_csprojs_listed_in_sln",
+    "_declares_test_project",
     "_detect_test_project",
     "_detect_xunit_major_version",
     "_detect_xunit_resolved_version",

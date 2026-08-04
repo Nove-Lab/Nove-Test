@@ -248,6 +248,84 @@ async def test_neither_xunit_nor_mstest_nor_nunit_diagnostic(
 
 
 # ---------------------------------------------------------------------------
+# Nested `src/` + `tests/` solution layout (2026-08-04 regression)
+# ---------------------------------------------------------------------------
+#
+# `novetest init` at the root of a `dotnet new sln`-shaped solution
+# answered `engine-misconfigured` — the projects sit at depth 2 and the
+# depth-1 glob never saw them, even though the `.sln` that names them is
+# what made the workspace .NET in the first place. Readiness is the
+# surface the user actually hit (`init`, and `test`'s pre-flight, which
+# exited 4); the discovery unit tests live next to the adapter in
+# `tests/unit/run/adapters/test_dotnet_adapter.py`.
+
+
+async def test_depth_two_solution_layout_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stub_dotnet_version: None,
+) -> None:
+    """THE `novetest init` regression, at the readiness surface."""
+
+    src_dir = tmp_path / "src" / "Expensable"
+    src_dir.mkdir(parents=True)
+    (src_dir / "Expensable.csproj").write_text(_CSPROJ_NEITHER, encoding="utf-8")
+    tests_dir = tmp_path / "tests" / "Expensable.Tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "Expensable.Tests.csproj").write_text(
+        _CSPROJ_V2, encoding="utf-8"
+    )
+    # Real solutions are UTF-8 **with BOM**, CRLF, backslash-separated.
+    (tmp_path / "expensable.sln").write_bytes(
+        "\r\n".join(
+            [
+                "",
+                "Microsoft Visual Studio Solution File, Format Version 12.00",
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = '
+                '"Expensable", "src\\Expensable\\Expensable.csproj", '
+                '"{1FA66788-629D-4467-A9B3-C9DE4576EB73}"',
+                "EndProject",
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = '
+                '"Expensable.Tests", '
+                '"tests\\Expensable.Tests\\Expensable.Tests.csproj", '
+                '"{9BC5DD25-FF11-4188-94DC-FD99CFFA9154}"',
+                "EndProject",
+            ]
+        ).encode("utf-8-sig")
+    )
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    result = await probe_engine(tmp_path, "dotnet", "xunit")
+
+    assert result.state == "ready", (
+        f"solution-root readiness regressed to {result.state!r}: "
+        f"{result.issues!r}"
+    )
+    assert result.engine_context is not None
+    assert result.engine_context.engine_name == "xunit"
+
+
+async def test_solution_with_no_project_files_stays_misconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.sln`` naming nothing that exists is still a misconfigured
+    workspace — the fallback must not go green on the sln's mere
+    presence, and the diagnostic must name all three discovery sources
+    so the user knows where novetest looked."""
+
+    (tmp_path / "empty.sln").write_text(
+        "Microsoft Visual Studio Solution File, Format Version 12.00\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    result = await probe_engine(tmp_path, "dotnet", "xunit")
+
+    assert result.state == "engine-misconfigured"
+    assert any("*.sln" in issue for issue in result.issues)
+
+
+# ---------------------------------------------------------------------------
 # RUN-14 (W1/S2): readiness ↔ adapter csproj-selection coherence
 # ---------------------------------------------------------------------------
 #
@@ -265,13 +343,24 @@ async def test_run14_readiness_probes_the_adapter_chosen_specs_csproj(
     monkeypatch: pytest.MonkeyPatch,
     stub_dotnet_version: None,
 ) -> None:
-    """Layout: ``Z.Test`` (xunit v2) + ``A.Specs`` (no test framework).
+    """Layout: ``Z.Test`` (xunit v2) + ``A.Specs`` (MSTest).
 
-    The adapter matches BOTH names (test + specs tokens) and picks the
-    sort-first ``A.Specs.csproj`` — which has no xunit, so the actual
-    run would collect 0 tests. Readiness must judge that SAME csproj and
-    answer ``engine-misconfigured`` (naming it), not a false ``ready``
-    earned by probing ``Z.Test.csproj`` the adapter never runs."""
+    Both declare ``Microsoft.NET.Test.Sdk``, so discovery's tier-1
+    (self-declared test project) filter keeps BOTH, both names match the
+    token tier, and the adapter picks the sort-first ``A.Specs.csproj``
+    — which is MSTest, so the run novetest would launch is not one it
+    supports. Readiness must judge that SAME csproj and answer
+    ``engine-misconfigured`` (naming it), not a false ``ready`` earned
+    by probing ``Z.Test.csproj`` the adapter never runs.
+
+    (Before the 2026-08-04 nested-discovery slice this layout used
+    ``_CSPROJ_NEITHER`` for ``A.Specs``; discovery now prefers the
+    project that declares itself a test project, so a *plain library*
+    named ``.Specs`` no longer beats a real test project — see
+    ``test_nested_discovery_prefers_declared_test_project_over_named_library``
+    in ``tests/unit/run/adapters/test_dotnet_adapter.py``. The RUN-14
+    invariant under test here is unchanged: whatever discovery picks,
+    readiness judges exactly that file.)"""
 
     from novetest.run.adapters.dotnet_adapter import _detect_test_project
 
@@ -280,7 +369,7 @@ async def test_run14_readiness_probes_the_adapter_chosen_specs_csproj(
     (z_dir / "Z.Test.csproj").write_text(_CSPROJ_V2, encoding="utf-8")
     a_dir = tmp_path / "A.Specs"
     a_dir.mkdir()
-    (a_dir / "A.Specs.csproj").write_text(_CSPROJ_NEITHER, encoding="utf-8")
+    (a_dir / "A.Specs.csproj").write_text(_CSPROJ_MSTEST, encoding="utf-8")
 
     adapter_chosen, _, _ = _detect_test_project(tmp_path)
     assert adapter_chosen is not None
@@ -292,9 +381,9 @@ async def test_run14_readiness_probes_the_adapter_chosen_specs_csproj(
     assert result.state == "engine-misconfigured"
     # The diagnostic names the adapter's choice — proof readiness read
     # the same file the adapter will execute against.
-    assert any(adapter_chosen.name in issue for issue in result.issues), (
-        f"readiness diverged from the adapter: expected the issues to "
-        f"name {adapter_chosen.name!r}, got {result.issues!r}"
+    assert any("MSTest detected" in issue for issue in result.issues), (
+        f"readiness diverged from the adapter: expected the MSTest "
+        f"diagnostic for {adapter_chosen.name!r}, got {result.issues!r}"
     )
 
 

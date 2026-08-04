@@ -927,9 +927,11 @@ async def _assess_xunit_readiness(
     1. ``dotnet`` on PATH? If absent → ``engine-missing`` (engine cannot
        run at all; engine_context dropped so the caller does not name
        xunit in the guidance — there is no xunit reachable yet).
-    2. ``*.csproj`` present (one-level walk to support the canonical
-       library + test project split)? Already confirmed by candidate
-       detection; re-checked to close a TOCTOU window.
+    2. ``*.csproj`` present (root + one-level walk for the canonical
+       library + test project split, plus the projects a root ``*.sln``
+       lists, for the ``src/`` + ``tests/`` solution layout)? Already
+       confirmed by candidate detection; re-checked to close a TOCTOU
+       window.
     3. xUnit ``<PackageReference Include="xunit">`` in the picked test
        csproj? If MSTest or NUnit detected instead → ``engine-
        misconfigured`` with framework-specific guidance. If none of the
@@ -973,9 +975,11 @@ async def _assess_xunit_readiness(
             evidence=candidate.evidence,
             issues=(
                 ".NET workspace markers detected but no *.csproj found at "
-                "the workspace root or one level deep; expected the "
+                "the workspace root, one level deep, or listed by a "
+                "*.sln in the workspace root; expected either the "
                 "canonical library + test project split (e.g. "
-                "MyLib/MyLib.csproj + MyLib.Tests/MyLib.Tests.csproj)",
+                "MyLib/MyLib.csproj + MyLib.Tests/MyLib.Tests.csproj) or "
+                "a solution file naming the projects it builds",
             ),
         )
 

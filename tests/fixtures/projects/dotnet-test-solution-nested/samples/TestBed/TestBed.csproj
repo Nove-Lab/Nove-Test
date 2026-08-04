@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    THE DECOY, and it is load-bearing.
+
+    This is a plain library. It is listed in `nested.sln`, its name
+    carries the `test` token, and `samples/…` sorts BEFORE `tests/…`, so
+    a discovery rule that ranks candidates by NAME alone picks this file
+    and points `dotnet test` at a project with no test framework — 0
+    tests collected, or `engine-misconfigured` at readiness, on a
+    solution that runs perfectly.
+
+    What saves it is that this project does not reference
+    `Microsoft.NET.Test.Sdk` and does not set `<IsTestProject>`, so
+    `dotnet_adapter._declares_test_project` returns False and selection
+    tier 1 drops it before the name tier is consulted.
+
+    Do NOT add a test framework here, and do NOT rename it to something
+    without the `test` token — either edit silently disarms the test in
+    `tests/integration/run/test_dotnet_solution_nested.py`.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

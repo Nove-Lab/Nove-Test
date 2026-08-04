@@ -37,6 +37,8 @@ from novetest.run.adapters.dotnet_adapter import (
     WARNING_XUNIT_V3_DEFERRED,
     _COVERLET_RUNSETTINGS_AGGREGATE,
     _COVERLET_RUNSETTINGS_PER_TEST,
+    _csprojs_listed_in_sln,
+    _declares_test_project,
     _detect_test_project,
     _detect_xunit_major_version,
     _detect_xunit_resolved_version,
@@ -444,6 +446,32 @@ class TestProjectDetection:
         assert chosen is not None
         assert chosen.name == "B.Tests.csproj"
 
+    def test_nested_discovery_prefers_declared_test_project_over_named_library(
+        self, tmp_path: Path
+    ) -> None:
+        """Selection tier 1: a project that declares
+        ``Microsoft.NET.Test.Sdk`` beats a sort-earlier *library* whose
+        name merely carries a test token.
+
+        ``A.Specs`` sorts first and matches the ``specs`` token, but it
+        is a plain library — pointing ``dotnet test`` at it collects 0
+        tests. ``Z.Test`` is the real test project."""
+
+        (tmp_path / "A.Specs").mkdir()
+        (tmp_path / "A.Specs" / "A.Specs.csproj").write_text(
+            _PLAIN_LIBRARY_CSPROJ, encoding="utf-8"
+        )
+        (tmp_path / "Z.Test").mkdir()
+        (tmp_path / "Z.Test" / "Z.Test.csproj").write_text(
+            _TEST_SDK_CSPROJ, encoding="utf-8"
+        )
+
+        chosen, all_csprojs, _ = _detect_test_project(tmp_path)
+        assert chosen is not None
+        assert chosen.name == "Z.Test.csproj"
+        # Discovery still REPORTS both — only the pick is narrowed.
+        assert len(all_csprojs) == 2
+
     async def test_no_csproj_raises_project_not_found(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -456,6 +484,378 @@ class TestProjectDetection:
         with pytest.raises(AdapterInvocationError) as exc_info:
             await run_xunit(target, artifact_dir=artifact_dir, timeout=10.0)
         assert exc_info.value.kind == "project-not-found"
+
+
+# ---------------------------------------------------------------------------
+# TestSolutionLayoutDiscovery — the 2026-08-04 nested-layout regression
+# ---------------------------------------------------------------------------
+#
+# The defect: `_detect_test_project` globbed `*.csproj` + `*/*.csproj`
+# only, so the `src/Foo/Foo.csproj` + `tests/Foo.Tests/Foo.Tests.csproj`
+# layout — the one `dotnet new sln` conventions produce, projects at
+# depth 2 — resolved to NO csproj. `novetest init` at the solution root
+# answered `engine-misconfigured` and `novetest test` exited 4, on a
+# solution that runs perfectly under `dotnet test`. Measured on the
+# `dotnet-expensable` evaluation seed (and on its pristine pre-reseed
+# copy, so it predated that seed) and filed as
+# `agent-comms/questions/run-team-2026-08-04-p7-dotnet-localization-
+# reachability.md`. Discovery now also reads the `*.sln` — which was
+# already the marker that got the workspace detected as .NET at all.
+#
+# Every `.sln` written here reproduces the real format: CRLF endings,
+# UTF-8 BOM, backslash-separated paths, and solution-folder entries that
+# share the project line's exact shape.
+
+
+_PLAIN_LIBRARY_CSPROJ = """\
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+"""
+
+_TEST_SDK_CSPROJ = """\
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.6.0" />
+  </ItemGroup>
+</Project>
+"""
+
+
+def _write_sln(path: Path, entries: list[tuple[str, str]]) -> None:
+    """Write a format-12 ``.sln`` listing ``entries`` as (name, path).
+
+    Byte-faithful to what Visual Studio / ``dotnet new sln`` emit: UTF-8
+    **with BOM**, **CRLF** endings, and **backslash**-separated project
+    paths regardless of host OS. A parser that assumes any of the three
+    away passes on a hand-written fixture and fails on a real solution.
+    """
+
+    lines = [
+        "",
+        "Microsoft Visual Studio Solution File, Format Version 12.00",
+        "# Visual Studio Version 17",
+    ]
+    for name, rel_path in entries:
+        lines.append(
+            f'Project("{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}") = '
+            f'"{name}", "{rel_path}", '
+            f'"{{9BC5DD25-FF11-4188-94DC-FD99CFFA9154}}"'
+        )
+        lines.append("EndProject")
+    lines.append("Global")
+    lines.append("EndGlobal")
+    path.write_bytes("\r\n".join(lines).encode("utf-8-sig"))
+
+
+def _write_project(
+    workspace: Path, rel_dir: str, csproj_name: str, content: str
+) -> Path:
+    project_dir = workspace / rel_dir
+    project_dir.mkdir(parents=True, exist_ok=True)
+    csproj = project_dir / csproj_name
+    csproj.write_text(content, encoding="utf-8")
+    return csproj
+
+
+def _seed_solution_layout(workspace: Path) -> Path:
+    """Build the `dotnet-expensable`-shaped workspace; return the test csproj.
+
+    ``expensable.sln`` at the root, ``src/Expensable/Expensable.csproj``
+    (library) and ``tests/Expensable.Tests/Expensable.Tests.csproj``
+    (xUnit) at depth 2, plus the two solution-FOLDER entries the real
+    seed's solution carries."""
+
+    _write_project(
+        workspace, "src/Expensable", "Expensable.csproj", _PLAIN_LIBRARY_CSPROJ
+    )
+    test_csproj = _write_project(
+        workspace,
+        "tests/Expensable.Tests",
+        "Expensable.Tests.csproj",
+        _TEST_SDK_CSPROJ,
+    )
+    _write_sln(
+        workspace / "expensable.sln",
+        [
+            ("src", "src"),  # solution folder — same line shape, not a file
+            ("Expensable", "src\\Expensable\\Expensable.csproj"),
+            ("tests", "tests"),  # solution folder
+            (
+                "Expensable.Tests",
+                "tests\\Expensable.Tests\\Expensable.Tests.csproj",
+            ),
+        ],
+    )
+    return test_csproj
+
+
+class TestSolutionLayoutDiscovery:
+    """``_detect_test_project`` over ``src/`` + ``tests/`` solutions."""
+
+    def test_depth_two_solution_layout_finds_the_test_project(
+        self, tmp_path: Path
+    ) -> None:
+        """THE regression. Pre-fix this returned ``(None, [], [sln])``
+        and readiness answered ``engine-misconfigured``."""
+
+        expected = _seed_solution_layout(tmp_path)
+
+        chosen, all_csprojs, all_slns = _detect_test_project(tmp_path)
+
+        assert chosen == expected
+        assert chosen is not None
+        assert chosen.relative_to(tmp_path).as_posix() == (
+            "tests/Expensable.Tests/Expensable.Tests.csproj"
+        )
+        assert [p.relative_to(tmp_path).as_posix() for p in all_csprojs] == [
+            "src/Expensable/Expensable.csproj",
+            "tests/Expensable.Tests/Expensable.Tests.csproj",
+        ]
+        assert [s.name for s in all_slns] == ["expensable.sln"]
+
+    def test_solution_folder_entries_are_not_mistaken_for_projects(
+        self, tmp_path: Path
+    ) -> None:
+        """``Project(...) = "src", "src", "{guid}"`` is a solution FOLDER.
+
+        It uses the project line's exact shape, so the parser must reject
+        it on the ``.csproj`` suffix + ``is_file()`` test rather than on
+        the type GUID."""
+
+        _seed_solution_layout(tmp_path)
+        listed = _csprojs_listed_in_sln(tmp_path / "expensable.sln", tmp_path)
+        assert [p.name for p in listed] == [
+            "Expensable.csproj",
+            "Expensable.Tests.csproj",
+        ]
+
+    def test_non_csharp_project_types_are_skipped(self, tmp_path: Path) -> None:
+        """A polyglot solution can list ``.fsproj`` / ``.vbproj`` /
+        ``.vcxproj``. This adapter drives C# xUnit through ``dotnet
+        test``; the other project types must not be swept in."""
+
+        _write_project(tmp_path, "src/FLib", "FLib.fsproj", _TEST_SDK_CSPROJ)
+        _write_project(tmp_path, "src/VbLib", "VbLib.vbproj", _TEST_SDK_CSPROJ)
+        csharp = _write_project(
+            tmp_path, "tests/C.Tests", "C.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        _write_sln(
+            tmp_path / "poly.sln",
+            [
+                ("FLib", "src\\FLib\\FLib.fsproj"),
+                ("VbLib", "src\\VbLib\\VbLib.vbproj"),
+                ("C.Tests", "tests\\C.Tests\\C.Tests.csproj"),
+            ],
+        )
+
+        chosen, all_csprojs, _ = _detect_test_project(tmp_path)
+        assert chosen == csharp
+        assert all_csprojs == [csharp]
+
+    def test_sample_project_with_a_test_name_does_not_win(
+        self, tmp_path: Path
+    ) -> None:
+        """The hazard the wider discovery introduces, and the guard.
+
+        ``samples/TestBed/TestBed.csproj`` carries the ``test`` name
+        token AND sorts before ``tests/…`` — a name-only rule picks the
+        sample and blocks a runnable solution. It declares no
+        ``Microsoft.NET.Test.Sdk``, so selection tier 1 drops it. The
+        benchmark and tool projects (no token) never competed."""
+
+        sample = _write_project(
+            tmp_path, "samples/TestBed", "TestBed.csproj", _PLAIN_LIBRARY_CSPROJ
+        )
+        bench = _write_project(
+            tmp_path,
+            "benchmarks/Perf",
+            "Perf.Benchmarks.csproj",
+            _PLAIN_LIBRARY_CSPROJ,
+        )
+        tool = _write_project(
+            tmp_path, "tools/CodeGen", "CodeGen.csproj", _PLAIN_LIBRARY_CSPROJ
+        )
+        real = _write_project(
+            tmp_path, "tests/App.Tests", "App.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        _write_sln(
+            tmp_path / "app.sln",
+            [
+                ("TestBed", "samples\\TestBed\\TestBed.csproj"),
+                ("Perf.Benchmarks", "benchmarks\\Perf\\Perf.Benchmarks.csproj"),
+                ("CodeGen", "tools\\CodeGen\\CodeGen.csproj"),
+                ("App.Tests", "tests\\App.Tests\\App.Tests.csproj"),
+            ],
+        )
+
+        chosen, all_csprojs, _ = _detect_test_project(tmp_path)
+        assert chosen == real, (
+            f"expected the declared test project, got {chosen} — the "
+            f"sort-first sample {sample.name!r} must not win on its name"
+        )
+        # All four are still discovered (and reported as candidates);
+        # only the SELECTION discriminates.
+        assert set(all_csprojs) == {sample, bench, tool, real}
+
+    def test_a_sample_only_solution_still_selects_something_runnable(
+        self, tmp_path: Path
+    ) -> None:
+        """Tier 1 narrows; it never empties. When NO project declares
+        itself a test project the name token still decides, so the
+        pre-fix behavior is intact for solutions the tier cannot rank."""
+
+        _write_project(
+            tmp_path, "src/App", "App.csproj", _PLAIN_LIBRARY_CSPROJ
+        )
+        legacy = _write_project(
+            tmp_path, "tests/App.Tests", "App.Tests.csproj", _PLAIN_LIBRARY_CSPROJ
+        )
+        _write_sln(
+            tmp_path / "app.sln",
+            [
+                ("App", "src\\App\\App.csproj"),
+                ("App.Tests", "tests\\App.Tests\\App.Tests.csproj"),
+            ],
+        )
+
+        chosen, _, _ = _detect_test_project(tmp_path)
+        assert chosen == legacy
+
+    def test_entry_escaping_the_workspace_is_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``..``-escaping entry must not point the run outside the
+        Project Store's root."""
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = _write_project(
+            tmp_path, "outside/Evil.Tests", "Evil.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        inside = _write_project(
+            workspace, "tests/In.Tests", "In.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        _write_sln(
+            workspace / "app.sln",
+            [
+                ("Evil.Tests", "..\\outside\\Evil.Tests\\Evil.Tests.csproj"),
+                ("In.Tests", "tests\\In.Tests\\In.Tests.csproj"),
+            ],
+        )
+
+        chosen, all_csprojs, _ = _detect_test_project(workspace)
+        assert outside.is_file()  # it exists; it is refused on containment
+        assert all_csprojs == [inside]
+        assert chosen == inside
+
+    def test_listed_but_missing_file_is_skipped(self, tmp_path: Path) -> None:
+        """A solution can outlive a deleted project directory."""
+
+        present = _write_project(
+            tmp_path, "tests/A.Tests", "A.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        _write_sln(
+            tmp_path / "app.sln",
+            [
+                ("Gone", "src\\Gone\\Gone.csproj"),
+                ("A.Tests", "tests\\A.Tests\\A.Tests.csproj"),
+            ],
+        )
+
+        chosen, all_csprojs, _ = _detect_test_project(tmp_path)
+        assert all_csprojs == [present]
+        assert chosen == present
+
+    def test_unparseable_solution_falls_back_to_the_glob(
+        self, tmp_path: Path
+    ) -> None:
+        """A garbage / truncated ``.sln`` must degrade to the depth-0/1
+        walk exactly as before the slice, never crash."""
+
+        (tmp_path / "broken.sln").write_text("not a solution file", encoding="utf-8")
+        depth_one = _write_project(
+            tmp_path, "MyLib.Tests", "MyLib.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+
+        chosen, all_csprojs, all_slns = _detect_test_project(tmp_path)
+        assert chosen == depth_one
+        assert all_csprojs == [depth_one]
+        assert [s.name for s in all_slns] == ["broken.sln"]
+
+    def test_solution_listed_and_globbed_project_is_reported_once(
+        self, tmp_path: Path
+    ) -> None:
+        """The two discovery sources overlap on depth-0/1 projects; the
+        union must not double-count (``all_csprojs`` feeds the ambiguity
+        warning's candidate list)."""
+
+        depth_one = _write_project(
+            tmp_path, "MyLib.Tests", "MyLib.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+        _write_sln(
+            tmp_path / "app.sln",
+            [("MyLib.Tests", "MyLib.Tests\\MyLib.Tests.csproj")],
+        )
+
+        _chosen, all_csprojs, _ = _detect_test_project(tmp_path)
+        assert all_csprojs == [depth_one]
+
+    def test_depth_two_without_a_solution_file_is_still_undiscovered(
+        self, tmp_path: Path
+    ) -> None:
+        """Honest residual, pinned so nobody claims more than shipped.
+
+        Discovery grew a ``.sln`` reader, NOT a recursive walk. A depth-2
+        layout with no solution file is still invisible — and such a
+        workspace does not reach this function at all, because
+        ``engine_selector``'s dotnet marker row (``*.sln`` / ``*.csproj``
+        / ``*/*.csproj``) does not match it either."""
+
+        _write_project(
+            tmp_path, "tests/A.Tests", "A.Tests.csproj", _TEST_SDK_CSPROJ
+        )
+
+        chosen, all_csprojs, all_slns = _detect_test_project(tmp_path)
+        assert chosen is None
+        assert all_csprojs == []
+        assert all_slns == []
+
+    @pytest.mark.parametrize(
+        ("content", "expected"),
+        [
+            (_TEST_SDK_CSPROJ, True),
+            (_PLAIN_LIBRARY_CSPROJ, False),
+            ("", False),
+            (
+                '<Project><ItemGroup><PackageReference '
+                'Include="microsoft.net.test.sdk" Version="17.8.0" />'
+                "</ItemGroup></Project>",
+                True,
+            ),
+            (
+                "<Project><PropertyGroup><IsTestProject>true"
+                "</IsTestProject></PropertyGroup></Project>",
+                True,
+            ),
+            (
+                "<Project><PropertyGroup><IsTestProject>false"
+                "</IsTestProject></PropertyGroup></Project>",
+                False,
+            ),
+        ],
+    )
+    def test_declares_test_project_marker_matrix(
+        self, content: str, expected: bool
+    ) -> None:
+        assert _declares_test_project(content) is expected
 
 
 # ---------------------------------------------------------------------------

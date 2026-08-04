@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Versions pinned to the supported-engine-matrix floors per
+      decisions/2026-05-25-supported-engine-matrix.md. Do NOT downgrade
+      xunit to 2.5.x (the `dotnet new xunit` template default) and do NOT
+      upgrade to 3.x (v3 routes to `xunit-v3-coverage-deferred`).
+    -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.6.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Two levels up and back down: the whole point of the layout. -->
+    <ProjectReference Include="..\..\src\MathLib\MathLib.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -45,6 +45,19 @@ from novetest.run.types import EngineCandidate
 # (``MyLib/MyLib.csproj`` + ``MyLib.Tests/MyLib.Tests.csproj``), hence
 # the one-level ``*/*.csproj`` walk; ``*.sln`` lives at workspace root
 # by convention so it only globs depth 0.
+#
+# The OTHER canonical .NET layout — ``src/Foo/Foo.csproj`` +
+# ``tests/Foo.Tests/Foo.Tests.csproj``, what ``dotnet new sln``
+# conventions produce — puts every csproj at depth 2, out of the
+# ``*/*.csproj`` glob's reach. Such a workspace is detected here by its
+# ``*.sln`` marker, and ``dotnet_adapter._detect_test_project`` then
+# READS that solution to find the projects (2026-08-04 slice). Residual,
+# recorded rather than papered over: a depth-2 layout with NO solution
+# file is still not detected as .NET at all. Widening this row to
+# ``*/*/*.csproj`` would fix it but would also make any polyglot repo
+# holding a nested C# test project newly ambiguous at ``init`` — a
+# larger behavioural change than a detection gap warrants, so it is
+# deliberately not done here.
 _ENGINE_MARKER_TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("python", "pytest", ("pyproject.toml", "setup.py", "setup.cfg", "pytest.ini")),
     ("javascript-typescript", "jest", ("package.json",)),
