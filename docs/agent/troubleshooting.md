@@ -414,9 +414,24 @@ Should not occur.
 A failing **or errored** test run returns `ok: true`, exit `3`, an empty
 `errors` array, and a populated `data.recommendations`. An *errored*
 suite — one that crashed before producing normal results (e.g. a pytest
-collection / import error) — is still a persisted user result:
-`data.memory_entry.run_record.status` (`"errored"` vs `"failed"`)
-discriminates it. Route on the exit code, not on `ok`:
+collection / import error) — is still a persisted user result. A `test`
+envelope carries **no `memory_entry`**, so discriminate on the warning
+code, which projects exactly that shape (run `status` outside
+`passed`/`failed` **and** zero executed tests):
+
+```python
+# env = the parsed envelope, as in the routing block below
+never_ran = "suite-did-not-execute" in {w["code"] for w in env["warnings"]}
+```
+
+Beware the near miss: a suite whose *individual tests* error — a pytest
+fixture raising, say — collected and executed fine, so its run status is
+`"failed"`, not `"errored"`, and it emits **no** warning. On a `test`
+envelope it takes the ordinary failure shape (exit 3, the same
+categories) and is handled the same way. If you need the persisted
+status verbatim, read `data.run_reference.run_id` and call `novetest
+inspect <run_id>` — `data.run_summary.status` is the Run Record's own
+value. Route on the exit code, not on `ok`:
 
 ```python
 exit_code = run_novetest("test")          # process return code
@@ -538,7 +553,7 @@ carries a routing-scoped view of the same codes with their `details` keys.)
 | Code | Source | Meaning |
 |---|---|---|
 | `suite-did-not-execute` | orchestration | The suite never ran: the Run Record's `status` is outside `passed`/`failed` **and** it produced zero test outcomes (a collection-time syntax error or failing module-scope import). Zero failures here means nothing was tested, *not* that anything passed — so the run routes to `unavailable_analysis`, never `all_green`. `details`: `run_status`, `executed_tests`, `engine_name`, `ecosystem`. Emitted by the **`test` verb only** (`novetest run` returns `warnings: []` on the same tree). |
-| `zero-tests-collected` | run | The engine **ran to completion**, exited clean (`status: "passed"`) and collected zero tests — e.g. an explicit target matching nothing. `details`: `engine_name`. Reachable from `test` and `run`. Today: go / junit / xunit (jest and cargo raise loudly instead; pytest maps this case to `errored`). **Not** `suite-did-not-execute`: these two are "ran, found nothing" vs. "never ran", and the `code` is the only wire surface that separates them. |
+| `zero-tests-collected` | run | The engine **ran to completion**, exited clean (`status: "passed"`) and collected zero tests — e.g. an explicit target matching nothing. `details`: `engine_name`. Reachable from `test` and `run`. Emitted at **one engine-agnostic site**, keyed to the shape of the normalized run (`status: "passed"` + zero test results) — **not** to the ecosystem. Do not infer from your language that you are safe: a zero-match target can land here, on `suite-did-not-execute`, or on a loud `adapter-*` error, depending on which exit code the native engine chose for that particular kind of no-match, and most ecosystems have targets of more than one kind. pytest has both — a node id that does not exist (or a path that does not exist) lands **here, at exit 0**, while an existing directory that collects nothing lands on `suite-did-not-execute` at exit 3. Route on the code, per the verb-independent check above. **Not** `suite-did-not-execute`: these two are "ran, found nothing" vs. "never ran", and the `code` is the only wire surface that separates them. |
 | `localization-cache-rederived` | localization | Cache invalidated + re-derived because the **resolved** `--formula`/`--top-n` differed from the cached ones. An omitted flag resolves to its default (`ochiai` / `10`), so a bare call can trigger this too; `details.requested.formula_explicit` / `.top_n_explicit` disclose whether you typed the flag. Result is correct. `details`: `previous`, `requested`, `cache_path`. |
 | `localization-formula-noop-in-mode` | localization | `--formula` ignored because mode is `failure_proximity`. Drop the flag. `details`: `requested_formula`, `returned_formula`, `mode`. |
 | `localization-stale-build-rederived` | localization | The **cache predates this binary** and its ranking could not be trusted: an `sbfl_per_test` / `sbfl_aggregate` finding with no `test_file_exclusion_basis` in its metadata was derived before the test-file-exclusion fix, so it was invalidated and re-derived by this build. Distinct from `localization-cache-rederived`, which means "your flags differed from the cache" — this one is an upgrade story, and the ranking may have **moved** (the old one was the buggy one). `details`: `run_id`, `mode`, `missing_metadata_key`, `requested` (`{formula, top_n}`), `cache_path`. `failure_proximity` findings are exempt — they never carried those keys on any build. |

@@ -129,11 +129,14 @@ Notes worth internalising:
   now). Re-running an already-failing suite does **not** re-trigger them.
 - `flaky_suspected` never appears from `novetest test` — replay is a
   separate verb (see below).
-- The failing `calc` run below produces only `investigate_location`
-  (priority 2) — it fires purely because SBFL ranks a suspicious code
-  location (high confidence, rank ≤ 3), independent of any baseline. The
-  regression categories (1/3) would additionally appear only if a
-  newly-failing transition were detected for that run.
+- The failing `calc` run below produces `regression_with_localization`
+  (priority 1), **not** bare `investigate_location`: step 1 leaves a
+  green baseline in the store, so `test_subtract` is a *newly-failing*
+  transition, and the two facts — the transition and the SBFL location —
+  merge into one highest-signal recommendation. Run the same bug in a
+  store with no green baseline and you get two recommendations instead:
+  `investigate_location` (priority 2, on the SBFL ranking alone) plus
+  `unavailable_analysis` (priority 6, regression `no-comparable-baseline`).
 
 ---
 
@@ -169,25 +172,26 @@ novetest test
 ```
 
 ```
-5 recommendations · 1 category · run_id=01KVYRRS331FVE3XP71RKNYMMH
+1 recommendation · 1 category · run_id=01KVYRRS331FVE3XP71RKNYMMH
 
-  ! [investigate_location] Investigate `add`@2 in `calc/arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).
-      ↳ localization_finding calc/arithmetic.py:2 (rank 2)
-  ! [investigate_location] Investigate `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
+  ! [regression_with_localization] Test `tests/test_arithmetic.py::test_subtract` newly failing in this run; suspected location `subtract`@6 in `calc/arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
       ↳ localization_finding calc/arithmetic.py:6 (rank 1)
-  ! [investigate_location] Investigate `test_subtract`@13 in `tests/test_arithmetic.py` (rank 1, ochiai=1.000, sbfl_per_test).
-      ↳ localization_finding tests/test_arithmetic.py:13 (rank 1)
-  ! [investigate_location] Investigate `test_add_positive`@5 in `tests/test_arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).
-      ↳ localization_finding tests/test_arithmetic.py:5 (rank 2)
-  ! [investigate_location] Investigate `test_add_zero`@9 in `tests/test_arithmetic.py` (rank 2, ochiai=0.000, sbfl_per_test).
-      ↳ localization_finding tests/test_arithmetic.py:9 (rank 2)
 ```
 
 Exit code: **3** (your tests failed; `ok` is still `true`).
 
-The top signal is `subtract`@6 at `ochiai=1.000`, rank 1 — that is the
-line you broke. The `sbfl_per_test` token is the SBFL mode; `ochiai`
-is the formula.
+One line, and it is the line you broke: `subtract`@6 at
+`ochiai=1.000`, rank 1. The `sbfl_per_test` token is the SBFL mode;
+`ochiai` is the formula. The category is
+`regression_with_localization` rather than `investigate_location`
+because step 1 left a green baseline, so this is a newly-failing
+transition *and* a ranked location — see the note above.
+
+Two rules keep the underlying ranking short. Locations inside **test files** are
+excluded, so you get the product code to fix rather than the test that
+noticed it. And **zero-score** locations are filtered out entirely,
+which is why `add` — exercised by the passing tests, never by the
+failing one — does not appear either.
 
 ### 3. Drill in
 
@@ -202,16 +206,13 @@ novetest localization 01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 
 ```
-sbfl_per_test · ochiai · 5 entries · confidence=high · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
+sbfl_per_test · ochiai · 1 entries · confidence=high · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
   1. subtract@6 in calc/arithmetic.py (1.000)
-  1. test_subtract@13 in tests/test_arithmetic.py (1.000)
-  2. add@2 in calc/arithmetic.py (0.000)
-  2. test_add_positive@5 in tests/test_arithmetic.py (0.000)
-  2. test_add_zero@9 in tests/test_arithmetic.py (0.000)
 ```
 
-(Ties share a rank. `subtract` and the test that exercises it both
-score 1.000.)
+(Ranks are dense, so ties would share a rank — on this run nothing
+survives to tie with. On a bigger project you will see several entries;
+here the two filters from step 2 leave exactly one.)
 
 See coverage for the run (`test` always collects coverage):
 
@@ -220,7 +221,7 @@ novetest coverage show 01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 
 ```
-✓ per-test · 13/13 statements (100.0%) · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
+✓ per-test · 11/11 statements (100.0%) · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 
 Confirm the regression versus the green baseline:
@@ -284,9 +285,9 @@ novetest inspect 01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 ✗ 01KVYRRRN9FWVNQWVHNE1QHAQ4 · failed · pytest (python) · target=<workspace>
 
-  coverage      ✓ per-test · 13/13 statements (100.0%)
+  coverage      ✓ per-test · 11/11 statements (100.0%)
   regression    ✗ regressions · regressed=1 fixed=0 still_failing=0
-  localization  sbfl_per_test · ochiai · 5 entries · confidence=high
+  localization  sbfl_per_test · ochiai · 1 entries · confidence=high
   replay        ? unavailable (missing-derived-facts)
 ```
 

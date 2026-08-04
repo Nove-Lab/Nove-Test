@@ -61,7 +61,7 @@ With the bug, and `--coverage`:
 ✗ failed · 2/3 · run_id=01KVYRRSWDPWGGGV3GX5QXXJK6
   failed tests:
     ✗ tests/test_arithmetic.py::test_subtract
-  coverage: ✓ per-test · 13/13 statements (100.0%)
+  coverage: ✓ per-test · 11/11 statements (100.0%)
 ```
 
 The `coverage:` line only appears when you pass `--coverage`. A run
@@ -93,7 +93,7 @@ novetest coverage show 01KVYRRRN9FWVNQWVHNE1QHAQ4
 Text mode:
 
 ```
-✓ per-test · 13/13 statements (100.0%) · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
+✓ per-test · 11/11 statements (100.0%) · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
 ```
 
 When the suite has branch coverage, a `· branches C/N` segment is
@@ -115,7 +115,7 @@ facts). Order is `baseline` then `target`.
 novetest coverage diff 01KVYRRSF4... 01KVYRRSWD...
 ```
 
-Text mode (two coverage-bearing `calc` runs, both 13/13 statements):
+Text mode (two coverage-bearing `calc` runs, both 11/11 statements):
 
 ```
 coverage diff · 01KVYRRSF48RMYV84MTB4XQ6P9 → 01KVYRRSWDPWGGGV3GX5QXXJK6
@@ -208,18 +208,17 @@ line):
 Text-mode output (with the bug):
 
 ```
-sbfl_per_test · ochiai · 5 entries · confidence=high · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
+sbfl_per_test · ochiai · 1 entries · confidence=high · run_id=01KVYRRRN9FWVNQWVHNE1QHAQ4
   1. subtract@6 in calc/arithmetic.py (1.000)
-  1. test_subtract@13 in tests/test_arithmetic.py (1.000)
-  2. add@2 in calc/arithmetic.py (0.000)
-  2. test_add_positive@5 in tests/test_arithmetic.py (0.000)
-  2. test_add_zero@9 in tests/test_arithmetic.py (0.000)
 ```
 
 The header is `<mode> · <formula> · <N> entries · confidence=<level>`.
 Each line is `<rank>. <symbol>@<line> in <file> (<normalized score>)`.
 The buggy `subtract@6` lands rank 1 with score 1.000. Ranks are dense,
-so ties share a rank (here two entries are tied at rank 1).
+so ties share a rank — on a list this short there is nothing to tie
+with. Two filters keep it short: locations inside **test files** are
+excluded from the ranking, and **zero-score** locations are dropped
+entirely (in `calc` that removes the three test symbols and `add`).
 
 The mode is chosen automatically from the run's coverage:
 `sbfl_per_test` (pytest with per-test coverage, confidence high),
