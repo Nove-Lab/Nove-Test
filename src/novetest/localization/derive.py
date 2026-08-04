@@ -632,36 +632,49 @@ def _derive_aggregate(
     # paths never match the project-relative ``coverage.files`` paths, so
     # this filter zeroes ``ef`` for every candidate. That is not a latent
     # hazard for some future engine: it is the live behaviour of a
-    # supported ecosystem on released v0.3.0. A jest CoverageFactSet has
-    # no ``line_contexts`` (``mapping_granularity: "aggregate"``), so
-    # every failing jest run dispatches here; jest failure frames are
-    # absolute (``/w/__tests__/x.test.js:9:25``,
-    # ``/w/node_modules/jest-circus/build/run.js:316:40``) while
-    # ``coverage.files`` are project-relative (``src/classifier.js``);
-    # the intersection is empty by construction → ``ef = 0`` everywhere →
-    # all four formulas score 0 → the ``score > 0`` filter below drops
-    # every candidate → ``entries: []`` with ``confidence: "medium"``.
-    # Observed in a counted evaluation run:
-    # ``findings/manual-test-team-2026-08-04-w1r-p3-rerun-scorecard.md``
-    # (D3/U5); tracked as delivery-phasing row 35. (Until 2026-08-04 this
+    # supported ecosystem. A jest CoverageFactSet has no
+    # ``line_contexts`` (``mapping_granularity: "aggregate"``), so every
+    # failing jest run dispatches here; the frames parsed at :606 are
+    # absolute (``/w/src/classifier.js:8:18``) while ``coverage.files``
+    # are project-relative (``src/classifier.js``); the intersection is
+    # empty → ``ef = 0`` everywhere → all four formulas score 0 → the
+    # ``score > 0`` filter below drops every candidate → ``entries: []``
+    # with ``confidence: "medium"`` and
+    # ``test_file_locations_excluded: 0``. First observed in a counted
+    # evaluation run
+    # (``findings/manual-test-team-2026-08-04-w1r-p3-rerun-scorecard.md``,
+    # D3/U5); tracked as delivery-phasing row 35. (Until 2026-08-04 this
     # comment claimed the path was "production-unreachable today" and
-    # blamed sparse istanbul instrumentation; both were false — the
-    # failing run's fact set carried every ``src/*.js`` file, healthily
-    # covered, and still returned nothing.)
+    # blamed sparse istanbul instrumentation; both were false.)
     #
-    # DO NOT "fix" this by normalizing paths here. Jest assertion frames
-    # name only the test file and ``node_modules`` internals — never
-    # product source — so a normalized ``ef`` could attach at best to the
-    # test file, which the test-node exclusion below then correctly
-    # removes (and istanbul does not instrument test files, so they are
-    # usually absent from ``coverage.files`` anyway). JS aggregate
-    # localization is STRUCTURALLY blank, not incidentally blank. The
-    # registered fix is per-test coverage attribution (``line_contexts``)
-    # from the jest adapter, which moves JS onto the ``sbfl_per_test``
-    # path — delivery-phasing row 59, scheduled after the concluding
-    # evaluation wave per
-    # ``decisions/2026-08-04-gate1-p3-rerun-hp-ac-preflight-and-wave2-arm.md``
-    # decision 8.
+    # WHETHER PATH NORMALIZATION WOULD HELP DEPENDS ON THE FAILURE
+    # SHAPE. This comment asserted until 2026-08-04 that it never could;
+    # that is false, and the two shapes differ. Both were measured on
+    # ``tests/fixtures/projects/jest-basic-coverage`` (jest 29.7.0, one
+    # seeded defect at ``src/classifier.js:8``, one failing test,
+    # ``coverage.files == ['src/classifier.js']``); both return
+    # ``entries: []`` here today:
+    #   * ASSERTION failure (``expect(classify(7)).toBe('positive')``):
+    #     the parsed frames name the test file and ``node_modules``
+    #     internals only — no product source. Normalized to
+    #     workspace-relative they intersect ``coverage.files`` in
+    #     nothing, so normalization alone changes this class not at all.
+    #   * THROWN error (``TypeError: value.missingHelper is not a
+    #     function``): the top frame IS product source —
+    #     ``src/classifier.js:8``, the defect. Normalized, the parsed set
+    #     intersects ``coverage.files`` in exactly one entry,
+    #     ``src/classifier.js``, because the coverage-scope filter here
+    #     drops the test-file and ``node_modules`` frames. For this class
+    #     normalization alone is the difference between ``entries: []``
+    #     and a single candidate that is the defect. The no-coverage
+    #     sibling mode already makes that call
+    #     (``failure_proximity.py:501``) and does surface the line — at
+    #     rank 1, tied with six ``node_modules`` frames it has no
+    #     coverage set to filter against.
+    # Per-test coverage attribution (``line_contexts``) from the jest
+    # adapter — delivery-phasing row 59 — is what covers BOTH shapes.
+    # Whether the narrower normalization ships before it is that row's
+    # scoping call; do not make it here.
     covered_files = {f.file_path for f in coverage.files}
     all_files = sorted(covered_files)
 
