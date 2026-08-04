@@ -28,7 +28,7 @@ Per-test pipeline (Path A, steps 5–10):
   7. aggregate up to symbols via Python ast resolver (max(score) per
      symbol per design-of-record §3), then drop candidates living in one
      of this run's own test files (``candidate_filter`` — a failing
-     test's body is ``ef=1, ep=0`` by construction and outranks the
+     test's body is ``ef=1, ep=0`` by construction and can outrank the
      defect otherwise; applied to the aggregate path too).
   8. min-max normalize + dense 1-based rank within the FULL ranking
      (before truncation), then drop non-positive selected-formula
@@ -352,8 +352,11 @@ def _derive_per_test(
 
     # Drop candidates that ARE one of THIS RUN's test nodes before any
     # ranking work: a failing test's own body is ``ef = 1, ep = 0`` by
-    # construction and outscores the defect on every project
-    # (``candidate_filter`` module docstring carries the measured counts).
+    # construction, so an unfiltered ranking can lead with the test
+    # function rather than the defect it exposes. Whether it outscores
+    # the defect or merely ties it is not fixed — it moves with the
+    # formula and with how many tests fail (``candidate_filter`` module
+    # docstring carries the measured counts for one project).
     # The match is by file AND symbol, so a co-located file's production
     # symbols survive alongside the tests it also owns. Everything below —
     # normalization, dense ranks, tie groups, top_n — therefore operates on
@@ -624,14 +627,41 @@ def _derive_aggregate(
     #
     # Source: questions/main-branch-team-2026-05-31-localization-aggregate-e2e-defect3-parser-stdlib-pollution.md
     #
-    # Known limitation (MT observation, S31 — comment only, no behavior
-    # change): ABSOLUTE ``failure_reference`` paths never match the
-    # project-relative ``coverage.files`` paths, so this filter zeroes
-    # ``ef`` for every candidate if aggregate mode is ever reached by an
-    # engine emitting absolute paths in failure logs. Production-
-    # unreachable today — pytest coverage is always per-test, and the
-    # no-coverage route goes to failure_proximity — but worth knowing
-    # before wiring a new aggregate-coverage engine through Path B.
+    # KNOWN DEFECT, AND IT IS REACHED IN PRODUCTION TODAY — jest
+    # (comment only, no behavior change). ABSOLUTE ``failure_reference``
+    # paths never match the project-relative ``coverage.files`` paths, so
+    # this filter zeroes ``ef`` for every candidate. That is not a latent
+    # hazard for some future engine: it is the live behaviour of a
+    # supported ecosystem on released v0.3.0. A jest CoverageFactSet has
+    # no ``line_contexts`` (``mapping_granularity: "aggregate"``), so
+    # every failing jest run dispatches here; jest failure frames are
+    # absolute (``/w/__tests__/x.test.js:9:25``,
+    # ``/w/node_modules/jest-circus/build/run.js:316:40``) while
+    # ``coverage.files`` are project-relative (``src/classifier.js``);
+    # the intersection is empty by construction → ``ef = 0`` everywhere →
+    # all four formulas score 0 → the ``score > 0`` filter below drops
+    # every candidate → ``entries: []`` with ``confidence: "medium"``.
+    # Observed in a counted evaluation run:
+    # ``findings/manual-test-team-2026-08-04-w1r-p3-rerun-scorecard.md``
+    # (D3/U5); tracked as delivery-phasing row 35. (Until 2026-08-04 this
+    # comment claimed the path was "production-unreachable today" and
+    # blamed sparse istanbul instrumentation; both were false — the
+    # failing run's fact set carried every ``src/*.js`` file, healthily
+    # covered, and still returned nothing.)
+    #
+    # DO NOT "fix" this by normalizing paths here. Jest assertion frames
+    # name only the test file and ``node_modules`` internals — never
+    # product source — so a normalized ``ef`` could attach at best to the
+    # test file, which the test-node exclusion below then correctly
+    # removes (and istanbul does not instrument test files, so they are
+    # usually absent from ``coverage.files`` anyway). JS aggregate
+    # localization is STRUCTURALLY blank, not incidentally blank. The
+    # registered fix is per-test coverage attribution (``line_contexts``)
+    # from the jest adapter, which moves JS onto the ``sbfl_per_test``
+    # path — delivery-phasing row 59, scheduled after the concluding
+    # evaluation wave per
+    # ``decisions/2026-08-04-gate1-p3-rerun-hp-ac-preflight-and-wave2-arm.md``
+    # decision 8.
     covered_files = {f.file_path for f in coverage.files}
     all_files = sorted(covered_files)
 

@@ -7,7 +7,8 @@ is executed by exactly one failing test and by no passing test, so its
 counts are always ``ef = 1, ep = 0`` — the shape every suspiciousness
 formula is designed to reward. When the coverage tool measures the test
 files too (the pytest adapter runs ``--cov=.``), those lines enter the
-spectra as candidate locations and outscore the real defect, which is
+spectra as candidate locations, and an unfiltered ranking can lead with
+the test function rather than the defect it exposes — the defect is
 typically executed by passing tests as well (``ep > 0``).
 
 Measured on ``tests/fixtures/projects/localization-shared-defect`` (7
@@ -18,8 +19,19 @@ tests, 2 failing), reproducing the wave-1 persona-P1 ranking exactly:
 | a failing test's own body               |  1 |  0 |  1 |  5 | 0.7071 |
 | the defect (``totals.py::invoice_total``)|  2 |  3 |  0 |  2 | 0.6325 |
 
-``ep = 0`` beats ``ef = 2``. This does not depend on the project, the
-language or the defect — it follows from the definition of a test.
+``ep = 0`` beats ``ef = 2`` **in this measurement**. Read the table as
+evidence, not as a law: whether a test body outscores the defect or
+merely ties it is **not** a fixed relation — it moves with the formula
+and with how many tests fail. Re-derived across two fixtures × four
+formulas, the suppressed test symbol came out ≥ ``entries[0]`` in
+**6 of 8** (wave-3 MT-3): ``op2`` and ``dstar2`` on this very fixture
+put the defect ahead of it. The same qualification is what
+``docs/agent/advanced.md`` tells agents, and the earlier universal
+phrasing here is the source it was paraphrased from — do not restore
+it. What holds generally is the *shape*, not the margin: a failing
+test's own body is ``ef = 1, ep = 0``, the maximum-scoring shape by
+construction, which is why the filter is unconditional rather than
+score-gated.
 
 ## The rule
 
