@@ -170,12 +170,40 @@ async def execute_with_engine_context(
         # Silent-green visibility (W1/S4, RUN-12, correction C1): the engine
         # ran to completion, exited clean, and collected ZERO tests — a
         # ``passed`` status here means nothing was executed. Decorate the run
-        # with one loud warning at this single engine-agnostic site. It fires
-        # for exactly the engines that reach it with a passed-empty RunRecord:
-        # go / junit / xunit. jest and cargo raise ``AdapterInvocationError``
-        # before a RunRecord exists (already loud — this site never sees
-        # them), and pytest maps exit-5 to ``errored`` (separate concern), so
-        # no engine branching is needed here. Transient envelope decoration
+        # with one loud warning at this single engine-agnostic site.
+        #
+        # Do NOT read this site as "fires for engines X, Y, Z". It keys purely
+        # on the normalized record, and whether an engine arrives here with a
+        # passed-empty one depends on the SHAPE of the no-match and on the
+        # invocation the calling verb chose — not on the ecosystem. Measured
+        # first-hand on this host, 2026-08-04 (board rows 54 + 56 slice):
+        #
+        #   pytest, nonexistent node id  -> raw exit 4  -> FIRES (exit 0)
+        #     `novetest run 'tests/test_math_utils.py::test_typo'` in
+        #     `pytest-basic`; `metadata.native_exit_code == 4`
+        #   pytest, empty directory      -> raw exit 5  -> errored, exit 3
+        #     `novetest run tests/emptysub` in the same workspace
+        #   go, no-match `::TestX`       -> FIRES on `run` AND on `test`
+        #   cargo, no-match filter       -> FIRES on `novetest test`, while
+        #     the adapter-direct bare-run path raises
+        #     `AdapterInvocationError` before a RunRecord exists
+        #   jest, nonexistent test file  -> raises (exit 4,
+        #     `adapter-unparseable-output`); never reaches here
+        #
+        # Both pytest rows are pinned in
+        # `tests/integration/run/test_zero_collection_warning.py` alongside the
+        # go / jest / cargo ones; junit / xunit are pinned by
+        # `test_junit_warnings.py` / `test_dotnet_warnings.py`.
+        #
+        # pytest's exit-4/exit-5 split is the part to keep explicit: exit 5 (a
+        # directory or glob that matches nothing) is a different concern, owned
+        # by `run/normalizer.py::_aggregate_pytest_status`, whose `(2, 3, 5)`
+        # branch maps it to `errored` and which the `test` verb then projects
+        # as `suite-did-not-execute` at exit 3. Restating that as the
+        # unqualified "pytest maps this case to `errored`" is exactly how a
+        # true sentence about exit 5 shipped as a false docs claim (row 54).
+        #
+        # No engine branching is needed here. Transient envelope decoration
         # only — NOT persisted on RunRecord (reuses the warning channel of
         # ``decisions/2026-06-06-adapter-warning-surface-v1-metadata-channel.md``).
         warnings = warnings + (

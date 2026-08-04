@@ -12,14 +12,29 @@ three-way C1 behaviour end-to-end across the engines that share this file:
 | junit | ``passed`` + ``zero-tests-collected`` warning | ``test_junit_warnings.py`` |
 | xunit | ``passed`` + ``zero-tests-collected`` warning | ``test_dotnet_warnings.py`` |
 | jest | ``AdapterInvocationError`` *before* a RunRecord (loud) | ``test_jest_zero_collection_raises_before_record`` (this file) |
-| cargo | ``AdapterInvocationError`` *before* a RunRecord (loud) | ``test_cargo_zero_collection_raises_before_record`` (this file) |
-| pytest | exit-5 → ``errored`` (separate concern) | ``tests/unit/run/test_engine.py`` case (3) |
+| cargo, **bare** ``novetest run`` (adapter-direct) | ``AdapterInvocationError`` *before* a RunRecord (loud) | ``test_cargo_zero_collection_raises_before_record`` (this file) |
+| pytest, nonexistent **node id** (raw exit 4) | ``passed`` + ``zero-tests-collected`` warning | ``test_cli_smoke_pytest_nonexistent_node_id_emits_warning`` (this file) |
+| pytest, **directory/glob** that matches nothing (raw exit 5) | ``errored`` (separate concern) | ``test_cli_smoke_pytest_empty_directory_is_errored_not_warned`` (this file); ``tests/unit/run/test_engine.py`` case (3) |
+
+pytest's two rows are the correction registered as delivery-phasing row 54:
+this table used to carry the single row "pytest | exit-5 → ``errored``",
+which is true of exit 5 and false by omission of exit 4 — the shape where
+pytest DOES reach the warning site, at exit 0.
+
+**Reachability has a second axis this table cannot express: the VERB.** The
+warning site keys on the record, and the calling verb picks the invocation
+that produces it — ``novetest test`` collects coverage, so an engine can
+raise on one verb and arrive passed-empty on the other. Measured 2026-08-04
+in ``cargo-test-basic``:
+``novetest test 'cargo_test_basic::tests::no_such_test_zzz'`` → exit **0**,
+``warnings == ['zero-tests-collected']`` (``engine_name: "cargo-test"``),
+``all_green`` — the same filter that raises on the adapter-direct path below.
+The cargo row is therefore scoped to the bare-run path its test exercises.
 
 The go test is the "go one" the S4 brief asks for; the jest / cargo
-adapter-direct tests are the confirming C1 negatives (they never reach the
-warning site because they raise a typed error first). Each skip-gates on
-its toolchain so unequipped CI stays green; the equip-and-exercise gate on
-an equipped host runs all three.
+adapter-direct tests are the confirming C1 negatives *for that path*. Each
+skip-gates on its toolchain so unequipped CI stays green; the
+equip-and-exercise gate on an equipped host runs all three.
 """
 
 from __future__ import annotations
@@ -139,6 +154,90 @@ def test_cli_smoke_gotest_zero_collection_emits_warning(
     assert warning.get("message")
     assert "collected zero tests" in warning["message"]
     assert warning.get("details", {}).get("engine_name") == "go-test"
+
+
+# ---------------------------------------------------------------------------
+# pytest — the second positive case, and the one the table used to deny
+#
+# Delivery-phasing row 54's ride-along. pytest has TWO zero-collection exit
+# codes and only one of them is 5: a directory/glob that matches nothing is
+# exit 5 → `_aggregate_pytest_status`'s `(2, 3, 5)` branch → `errored`, which
+# never reaches the warning site; a **node id that does not exist** is exit
+# **4**, pytest's usage-error family, outside that set → `passed` with zero
+# results → the warning fires at exit 0. Both rows are measured below so the
+# comment in `run/engine.py` is backed by an executed command rather than by
+# a claim.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pytest_zero_collection_workspace(tmp_path: Path) -> Path:
+    """Copy ``pytest-basic`` so ``novetest init`` writes into the copy."""
+
+    dest = tmp_path / "pytest-basic"
+    shutil.copytree(FIXTURE_ROOT / "pytest-basic", dest)
+    init_result = _spawn_novetest(dest, ["init"], timeout=60.0)
+    assert init_result.returncode == 0, init_result.stderr
+    return dest
+
+
+def test_cli_smoke_pytest_nonexistent_node_id_emits_warning(
+    pytest_zero_collection_workspace: Path,
+) -> None:
+    """A mistyped node id: raw pytest exit **4**, record ``passed`` with zero
+    results, ``zero-tests-collected`` on the envelope, process exit **0**.
+
+    Reproducer this pins:
+    ``novetest run 'tests/test_math_utils.py::test_typo'`` in ``pytest-basic``.
+    """
+
+    run_result = _spawn_novetest(
+        pytest_zero_collection_workspace,
+        ["run", "tests/test_math_utils.py::test_typo"],
+        timeout=300.0,
+    )
+    assert run_result.returncode == 0, (
+        f"expected exit 0 (EXIT_OK); got {run_result.returncode}. "
+        f"stdout={run_result.stdout!r} stderr={run_result.stderr!r}"
+    )
+
+    envelope = json.loads(run_result.stdout)
+    run_record = envelope["data"]["memory_entry"]["run_record"]
+    assert run_record["status"] == "passed"
+    assert run_record["test_results"] == []
+    # The discriminator against the exit-5 shape below, asserted rather than
+    # described: 4 is pytest's usage-error code, not a collection failure.
+    assert run_record["metadata"]["native_exit_code"] == 4
+
+    matching = [
+        w for w in envelope["warnings"] if w.get("code") == ZERO_TESTS_COLLECTED
+    ]
+    assert matching, f"got warnings={envelope['warnings']!r}"
+    assert matching[0]["details"]["engine_name"] == "pytest"
+
+
+def test_cli_smoke_pytest_empty_directory_is_errored_not_warned(
+    pytest_zero_collection_workspace: Path,
+) -> None:
+    """The exit-**5** control, and the reason the engine comment must keep the
+    two codes apart: a directory that collects nothing is ``errored`` at exit
+    3 and never reaches the warning site."""
+
+    (pytest_zero_collection_workspace / "tests" / "emptysub").mkdir()
+
+    run_result = _spawn_novetest(
+        pytest_zero_collection_workspace, ["run", "tests/emptysub"], timeout=300.0
+    )
+    assert run_result.returncode == 3, (
+        f"expected exit 3 for the exit-5 collection failure; got "
+        f"{run_result.returncode}. stdout={run_result.stdout!r}"
+    )
+
+    envelope = json.loads(run_result.stdout)
+    run_record = envelope["data"]["memory_entry"]["run_record"]
+    assert run_record["status"] == "errored"
+    assert run_record["metadata"]["native_exit_code"] == 5
+    assert [w.get("code") for w in envelope["warnings"]] == []
 
 
 # ---------------------------------------------------------------------------

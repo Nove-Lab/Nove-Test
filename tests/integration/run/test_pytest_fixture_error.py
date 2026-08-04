@@ -18,10 +18,17 @@ Measured on ``69b1d5c`` before the fix, against
 | ``tests/test_teardown_error.py`` | ``passed`` / 0 | ``failed`` / 3 |
 | ``tests/test_error_and_failure.py`` | ``failed`` / 3 | ``failed`` / 3 (unmoved) |
 
+Row 56 (the direct successor, second half of this file) adds the failure TEXT
+those errored tests carry. Pre-row-56 every one of them had
+``failure_reference: null``, because the extractor mined the ``call`` phase
+only — a setup error emits no ``call`` key at all and a teardown error emits
+a *passing* one.
+
 Scope note: these assertions are deliberately Run-Record-level (status,
-per-test outcomes, exit code) and say nothing about ``recommendations[]`` —
-that envelope is orchestration's contract and Manual Test verifies it end to
-end. What the Run engine owes the rest of the system is an honest record.
+per-test outcomes, exit code, failure reference) and say nothing about
+``recommendations[]`` — that envelope is orchestration's contract and Manual
+Test verifies it end to end. What the Run engine owes the rest of the system
+is an honest record.
 
 The payload-level pins (the mapping table itself, the all-error suite, and the
 untouched ``exit_code in (2, 3, 5)`` branch) live in
@@ -157,3 +164,82 @@ def test_error_plus_real_failure_suite_is_unmoved(
 
     assert run_record["status"] == "failed"
     assert _outcomes(run_record) == ["errored", "failed"]
+
+
+# ---------------------------------------------------------------------------
+# Row 56 — the errored test's failure text, end to end
+#
+# Row 49 (above) made this suite fail-like, which is what makes it reach
+# Localization at all; row 56 is what it arrives WITH. Pre-row-56 every
+# errored test carried ``failure_reference: null`` on every shape, because the
+# extractor mined the ``call`` phase only and an errored test's crash is never
+# there. Run-Record-level assertions only — nothing here touches
+# ``recommendations[]`` or localization output.
+# ---------------------------------------------------------------------------
+
+
+def _failure_reference(run_record: dict[str, object], outcome: str) -> str:
+    """The single ``outcome``-spelled result's ``failure_reference``, asserted
+    non-null on the way out."""
+
+    test_results = run_record["test_results"]
+    assert isinstance(test_results, list)
+    matching = [tr for tr in test_results if tr["outcome"] == outcome]
+    assert len(matching) == 1, f"expected exactly one {outcome!r} result: {matching!r}"
+    reference = matching[0]["failure_reference"]
+    assert isinstance(reference, str), (
+        f"{outcome!r} result carries no failure_reference: {matching[0]!r}"
+    )
+    return reference
+
+
+def test_setup_error_test_carries_the_fixture_crash_text(
+    fixture_error_workspace: Path,
+) -> None:
+    """The errored test's ``failure_reference`` names the raise site inside
+    the SETUP fixture — file, line, and the exception the fixture raises."""
+
+    run_record = _run_record(fixture_error_workspace, "tests/test_setup_error.py")
+
+    reference = _failure_reference(run_record, "errored")
+    assert "RuntimeError: warehouse service unavailable" in reference
+    # `<path>:<lineno>: ` prefix, from pytest's own `crash` object. The path is
+    # the fixture's own module (the raise is in `warehouse_connection`), not
+    # the test that merely depends on it.
+    assert "test_setup_error.py:" in reference
+    # The passing sibling stays clean.
+    test_results = run_record["test_results"]
+    assert isinstance(test_results, list)
+    passed = [tr for tr in test_results if tr["outcome"] == "passed"]
+    assert passed[0]["failure_reference"] is None
+
+
+def test_teardown_error_test_carries_the_fixture_crash_text(
+    fixture_error_workspace: Path,
+) -> None:
+    """The teardown shape: the entry HAS a ``call`` phase and it *passed*, so
+    a "look in ``call``" extractor finds nothing. The reference now comes from
+    the ``teardown`` phase."""
+
+    run_record = _run_record(fixture_error_workspace, "tests/test_teardown_error.py")
+
+    reference = _failure_reference(run_record, "errored")
+    assert "RuntimeError: warehouse session close failed" in reference
+    assert "test_teardown_error.py:" in reference
+
+
+def test_error_and_failure_carry_their_own_phases_crash_text(
+    fixture_error_workspace: Path,
+) -> None:
+    """Both halves of the mixed module at once: the errored test gets the
+    setup crash (new), the genuinely failing test keeps its ``call``-phase
+    assertion text (unmoved — this one was already correct pre-row-56)."""
+
+    run_record = _run_record(
+        fixture_error_workspace, "tests/test_error_and_failure.py"
+    )
+
+    errored_reference = _failure_reference(run_record, "errored")
+    assert "RuntimeError: warehouse service unavailable" in errored_reference
+    failed_reference = _failure_reference(run_record, "failed")
+    assert "assert 8 == 99" in failed_reference

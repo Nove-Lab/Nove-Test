@@ -11,6 +11,7 @@ from novetest.run.errors import AdapterInvocationError
 from novetest.run.normalizer import (
     _aggregate_pytest_status,
     _map_pytest_outcome,
+    _pytest_failing_phase,
     normalize_native_result,
 )
 from novetest.run.types import NativeEngineContext, NativeResult
@@ -298,12 +299,13 @@ def test_setup_error_payload_yields_failed_status(tmp_path: Path) -> None:
     assert sorted(tr.outcome for tr in record.test_results) == ["errored", "passed"]
     errored = [tr for tr in record.test_results if tr.outcome == "errored"]
     assert errored[0].node_id == "tests/test_setup_error.py::test_needs_warehouse"
-    # The crash text lives in the `setup` phase; the extractor reads `call`
-    # only, so an errored test carries no failure_reference today. Pinned as
-    # the CURRENT contract (downstream `failure_proximity` treats a missing
-    # reference as "no evidence" and does not crash) — not as a desirable
-    # one; widening the extraction to setup/teardown is a separate change.
-    assert errored[0].failure_reference is None
+    # The crash text lives in the `setup` phase (this entry has no `call` key
+    # at all). Row 56 widened the extractor past `call`, so it is now carried;
+    # the exact string and the phase-selection rule are pinned below in the
+    # row-56 block.
+    assert errored[0].failure_reference == (
+        "/abs/tests/test_setup_error.py:26: RuntimeError: warehouse service unavailable"
+    )
 
 
 def test_teardown_error_payload_yields_failed_status(tmp_path: Path) -> None:
@@ -425,6 +427,215 @@ def test_aggregate_pytest_status_collection_failure_branch_is_unmoved() -> None:
     assert _aggregate_pytest_status({"exitcode": 0}, all_passed) == "passed"
     # A missing / non-int exit code stays `errored` too.
     assert _aggregate_pytest_status({}, all_passed) == "errored"
+
+
+# ---------------------------------------------------------------------------
+# pytest failure-reference phase selection — delivery-phasing row 56
+#
+# Row 49 made an errored test fail-like; row 56 gives it its failure text.
+# `_build_pytest_test_result` used to mine the `call` phase only, and an
+# errored test's crash is never there — so every errored test carried
+# `failure_reference: None` on every shape.
+#
+# The payloads below are TRANSCRIBED from pytest-json-report output measured
+# on this host (pytest 9.0.3 + pytest-json-report 1.5.0), not invented. The
+# three shapes the fix turns on, as measured:
+#
+#   setup error     -> NO `call` key; `setup.outcome == "failed"` + crash
+#   teardown error  -> `call.outcome == "passed"`; `teardown` carries the crash
+#   plain failure   -> `call.outcome == "failed"` + crash (unchanged behaviour)
+#
+# A phase's own `outcome` is pytest's report vocabulary (passed/failed/
+# skipped): singular `"error"` is an ITEM-level category and never appears on
+# a phase, which is why the selector tests `== "failed"`.
+# ---------------------------------------------------------------------------
+
+
+# Real shape, measured: an assertion failure in `call` AND a fixture that
+# raises in teardown. pytest reports the item as `error` (the teardown
+# category is logged last and wins), and TWO phases are fail-like.
+CALL_FAILURE_PLUS_TEARDOWN_ERROR_ENTRY: dict[str, object] = {
+    "nodeid": "tests/test_probe.py::test_fails_in_call_and_errors_in_teardown",
+    "outcome": "error",
+    "setup": {"duration": 0.00008, "outcome": "passed"},
+    "call": {
+        "duration": 0.0001,
+        "outcome": "failed",
+        "crash": {
+            "path": "/abs/tests/test_probe.py",
+            "lineno": 12,
+            "message": "assert 1 == 2",
+        },
+        "longrepr": "def test_fails_in_call_and_errors_in_teardown():\n>   assert 1 == 2",
+    },
+    "teardown": {
+        "duration": 0.00008,
+        "outcome": "failed",
+        "crash": {
+            "path": "/abs/tests/test_probe.py",
+            "lineno": 8,
+            "message": "RuntimeError: teardown blew up",
+        },
+        "longrepr": ">       raise RuntimeError('teardown blew up')",
+    },
+}
+
+
+# Real shape, measured: `@pytest.mark.xfail(strict=True)` on a test that
+# passes. The `call` phase is `failed` with NO `crash` key at all and a plain
+# `longrepr` string — the payload that makes the longrepr fallback a real
+# path rather than a guard.
+STRICT_XPASS_ENTRY: dict[str, object] = {
+    "nodeid": "tests/test_probe.py::test_strict_xpass",
+    "outcome": "failed",
+    "setup": {"duration": 0.00006, "outcome": "passed"},
+    "call": {
+        "duration": 0.00005,
+        "outcome": "failed",
+        "longrepr": "[XPASS(strict)] expected to fail but does not",
+    },
+    "teardown": {"duration": 0.00004, "outcome": "passed"},
+}
+
+
+def test_setup_error_carries_the_setup_phase_crash_text(tmp_path: Path) -> None:
+    """(a) A setup error's entry has no `call` key at all, so the pre-row-56
+    extractor short-circuited and the errored test reached Localization with
+    zero failure text. The `setup` phase's crash is now the reference."""
+
+    record = normalize_native_result(
+        _native_result(SETUP_ERROR_PAYLOAD, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_setup_error.py",
+        target_type="file",
+    )
+    errored = [tr for tr in record.test_results if tr.outcome == "errored"]
+    assert len(errored) == 1
+    assert errored[0].failure_reference == (
+        "/abs/tests/test_setup_error.py:26: RuntimeError: warehouse service unavailable"
+    )
+    # The passing sibling is untouched: a reference is mined only for a
+    # fail-like OUTCOME, so a green test cannot acquire one.
+    passed = [tr for tr in record.test_results if tr.outcome == "passed"]
+    assert passed[0].failure_reference is None
+
+
+def test_teardown_error_carries_the_teardown_phase_crash_text(tmp_path: Path) -> None:
+    """(b) The teardown shape is the one a `call`-absence check would miss:
+    the entry HAS a `call` phase and it is a *passing* one, so the old code
+    looked in a phase that never fails and found nothing."""
+
+    record = normalize_native_result(
+        _native_result(TEARDOWN_ERROR_PAYLOAD, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_teardown_error.py",
+        target_type="file",
+    )
+    assert [tr.outcome for tr in record.test_results] == ["errored"]
+    assert record.test_results[0].failure_reference == (
+        "/abs/tests/test_teardown_error.py:26: "
+        "RuntimeError: warehouse session close failed"
+    )
+
+
+def test_plain_call_failure_reference_is_byte_identical_to_pre_row_56(
+    tmp_path: Path,
+) -> None:
+    """(c) The regression pin. `FAILING_PAYLOAD`'s reference was measured on
+    `13f217a` (pre-row-56) as exactly the string below; restructuring the
+    lookup must not move one byte of it, nor the outcome or duration."""
+
+    record = normalize_native_result(
+        _native_result(FAILING_PAYLOAD, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/",
+        target_type="directory",
+    )
+    failed = [tr for tr in record.test_results if tr.outcome == "failed"]
+    assert len(failed) == 1
+    assert failed[0].failure_reference == "tests/test_x.py:7: assert 1 == 2"
+    assert failed[0].duration_ms == 2
+
+
+def test_call_failure_wins_over_a_later_teardown_error(tmp_path: Path) -> None:
+    """Phase ORDER, on the one measured shape where two phases fail: the
+    assertion that broke (`call`) is the reference, not the teardown crash
+    logged after it. This is also a pre-row-56 pin — the entry HAS a failing
+    `call`, so the old code already returned this exact string."""
+
+    payload: dict[str, object] = {
+        "exitcode": 1,
+        "summary": {"error": 1, "total": 1, "collected": 1},
+        "tests": [CALL_FAILURE_PLUS_TEARDOWN_ERROR_ENTRY],
+    }
+    record = normalize_native_result(
+        _native_result(payload, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_probe.py",
+        target_type="file",
+    )
+    assert [tr.outcome for tr in record.test_results] == ["errored"]
+    assert record.test_results[0].failure_reference == (
+        "/abs/tests/test_probe.py:12: assert 1 == 2"
+    )
+
+
+def test_failing_phase_without_crash_falls_back_to_longrepr(tmp_path: Path) -> None:
+    """A strict xfail that passes: `call` is `failed` with no `crash` key and
+    only a `longrepr` string. Measured payload, so the fallback branch is
+    pinned by something the engine really emits."""
+
+    payload: dict[str, object] = {
+        "exitcode": 1,
+        "summary": {"failed": 1, "total": 1, "collected": 1},
+        "tests": [STRICT_XPASS_ENTRY],
+    }
+    record = normalize_native_result(
+        _native_result(payload, tmp_path),
+        NativeEngineContext("python", "pytest"),
+        target_expression="tests/test_probe.py",
+        target_type="file",
+    )
+    assert [tr.outcome for tr in record.test_results] == ["failed"]
+    assert record.test_results[0].failure_reference == (
+        "[XPASS(strict)] expected to fail but does not"
+    )
+
+
+def test_failing_phase_selector_returns_none_when_no_phase_failed() -> None:
+    """(d) The "no fail-like phase" branch, pinned on a REAL entry.
+
+    The brief's shape — a fail-like item outcome with no fail-like phase — is
+    NOT constructible from pytest-json-report output, and the plugin source
+    says why: the item's outcome is set from `pytest_report_teststatus` for
+    each phase report it receives (`plugin.py::pytest_runtest_logreport`), and
+    the same handler writes that phase into the entry. A fail-like item
+    outcome therefore implies a fail-like phase in the same entry. Rather than
+    invent a payload the engine cannot produce, the selector is exercised
+    directly on a measured all-passing entry: it must return `None` and must
+    not raise, which is the only behaviour that branch has.
+    """
+
+    all_passing_entry = PASSING_PAYLOAD["tests"][0]  # type: ignore[index]
+    assert _pytest_failing_phase(all_passing_entry) is None  # type: ignore[arg-type]
+    # And an entry with a `skipped` phase (a plain xfail's `call`) is not
+    # fail-like either — `skipped` is in pytest's phase vocabulary.
+    xfail_entry = {
+        "nodeid": "tests/test_probe.py::test_plain_xfail",
+        "outcome": "xfailed",
+        "setup": {"duration": 0.00006, "outcome": "passed"},
+        "call": {
+            "duration": 0.00006,
+            "outcome": "skipped",
+            "crash": {
+                "path": "/abs/tests/test_probe.py",
+                "lineno": 20,
+                "message": "assert False",
+            },
+        },
+        "teardown": {"duration": 0.00004, "outcome": "passed"},
+    }
+    assert _pytest_failing_phase(xfail_entry) is None
 
 
 # ---------------------------------------------------------------------------

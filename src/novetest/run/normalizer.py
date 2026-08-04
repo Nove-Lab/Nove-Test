@@ -179,16 +179,75 @@ def _map_pytest_outcome(pytest_outcome: str) -> str:
     return _PYTEST_OUTCOME_TO_OUTCOME.get(pytest_outcome, "unknown")
 
 
+_PYTEST_PHASES: tuple[str, ...] = ("setup", "call", "teardown")
+
+
+def _pytest_failing_phase(test_entry: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the first phase, in pytest's own order, that itself failed.
+
+    A per-test entry carries up to three phase objects — ``setup``, ``call``,
+    ``teardown`` — and the crash text lives under the phase that raised, which
+    is NOT always ``call`` (board row 56). Measured on pytest-json-report
+    1.5.0 / pytest 9.0.3 against
+    ``tests/fixtures/projects/pytest-fixture-error/``:
+
+    - a **setup** error emits no ``call`` key at all — ``setup`` is
+      ``outcome="failed"`` with ``crash`` + ``longrepr``, ``teardown`` passes;
+    - a **teardown** error emits a *passing* ``call`` — ``teardown`` carries
+      the crash;
+    - a plain assertion failure carries it under ``call``, with ``setup`` and
+      ``teardown`` both passing.
+
+    A phase's own ``outcome`` uses pytest's report vocabulary
+    (``passed`` / ``failed`` / ``skipped``) — singular ``"error"`` is an
+    *item-level* category from ``pytest_report_teststatus`` and never appears
+    here, so ``"failed"`` is the whole fail-like set at this level.
+
+    Order matters for one measured shape: a test that fails in ``call`` **and**
+    errors in ``teardown`` has two failing phases, and pytest's execution order
+    picks ``call`` — the assertion that broke, which is also the text this
+    function returned before row 56 widened it past ``call``.
+    """
+
+    for phase_name in _PYTEST_PHASES:
+        phase = test_entry.get(phase_name)
+        if isinstance(phase, Mapping) and phase.get("outcome") == "failed":
+            return phase
+    return None
+
+
+def _pytest_phase_failure_text(phase: Mapping[str, Any]) -> str | None:
+    """``<path>:<lineno>: <message>`` from the phase's ``crash``, else its
+    ``longrepr``.
+
+    The ``longrepr`` fallback is a real path, not a guard: a strict-xfail that
+    passes has ``crash: null`` and ``longrepr: "[XPASS(strict)] <reason>"``.
+    """
+
+    crash = phase.get("crash")
+    if isinstance(crash, Mapping):
+        message = crash.get("message")
+        path = crash.get("path")
+        lineno = crash.get("lineno")
+        if isinstance(message, str):
+            location = ""
+            if isinstance(path, str) and isinstance(lineno, int):
+                location = f"{path}:{lineno}: "
+            return f"{location}{message}"
+    longrepr = phase.get("longrepr")
+    if isinstance(longrepr, str):
+        return longrepr
+    return None
+
+
 def _build_pytest_test_result(test_entry: Mapping[str, Any]) -> TestResult:
     node_id = str(test_entry.get("nodeid", ""))
     outcome = _map_pytest_outcome(str(test_entry.get("outcome", "unknown")))
-    call_phase = test_entry.get("call")
-    call_phase_map = call_phase if isinstance(call_phase, Mapping) else None
 
     duration_ms: int | None = None
     duration_components = [
         _pytest_phase_duration(test_entry.get("setup")),
-        _pytest_phase_duration(call_phase),
+        _pytest_phase_duration(test_entry.get("call")),
         _pytest_phase_duration(test_entry.get("teardown")),
     ]
     accumulated = [d for d in duration_components if d is not None]
@@ -196,21 +255,10 @@ def _build_pytest_test_result(test_entry: Mapping[str, Any]) -> TestResult:
         duration_ms = int(round(sum(accumulated) * 1000))
 
     failure_reference: str | None = None
-    if outcome in FAIL_LIKE_OUTCOMES and call_phase_map is not None:
-        crash = call_phase_map.get("crash")
-        if isinstance(crash, Mapping):
-            message = crash.get("message")
-            path = crash.get("path")
-            lineno = crash.get("lineno")
-            if isinstance(message, str):
-                location = ""
-                if isinstance(path, str) and isinstance(lineno, int):
-                    location = f"{path}:{lineno}: "
-                failure_reference = f"{location}{message}"
-        if failure_reference is None:
-            longrepr = call_phase_map.get("longrepr")
-            if isinstance(longrepr, str):
-                failure_reference = longrepr
+    if outcome in FAIL_LIKE_OUTCOMES:
+        failing_phase = _pytest_failing_phase(test_entry)
+        if failing_phase is not None:
+            failure_reference = _pytest_phase_failure_text(failing_phase)
 
     return TestResult(
         node_id=node_id,
