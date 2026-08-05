@@ -10,7 +10,10 @@ This page covers:
 
 Nove Test ships as a single self-contained binary (a PyApp bundle that
 embeds CPython 3.11 + the `novetest` wheel), so the binary path needs **no
-Python toolchain on your machine**. Current version: **0.3.0**.
+Python toolchain on your machine**. The current release is the latest tag on
+[GitHub Releases](https://github.com/Nove-Lab/Nove-Test/releases); the one-line
+install below fetches it, and `novetest --version` tells you which build you
+ended up with.
 
 ---
 
@@ -242,14 +245,15 @@ You almost never need these; they tune the install script, not the CLI.
 | Variable | Default | What it does |
 |---|---|---|
 | `NOVETEST_INSTALL_PREFIX` | `~/.local/bin` | Where the binary is placed. |
-| `NOVETEST_INSTALL_VERSION` | `latest` | A tag like `v0.1.2` to pin to during install. |
+| `NOVETEST_INSTALL_VERSION` | `latest` | A release tag to pin to during install — any tag listed on [GitHub Releases](https://github.com/Nove-Lab/Nove-Test/releases). |
 | `NOVETEST_INSTALL_REPO` | `Nove-Lab/Nove-Test` | GitHub `owner/repo` for URL composition. |
 | `NOVETEST_INSTALL_BASE_URL` | (GitHub Releases) | Override the download base URL. |
 
 To pin a version for a reproducible install:
 
 ```bash
-NOVETEST_INSTALL_VERSION=v0.1.2 \
+# Replace vX.Y.Z with a tag from https://github.com/Nove-Lab/Nove-Test/releases
+NOVETEST_INSTALL_VERSION=vX.Y.Z \
   curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
 ```
 

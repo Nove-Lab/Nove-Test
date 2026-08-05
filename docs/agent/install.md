@@ -8,8 +8,11 @@ This page covers:
 4. A copy-paste pre-flight probe.
 
 Nove Test ships as a self-contained PyApp binary (embeds CPython 3.11 + the
-`novetest` wheel) — the install host needs no Python toolchain. Current
-version: **0.3.0**.
+`novetest` wheel) — the install host needs no Python toolchain. The current
+release is the latest tag on
+[GitHub Releases](https://github.com/Nove-Lab/Nove-Test/releases); the
+unpinned install below fetches it, and `novetest --version` reports the build
+you actually have.
 
 ---
 
@@ -46,7 +49,10 @@ shell profile.
 ### Pin the version for reproducible CI
 
 ```bash
-NOVETEST_INSTALL_VERSION=v0.1.2 \
+# vX.Y.Z is a placeholder — substitute a real tag from
+# https://github.com/Nove-Lab/Nove-Test/releases. It is left unresolved on
+# purpose: a literal version here would name a stale build on the next cut.
+NOVETEST_INSTALL_VERSION=vX.Y.Z \
   curl -fsSL https://raw.githubusercontent.com/Nove-Lab/Nove-Test/main/scripts/install.sh | sh
 ```
 

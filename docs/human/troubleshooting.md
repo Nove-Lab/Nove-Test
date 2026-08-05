@@ -122,8 +122,11 @@ inconsistent.
 
 **Fix.**
 1. Re-run the install script (most often it's a flaky network).
-2. Still failing? Pin a specific version:
-   `NOVETEST_INSTALL_VERSION=v0.1.2 curl … | sh`.
+2. Still failing? Pin a specific release tag — one of the tags listed on
+   [GitHub Releases](https://github.com/Nove-Lab/Nove-Test/releases):
+   `NOVETEST_INSTALL_VERSION=vX.Y.Z curl … | sh`. Prefer the newest tag that
+   is not the one that just failed; older Linux binaries carry a higher glibc
+   floor (see the `GLIBC_2.xx` section above).
 3. Still failing? File an issue with your OS / arch / network situation.
 
 ### "First run is slow" (5–15 seconds)
